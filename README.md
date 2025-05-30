@@ -35,5 +35,5 @@ Designing reward functions is one of the hardest parts of RL. **OpenGym Copilot*
 ### 1. Clone the Repo
 
 ```bash
-git clone https://github.com/yourusername/opengym-copilot.git
+git clone https://github.com/zhenga1/opengym-copilot.git
 cd opengym-copilot
