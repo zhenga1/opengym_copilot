@@ -1,6 +1,7 @@
 import streamlit as st
-import run_episode
 import os
+from run_episode import run_episode
+from reward_wrapper import RewardShapingWrapper, run_episode_train, train_agent
 import imageio
 import time
 
@@ -44,6 +45,7 @@ for key, default in {
 stopped = False
 #playback_fps = st.slider("🎞️ Playback FPS", min_value=10, max_value=120, value=45)
 
+largest_playback_fps = 120
 if st.button("Run Episodes") and not stopped:
     weights = {
         "forward_velocity": forward_velocity,
@@ -51,7 +53,7 @@ if st.button("Run Episodes") and not stopped:
         "alive_bonus": alive_bonus
     }
     with st.spinner("Running environments..."):
-        total_shaped_reward, total_reward, all_reward_logs, frames = run_episode.run_episode(env_name, weights, episodes, render_mode="rgb_array")
+        total_shaped_reward, total_reward, all_reward_logs, frames = run_episode(env_name, weights, episodes, render_mode="rgb_array")
         st.success(f"Total Shaped Reward: {total_shaped_reward:.2f}")
         st.session_state["frames"] = frames # store safely 
         st.session_state["all_reward_logs"] = all_reward_logs
@@ -59,8 +61,9 @@ if st.button("Run Episodes") and not stopped:
         st.session_state["total_reward"] = total_reward
         st.session_state["frame_idx"] = 0
         st.session_state["play_mode"] = False
-        st.success(f"✅ Total Shaped Reward: {total_shaped_reward:.2f}")
-
+        #st.success(f"✅ Total Shaped Reward: {:.2f}")
+        st.success(f"✅ Total Reward: {total_reward:.2f}")
+        video_path = save_video(frames, "latest_rollout.mp4", fps=largest_playback_fps)
 
 
     #import pdb
@@ -97,24 +100,42 @@ if "frames" in st.session_state and st.session_state["frames"]:
             st.session_state["play_mode"] = False
     with col3:
         if st.button("🔁 Reset"):
-            st.session_state["frame_idx"] = 0
+            #st.session_state["frame_idx"] = 0 # this is for frame by frame analysis
             st.session_state["play_mode"] = False
     
 
     col1, col2 = st.columns([1, 1])
+    image_slot = None
     with col1:
         if st.button("⬅️ Prev") and  st.session_state["frame_idx"] > 0:
             st.session_state["frame_idx"] -= 1
-            st.rerun()
+            frame = st.session_state["frames"][st.session_state["frame_idx"]]
+            image_slot.image(frame)
+            #st.rerun()
     with col2:
         if st.button("➡️ Next") and  st.session_state["frame_idx"] < len(st.session_state["frames"]) - 1:
             st.session_state["frame_idx"] += 1
-            st.rerun()
+            frame = st.session_state["frames"][st.session_state["frame_idx"]]
+            image_slot.image(frame)
+            #st.rerun()
     playback_fps = st.slider("Playback FPS", min_value=30, max_value=120, value=45)
     
     if st.button("Save Episodes"):
         st.session_state["show_save_inputs"] = True
     
+    ## Playback logic
+    image_placeholder = st.empty()
+    if st.session_state["play_mode"]:
+        # if st.session_state["frame_idx"] < len(st.session_state["frames"]) - 1:
+        #     st.session_state["frame_idx"] += 1
+        #     time.sleep(frame_delay) # each frame takes 1/30 seconds
+        #     st.rerun()
+        # else:
+        #     st.session_state["play_mode"] = False # stop at the end
+        for idx, frame in enumerate(st.session_state["frames"]):
+            image_placeholder.image(frame, channels="RGB", use_container_width=True)
+            time.sleep(1.0 / playback_fps)
+            
     if st.session_state["show_save_inputs"]:
         video_name = st.text_input("Enter filename (no extension):", value="bipedal_rollout")
         file_format = st.selectbox("File format", ["mp4", "gif"])
@@ -131,8 +152,10 @@ if "frames" in st.session_state and st.session_state["frames"]:
 
     frame_delay = 1.0 / playback_fps
     # Show Frame
+    image_slot = st.empty()
     frame = st.session_state["frames"][st.session_state["frame_idx"]]
-    st.image(frame, channels="RGB", use_container_width=True)
+    image_slot.image(frame)
+    #st.image(frame, channels="RGB", use_container_width=True)
     
 
     #Reward Info
@@ -147,16 +170,8 @@ if "frames" in st.session_state and st.session_state["frames"]:
         info = st.session_state["all_reward_logs"][idx]
         st.markdown(f"**Raw Reward:** {reward:.3f} | **Shaped:** {shaped:.3f}")
         #st.json(info) no need to show the info
-
-    ## Playback logic
-    if st.session_state["play_mode"]:
-        if st.session_state["frame_idx"] < len(st.session_state["frames"]) - 1:
-            st.session_state["frame_idx"] += 1
-            time.sleep(frame_delay) # each frame takes 1/30 seconds
-            st.rerun()
-        else:
-            st.session_state["play_mode"] = False # stop at the end
-
+    
+    
     
 
     st.subheader("Scrollable Frame Viewer")
@@ -172,4 +187,31 @@ if "frames" in st.session_state and st.session_state["frames"]:
     # for frame in frames:
     #     st.image(frame, channels="RGB", use_column_width=True)
     #     time.sleep(1/30) # sleep for 1/30th of a second
-        
+    # if st.button("🧠 Train Agent with Current Reward Weights"):
+    #     with st.spinner("Training PPO agent..."):
+    #         model = train_agent(env_name, {
+    #             "forward_velocity": forward_velocity,
+    #             "energy_penalty": energy_penalty,
+    #             "alive_bonus": alive_bonus
+    #         }, total_timesteps=20_000)
+
+    #         st.success("Training complete ✅")
+
+    #         # Run new episode with trained model
+    #         raw_reward, log, frames = run_episode_train(
+    #             env_name,
+    #             {
+    #                 "forward_velocity": forward_velocity,
+    #                 "energy_penalty": energy_penalty,
+    #                 "alive_bonus": alive_bonus
+    #             },
+    #             episodes=1,
+    #             model=model
+    #         )
+    #         st.session_state["frames"] = frames
+    #         st.session_state["all_reward_logs"] = log
+    #         st.session_state["frame_idx"] = 0
+    #         #st.session_state["total_shaped_reward"] = shaped_reward
+    #         st.session_state["total_reward"] = raw_reward
+
+
