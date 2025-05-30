@@ -46,6 +46,7 @@ stopped = False
 #playback_fps = st.slider("🎞️ Playback FPS", min_value=10, max_value=120, value=45)
 
 largest_playback_fps = 120
+
 if st.button("Run Episodes") and not stopped:
     weights = {
         "forward_velocity": forward_velocity,
@@ -105,18 +106,20 @@ if "frames" in st.session_state and st.session_state["frames"]:
     
 
     col1, col2 = st.columns([1, 1])
-    image_slot = None
+    
+        # Show Frame
+    #image_slot = st.empty()
     with col1:
         if st.button("⬅️ Prev") and  st.session_state["frame_idx"] > 0:
             st.session_state["frame_idx"] -= 1
-            frame = st.session_state["frames"][st.session_state["frame_idx"]]
-            image_slot.image(frame)
+            #frame = st.session_state["frames"][st.session_state["frame_idx"]]
+            #image_slot.image(frame)
             #st.rerun()
     with col2:
         if st.button("➡️ Next") and  st.session_state["frame_idx"] < len(st.session_state["frames"]) - 1:
             st.session_state["frame_idx"] += 1
-            frame = st.session_state["frames"][st.session_state["frame_idx"]]
-            image_slot.image(frame)
+            #frame = st.session_state["frames"][st.session_state["frame_idx"]]
+            #image_slot.image(frame)
             #st.rerun()
     playback_fps = st.slider("Playback FPS", min_value=30, max_value=120, value=45)
     
@@ -135,7 +138,7 @@ if "frames" in st.session_state and st.session_state["frames"]:
         for idx, frame in enumerate(st.session_state["frames"]):
             image_placeholder.image(frame, channels="RGB", use_container_width=True)
             time.sleep(1.0 / playback_fps)
-            
+
     if st.session_state["show_save_inputs"]:
         video_name = st.text_input("Enter filename (no extension):", value="bipedal_rollout")
         file_format = st.selectbox("File format", ["mp4", "gif"])
@@ -151,10 +154,11 @@ if "frames" in st.session_state and st.session_state["frames"]:
             st.rerun()
 
     frame_delay = 1.0 / playback_fps
-    # Show Frame
-    image_slot = st.empty()
+    
+    # Place the image_slot **after** the buttons
     frame = st.session_state["frames"][st.session_state["frame_idx"]]
-    image_slot.image(frame)
+    image_slot = st.empty()
+    image_slot.image(frame, channels="RGB", use_container_width=True)
     #st.image(frame, channels="RGB", use_container_width=True)
     
 
