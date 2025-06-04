@@ -2,6 +2,7 @@ import gymnasium as gym
 import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.callbacks import BaseCallback
 
 class RewardShapingWrapper(gym.Wrapper):
     def __init__(self, env, reward_weights):
@@ -28,6 +29,17 @@ class RewardShapingWrapper(gym.Wrapper):
 
         self.most_recent_reward = reward
         return obs, reward, terminated, truncated, info
+    
+class ShapedRewardLogger(BaseCallback):
+    def __init__(self, verbose=0):
+        super().__init__(verbose)
+        self.rewards = []
+
+    def _on_step(self) -> bool:
+        # self.locals["rewards"] is from rollout buffer (env reward only)
+        reward = self.locals["rewards"]
+        self.rewards.append(reward)
+        return True
     
 def run_episode_train(env_name, reward_weights, episodes=1, render_mode="rgb_array", model=None):
     env = gym.make(env_name, render_mode=render_mode)
@@ -60,9 +72,10 @@ def train_agent(env_name, reward_weights, total_timesteps=100_000):
         env = gym.make(env_name)
         return RewardShapingWrapper(env, reward_weights)
     
+    callback = ShapedRewardLogger()
     env = make_vec_env(make_env, n_envs=1)
-    model = PPO("MlpPolicy", env, verbose=1)
-    model.learn(total_timesteps=total_timesteps)
+    model = PPO("MlpPolicy", env, verbose=1, tensorboard_log="./tensorboard_logs/")
+    model.learn(total_timesteps=total_timesteps, callback=callback)
     return model
 
 

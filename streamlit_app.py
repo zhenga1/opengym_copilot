@@ -17,6 +17,130 @@ root_directory = "video_logs/"
 def save_video(frames, video_path="rollout.mp4", fps=30):
     imageio.mimsave(os.path.join(root_directory, video_path), frames, fps=fps)
 
+def render_frame_ui():
+    if "frames" in st.session_state and st.session_state["frames"]:
+        st.markdown("""
+            <div style='background-color:#f8f9fa;padding:20px;border-radius:10px;'>
+                <h3 style='text-align:center;'>🎥 Episode Playback</h3>
+            </div>
+        """, unsafe_allow_html=True)
+        # dividing the screen into col1 or col2
+        #st.subheader(" 🎥 Episode Playback")
+        #frames = st.session_state["frames"]
+        #log = st.session_state["rewards_log"]
+        #idx = st.session_state["frame_idx"]
+        
+        # if not st.session_state["play_mode"]:
+        #     idx = st.slider(
+        #         "Frame",
+        #         0,
+        #         len(st.session_state["frames"]) - 1,
+        #         value=st.session_state["frame_idx"],
+        #         key="frame_slider"
+        #     )
+        #     st.session_state["frame_idx"] = idx
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button("▶️ Play"):
+                st.session_state["play_mode"] = True
+        with col2:
+            if st.button("⏹️ Stop"):
+                st.session_state["play_mode"] = False
+        with col3:
+            if st.button("🔁 Reset"):
+                #st.session_state["frame_idx"] = 0 # this is for frame by frame analysis
+                st.session_state["play_mode"] = False
+        
+
+        col1, col2 = st.columns([1, 1])
+        
+            # Show Frame
+        #image_slot = st.empty()
+        with col1:
+            if st.button("⬅️ Prev") and  st.session_state["frame_idx"] > 0:
+                st.session_state["frame_idx"] -= 1
+                #frame = st.session_state["frames"][st.session_state["frame_idx"]]
+                #image_slot.image(frame)
+                #st.rerun()
+        with col2:
+            if st.button("➡️ Next") and  st.session_state["frame_idx"] < len(st.session_state["frames"]) - 1:
+                st.session_state["frame_idx"] += 1
+                #frame = st.session_state["frames"][st.session_state["frame_idx"]]
+                #image_slot.image(frame)
+                #st.rerun()
+        playback_fps = st.slider("Playback FPS", min_value=30, max_value=120, value=45)
+        
+        if st.button("Save Episodes"):
+            st.session_state["show_save_inputs"] = True
+        
+        ## Playback logic
+        image_placeholder = st.empty()
+        if st.session_state["play_mode"]:
+            # if st.session_state["frame_idx"] < len(st.session_state["frames"]) - 1:
+            #     st.session_state["frame_idx"] += 1
+            #     time.sleep(frame_delay) # each frame takes 1/30 seconds
+            #     st.rerun()
+            # else:
+            #     st.session_state["play_mode"] = False # stop at the end
+            for idx, frame in enumerate(st.session_state["frames"]):
+                image_placeholder.image(frame, channels="RGB", use_container_width=True)
+                time.sleep(1.0 / playback_fps)
+
+        if st.session_state["show_save_inputs"]:
+            video_name = st.text_input("Enter filename (no extension):", value="bipedal_rollout")
+            file_format = st.selectbox("File format", ["mp4", "gif"])
+            filename = f"{video_name}.{file_format}"
+            if st.button("Confirm and Save"):
+                save_video(st.session_state["frames"], video_path=filename, fps=playback_fps)
+                st.success(f"Saved as {filename}")
+
+                # two second rest
+                time.sleep(2)
+                st.session_state["show_save_inputs"] = False
+                # close windoow
+                st.rerun()
+
+        frame_delay = 1.0 / playback_fps
+        
+        # Place the image_slot **after** the buttons
+        frame = st.session_state["frames"][st.session_state["frame_idx"]]
+        image_slot = st.empty()
+        image_slot.image(frame, channels="RGB", use_container_width=True)
+        #st.image(frame, channels="RGB", use_container_width=True)
+        
+
+        #Reward Info
+        # add the info of the reward into the st
+        if st.session_state["frame_idx"] < len(st.session_state["all_reward_logs"]):
+            #import pdb
+            #pdb.set_trace()
+            idx = st.session_state["frame_idx"]
+            #reward, shaped, info = st.session_state["rewards_log"][st.session_state["frame_idx"]]
+            reward = st.session_state["total_reward"]
+            shaped = st.session_state["total_shaped_reward"]
+            info = st.session_state["all_reward_logs"][idx]
+            st.markdown(f"**Raw Reward:** {reward:.3f} | **Shaped:** {shaped:.3f}")
+            #st.json(info) no need to show the info
+        
+        
+        
+
+        st.subheader("Scrollable Frame Viewer")
+        # Prev / Next buttons
+        
+        idx = st.slider("Frame Index", 0, len(st.session_state["frames"]) - 1, 0)
+        st.image(st.session_state["frames"][idx],
+                    caption=f"Frame {idx + 1} / {len(st.session_state['frames'])}", 
+                    channels="RGB", 
+                    use_column_width=True)
+        
+
+        # for frame in frames:
+        #     st.image(frame, channels="RGB", use_column_width=True)
+        #     time.sleep(1/30) # sleep for 1/30th of a second
+
+
 #st.set_page_config(layout="wide")
 #st.title(" 🤖s OpenGym Copilot: Reward Tuner")
 
@@ -36,6 +160,8 @@ for key, default in {
     "all_reward_logs": [],
     "frame_idx": 0,
     "play_mode": False,
+    "train_mode_epoch_size_defined": False,
+    "timesteps_str": 1000,
     "total_shaped_reward": 0,
     "total_reward": 0
 }.items():
@@ -66,156 +192,54 @@ if st.button("Run Episodes") and not stopped:
         st.success(f"✅ Total Reward: {total_reward:.2f}")
         video_path = save_video(frames, "latest_rollout.mp4", fps=largest_playback_fps)
 
-
+render_frame_ui()
     #import pdb
     #pdb.set_trace()
     # Animate the frames
-if "frames" in st.session_state and st.session_state["frames"]:
-    st.markdown("""
-        <div style='background-color:#f8f9fa;padding:20px;border-radius:10px;'>
-            <h3 style='text-align:center;'>🎥 Episode Playback</h3>
-        </div>
-    """, unsafe_allow_html=True)
-    # dividing the screen into col1 or col2
-    #st.subheader(" 🎥 Episode Playback")
-    #frames = st.session_state["frames"]
-    #log = st.session_state["rewards_log"]
-    #idx = st.session_state["frame_idx"]
-    
-    # if not st.session_state["play_mode"]:
-    #     idx = st.slider(
-    #         "Frame",
-    #         0,
-    #         len(st.session_state["frames"]) - 1,
-    #         value=st.session_state["frame_idx"],
-    #         key="frame_slider"
-    #     )
-    #     st.session_state["frame_idx"] = idx
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("▶️ Play"):
-            st.session_state["play_mode"] = True
-    with col2:
-        if st.button("⏹️ Stop"):
-            st.session_state["play_mode"] = False
-    with col3:
-        if st.button("🔁 Reset"):
-            #st.session_state["frame_idx"] = 0 # this is for frame by frame analysis
-            st.session_state["play_mode"] = False
-    
+if st.button("🧠 Train Agent with Current Reward Weights"):
+    st.text_input("Enter timesteps (integer):", value="1000", key="timesteps_str")
+    st.session_state["train_mode_epoch_size_defined"] = True
 
-    col1, col2 = st.columns([1, 1])
-    
-        # Show Frame
-    #image_slot = st.empty()
-    with col1:
-        if st.button("⬅️ Prev") and  st.session_state["frame_idx"] > 0:
-            st.session_state["frame_idx"] -= 1
-            #frame = st.session_state["frames"][st.session_state["frame_idx"]]
-            #image_slot.image(frame)
-            #st.rerun()
-    with col2:
-        if st.button("➡️ Next") and  st.session_state["frame_idx"] < len(st.session_state["frames"]) - 1:
-            st.session_state["frame_idx"] += 1
-            #frame = st.session_state["frames"][st.session_state["frame_idx"]]
-            #image_slot.image(frame)
-            #st.rerun()
-    playback_fps = st.slider("Playback FPS", min_value=30, max_value=120, value=45)
-    
-    if st.button("Save Episodes"):
-        st.session_state["show_save_inputs"] = True
-    
-    ## Playback logic
-    image_placeholder = st.empty()
-    if st.session_state["play_mode"]:
-        # if st.session_state["frame_idx"] < len(st.session_state["frames"]) - 1:
-        #     st.session_state["frame_idx"] += 1
-        #     time.sleep(frame_delay) # each frame takes 1/30 seconds
-        #     st.rerun()
-        # else:
-        #     st.session_state["play_mode"] = False # stop at the end
-        for idx, frame in enumerate(st.session_state["frames"]):
-            image_placeholder.image(frame, channels="RGB", use_container_width=True)
-            time.sleep(1.0 / playback_fps)
+if st.session_state["train_mode_epoch_size_defined"]:
+    # Convert to int safely
+    timesteps_str = st.session_state["timesteps_str"]
+    if st.button("Confirm and Save"):
+        try:
+            total_timesteps = int(timesteps_str)
+        except ValueError:
+            st.error("Please enter a valid integer for timesteps.")
+            total_timesteps = 1000  # fallback default
 
-    if st.session_state["show_save_inputs"]:
-        video_name = st.text_input("Enter filename (no extension):", value="bipedal_rollout")
-        file_format = st.selectbox("File format", ["mp4", "gif"])
-        filename = f"{video_name}.{file_format}"
-        if st.button("Confirm and Save"):
-            save_video(st.session_state["frames"], video_path=filename, fps=playback_fps)
-            st.success(f"Saved as {filename}")
+        with st.spinner("Training PPO agent..."):
+            st.write(f"Training started! Timesteps is {total_timesteps}")
+            model = train_agent(env_name, {
+                "forward_velocity": forward_velocity,
+                "energy_penalty": energy_penalty,
+                "alive_bonus": alive_bonus
+            }, total_timesteps=total_timesteps)
 
-            # two second rest
-            time.sleep(2)
-            st.session_state["show_save_inputs"] = False
-            # close windoow
-            st.rerun()
+            st.success("Training complete ✅")
 
-    frame_delay = 1.0 / playback_fps
-    
-    # Place the image_slot **after** the buttons
-    frame = st.session_state["frames"][st.session_state["frame_idx"]]
-    image_slot = st.empty()
-    image_slot.image(frame, channels="RGB", use_container_width=True)
-    #st.image(frame, channels="RGB", use_container_width=True)
-    
+            # Run new episode with trained model
+            raw_reward, log, frames = run_episode_train(
+                env_name,
+                {
+                    "forward_velocity": forward_velocity,
+                    "energy_penalty": energy_penalty,
+                    "alive_bonus": alive_bonus
+                },
+                episodes=1,
+                model=model
+            )
+            st.session_state["frames"] = frames
+            st.session_state["all_reward_logs"] = log
+            st.session_state["frame_idx"] = 0
+            #st.session_state["total_shaped_reward"] = shaped_reward
+            st.session_state["total_reward"] = raw_reward
 
-    #Reward Info
-    # add the info of the reward into the st
-    if st.session_state["frame_idx"] < len(st.session_state["all_reward_logs"]):
-        #import pdb
-        #pdb.set_trace()
-        idx = st.session_state["frame_idx"]
-        #reward, shaped, info = st.session_state["rewards_log"][st.session_state["frame_idx"]]
-        reward = st.session_state["total_reward"]
-        shaped = st.session_state["total_shaped_reward"]
-        info = st.session_state["all_reward_logs"][idx]
-        st.markdown(f"**Raw Reward:** {reward:.3f} | **Shaped:** {shaped:.3f}")
-        #st.json(info) no need to show the info
-    
-    
-    
-
-    st.subheader("Scrollable Frame Viewer")
-    # Prev / Next buttons
-    
-    idx = st.slider("Frame Index", 0, len(st.session_state["frames"]) - 1, 0)
-    st.image(st.session_state["frames"][idx],
-                caption=f"Frame {idx + 1} / {len(st.session_state['frames'])}", 
-                channels="RGB", 
-                use_column_width=True)
-    
-
-    # for frame in frames:
-    #     st.image(frame, channels="RGB", use_column_width=True)
-    #     time.sleep(1/30) # sleep for 1/30th of a second
-    # if st.button("🧠 Train Agent with Current Reward Weights"):
-    #     with st.spinner("Training PPO agent..."):
-    #         model = train_agent(env_name, {
-    #             "forward_velocity": forward_velocity,
-    #             "energy_penalty": energy_penalty,
-    #             "alive_bonus": alive_bonus
-    #         }, total_timesteps=20_000)
-
-    #         st.success("Training complete ✅")
-
-    #         # Run new episode with trained model
-    #         raw_reward, log, frames = run_episode_train(
-    #             env_name,
-    #             {
-    #                 "forward_velocity": forward_velocity,
-    #                 "energy_penalty": energy_penalty,
-    #                 "alive_bonus": alive_bonus
-    #             },
-    #             episodes=1,
-    #             model=model
-    #         )
-    #         st.session_state["frames"] = frames
-    #         st.session_state["all_reward_logs"] = log
-    #         st.session_state["frame_idx"] = 0
-    #         #st.session_state["total_shaped_reward"] = shaped_reward
-    #         st.session_state["total_reward"] = raw_reward
-
+        # two second rest
+        time.sleep(2)
+        st.session_state["train_mode_epoch_size_defined"] = False
+render_frame_ui()
 
