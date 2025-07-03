@@ -17,7 +17,8 @@ root_directory = "video_logs/"
 def save_video(frames, video_path="rollout.mp4", fps=30):
     imageio.mimsave(os.path.join(root_directory, video_path), frames, fps=fps)
 
-def render_frame_ui():
+def render_frame_ui(suffix="", unique_name="iteration"):
+    # unique_name is for the streamlit slider
     if "frames" in st.session_state and st.session_state["frames"]:
         st.markdown("""
             <div style='background-color:#f8f9fa;padding:20px;border-radius:10px;'>
@@ -42,13 +43,13 @@ def render_frame_ui():
 
         col1, col2, col3 = st.columns(3)
         with col1:
-            if st.button("▶️ Play"):
+            if st.button("▶️ Play", key=f"play_button_{suffix}"):
                 st.session_state["play_mode"] = True
         with col2:
-            if st.button("⏹️ Stop"):
+            if st.button("⏹️ Stop", key=f"stop_button_{suffix}"):
                 st.session_state["play_mode"] = False
         with col3:
-            if st.button("🔁 Reset"):
+            if st.button("🔁 Reset", key=f"reset_button_{suffix}"):
                 #st.session_state["frame_idx"] = 0 # this is for frame by frame analysis
                 st.session_state["play_mode"] = False
         
@@ -58,20 +59,20 @@ def render_frame_ui():
             # Show Frame
         #image_slot = st.empty()
         with col1:
-            if st.button("⬅️ Prev") and  st.session_state["frame_idx"] > 0:
+            if st.button("⬅️ Prev", key=f"prev_button_{suffix}") and  st.session_state["frame_idx"] > 0:
                 st.session_state["frame_idx"] -= 1
                 #frame = st.session_state["frames"][st.session_state["frame_idx"]]
                 #image_slot.image(frame)
                 #st.rerun()
         with col2:
-            if st.button("➡️ Next") and  st.session_state["frame_idx"] < len(st.session_state["frames"]) - 1:
+            if st.button("➡️ Next", key=f"next_button_{suffix}") and  st.session_state["frame_idx"] < len(st.session_state["frames"]) - 1:
                 st.session_state["frame_idx"] += 1
                 #frame = st.session_state["frames"][st.session_state["frame_idx"]]
                 #image_slot.image(frame)
                 #st.rerun()
-        playback_fps = st.slider("Playback FPS", min_value=30, max_value=120, value=45)
+        playback_fps = st.slider("Playback FPS", min_value=30, max_value=120, value=45, key=f"playback_fps_{suffix}")
         
-        if st.button("Save Episodes"):
+        if st.button("Save Episodes", key=f"save_episodes_{suffix}"):
             st.session_state["show_save_inputs"] = True
         
         ## Playback logic
@@ -88,10 +89,10 @@ def render_frame_ui():
                 time.sleep(1.0 / playback_fps)
 
         if st.session_state["show_save_inputs"]:
-            video_name = st.text_input("Enter filename (no extension):", value="bipedal_rollout")
-            file_format = st.selectbox("File format", ["mp4", "gif"])
+            video_name = st.text_input("Enter filename (no extension):", value="bipedal_rollout", key=f"bipedal_rollout_{suffix}")
+            file_format = st.selectbox("File format", ["mp4", "gif"], key=f"file_format_select_{suffix}")
             filename = f"{video_name}.{file_format}"
-            if st.button("Confirm and Save"):
+            if st.button("Confirm and Save", key=f"confirm_save_{suffix}"):
                 save_video(st.session_state["frames"], video_path=filename, fps=playback_fps)
                 st.success(f"Saved as {filename}")
 
@@ -129,7 +130,7 @@ def render_frame_ui():
         st.subheader("Scrollable Frame Viewer")
         # Prev / Next buttons
         
-        idx = st.slider("Frame Index", 0, len(st.session_state["frames"]) - 1, 0)
+        idx = st.slider("Frame Index", 0, len(st.session_state["frames"]) - 1, 0, key=unique_name)
         st.image(st.session_state["frames"][idx],
                     caption=f"Frame {idx + 1} / {len(st.session_state['frames'])}", 
                     channels="RGB", 
@@ -192,7 +193,8 @@ if st.button("Run Episodes") and not stopped:
         st.success(f"✅ Total Reward: {total_reward:.2f}")
         video_path = save_video(frames, "latest_rollout.mp4", fps=largest_playback_fps)
 
-render_frame_ui()
+# render frame UI for the first appearance
+render_frame_ui("1", "first")
     #import pdb
     #pdb.set_trace()
     # Animate the frames
@@ -241,5 +243,7 @@ if st.session_state["train_mode_epoch_size_defined"]:
         # two second rest
         time.sleep(2)
         st.session_state["train_mode_epoch_size_defined"] = False
-render_frame_ui()
+
+# render frame UI for the second appearance
+render_frame_ui("2", "second")
 
