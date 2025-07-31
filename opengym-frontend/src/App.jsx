@@ -51,7 +51,7 @@ function App() {
           <div style={{ width: '600px', height: '300px' }}>
               <Line
                 data={{
-                  labels: rollouts.map((r) => r.step).reverse(),
+                  labels: rollouts.map((r) => r.episode).reverse(),
                   datasets: [
                     {
                       label: "Reward",
@@ -66,7 +66,7 @@ function App() {
                   responsive: true,
                   maintainAspectRatio: false,
                   scales: {
-                    x: { title: { display: true, text: "Step" } },
+                    x: { title: { display: true, text: "Episode" } },
                     y: { title: { display: true, text: "Reward" } },
                   },
                 }}
