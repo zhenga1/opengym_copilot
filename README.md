@@ -41,7 +41,7 @@ https://user-demo-link-if-applicable
 pip install fastapi uvicorn gymnasium opencv-python
 uvicorn main:app --reload
 ```
-### 🔧 Frontend (Python + FastAPI)
+### 🔧 Frontend (npm + ReACT)
 ```bash
 npm install
 npm run dev
