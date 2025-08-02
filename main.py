@@ -72,7 +72,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                     ep_frames.append(render_env(env))
                 obs = next_obs
                 step += 1
-                ep_reward += 1
+                ep_reward += reward
 
             await asyncio.sleep(0.05)  # throttle to ~20 FPS
     except WebSocketDisconnect:

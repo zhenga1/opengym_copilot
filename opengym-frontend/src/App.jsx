@@ -38,7 +38,7 @@ function App() {
   /* Here we are adding envName to the dependency array of useEffect, so useEffect will rerun when envName changes*/
   useEffect(() => {
     const ws = new WebSocket(`ws://localhost:8000/ws/rollout?env=${envName}`);
-
+    setRollouts([]); // restart the graph simulation from the beginning, upon new simulation
     console.log("envName: ", envName);
     ws.onmessage = (event) => {
       /* DO NOT UPDATE THE STATE IF THE SIMULATION IS PAUSED*/
@@ -95,35 +95,58 @@ function App() {
 
   /*console.log("Rollout rewards:", rollouts.map((r) => r.reward));*/
   return (
-    <div style={{ padding: '1rem', fontFamily: 'sans-serif' }}>
-      <h1>OpenGym Rollout Viewer</h1>
+  <div style={{ padding: '2rem', fontFamily: 'sans-serif', maxWidth: '900px', margin: 'auto' }}>
+    <h1 style={{ fontSize: '2rem', fontWeight: 'bold', textAlign: 'center' }}>🧠 OpenGym Copilot</h1>
+
+    {/* TOP CONTROLS */}
+    <div style={{ display: 'flex',justifyContent:'center', gap: '1rem', alignItems: 'center', margin: '1.5rem 0' }}>
       <button
         onClick={togglePause}
         style={{
           padding: '0.5rem 1rem',
-          marginBottom: '1rem',
           fontSize: '1rem',
+          backgroundColor: isPaused ? '#4ade80' : '#f87171',
+          color: 'white',
+          border: 'none',
+          borderRadius: '6px',
           cursor: 'pointer',
         }}
       >
         {isPaused ? '▶ Continue' : '⏸ Pause'}
       </button>
-      <label>Environment: </label>
-      <select value={envName} onChange={handleEnvChange}>
+
+      <label htmlFor="envSelect">Environment:</label>
+      <select
+        id="envSelect"
+        value={envName}
+        onChange={handleEnvChange}
+        style={{ padding: '4px 8px', fontSize: '1rem' }}
+      >
         <option value="CartPole-v1">CartPole-v1</option>
         <option value="MountainCar-v0">MountainCar-v0</option>
         <option value="Acrobot-v1">Acrobot-v1</option>
         <option value="Humanoid-v4">Humanoid-v4</option>
       </select>
-      <h3>Simulation Toggler</h3>
-      <div className="mt-4 flex gap-3">
+    </div>
+
+    {/* SIMULATION CONTROLS */}
+    <div style={{ marginTop: '2rem' }}>
+      <h3 style={{ fontSize: '1.2rem' }}>🎮 Simulation Controls</h3>
+      <div style={{ marginTop: '0.5rem',
+        display: 'flex',
+        justifyContent: 'center',
+        gap: '1rem',
+        }}>
         <button onClick={handlePlay}>▶️ Play</button>
         <button onClick={handlePause}>⏸ Pause</button>
         <button onClick={handleRestart}>⏮ Restart</button>
       </div>
-      <p>Simulating Episode {episodeNumForSimulation}</p>
-      <div style={{ marginTop: '1rem' }}>
-      <label htmlFor="replaySpeed">Playback Speed (ms per frame):</label>
+      <p style={{ marginTop: '0.5rem' }}>Simulating Episode <strong>{episodeNumForSimulation}</strong></p>
+    </div>
+
+    {/* PLAYBACK SPEED */}
+    <div style={{ marginTop: '1.5rem' }}>
+      <label htmlFor="replaySpeed"><strong>Playback Speed</strong> (ms per frame):</label>
       <input
         id="replaySpeed"
         type="range"
@@ -144,51 +167,50 @@ function App() {
         style={{ width: '60px' }}
       />
     </div>
-      {frames &&frames.length > 0 && (
+
+    {/* FRAME DISPLAY */}
+    {frames && frames.length > 0 && (
+      <div style={{ marginTop: '2rem', textAlign: 'center' }}>
         <img
           src={`data:image/jpeg;base64,${frames[currentFrame]}`}
           alt={`frame ${currentFrame}`}
-          className="w-full max-w-xl rounded shadow"
+          style={{ width: '100%', maxWidth: '600px', borderRadius: '10px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
         />
-      )}
-      <h3>Reward Curve per Episode</h3>
-      <p>Episode {episodeInfo.episode}, Reward: {episodeInfo.reward}. Visualization:</p>
-      <ul>
-        {/* {rollouts.map((r, idx) => (
-          <li key={idx}>
-            <strong>Step {r.step}</strong> – Action: {r.action}, Reward: {r.reward}, Done: {String(r.done)}
-          </li>
-        ))} */
-          
-          <div style={{ width: '600px', height: '300px' }}>
-              <Line
-                data={{
-                  labels: rollouts.map((r) => r.episode).reverse(),
-                  datasets: [
-                    {
-                      label: "Reward",
-                      data: rollouts.map((r) => r.reward).reverse(),
-                      fill: false,
-                      borderColor: 'rgb(75, 192, 192)',
-                      tension: 0.1,
-                    },
-                  ],
-                }}
-                options={{
-                  responsive: true,
-                  maintainAspectRatio: false,
-                  scales: {
-                    x: { title: { display: true, text: "Episode" } },
-                    y: { title: { display: true, text: "Reward" } },
-                  },
-                }}
-              />
-            </div>
-            }
-      </ul>
+      </div>
+    )}
 
+    {/* REWARD CHART */}
+    <div style={{ marginTop: '3rem' }}>
+      <h3 style={{ fontSize: '1.2rem' }}>📈 Reward Curve</h3>
+      <p>Episode <strong>{episodeInfo.episode}</strong>, Reward: <strong>{episodeInfo.reward}</strong></p>
+      <div style={{ width: '100%', maxWidth: '600px', height: '300px' }}>
+        <Line
+          data={{
+            labels: rollouts.map((r) => r.episode).reverse(),
+            datasets: [
+              {
+                label: "Reward",
+                data: rollouts.map((r) => r.reward).reverse(),
+                fill: false,
+                borderColor: 'rgb(75, 192, 192)',
+                tension: 0.1,
+              },
+            ],
+          }}
+          options={{
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              x: { title: { display: true, text: "Episode" } },
+              y: { title: { display: true, text: "Reward" } },
+            },
+          }}
+        />
+      </div>
     </div>
-  );
+  </div>
+);
+
 }
 
 export default App
