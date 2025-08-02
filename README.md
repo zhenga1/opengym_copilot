@@ -40,3 +40,9 @@ https://user-demo-link-if-applicable
 ```bash
 pip install fastapi uvicorn gymnasium opencv-python
 uvicorn main:app --reload
+```
+### 🔧 Frontend (Python + FastAPI)
+```bash
+npm install
+npm run dev
+```
