@@ -2,7 +2,9 @@
 
 **LLM-Guided Reward Tuning & Rollout Visualization for Reinforcement Learning**
 
-FULL DEMOS COMING SOON!!!
+## Check out the demo!
+
+![OpenGym Streamlit Demo](./demos/streamlit_app_first_demo.gif)
 
 ---
 
