@@ -18,8 +18,6 @@
 
 ## 🖥 Demo Preview
 
-https://user-demo-link-if-applicable
-
 ![OpenGym Copilot Demo](./demos/opengym_first_demo.gif)
 
 ---
