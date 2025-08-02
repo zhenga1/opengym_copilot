@@ -1,12 +1,45 @@
-# React + Vite
+# 🎨 OpenGym Copilot Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This is the **React-based frontend** for [OpenGym Copilot](../README.md) — a real-time rollout visualizer for reinforcement learning environments like OpenAI Gym.
 
-Currently, two official plugins are available:
+It connects to a FastAPI backend and streams:
+- Agent rollouts
+- Episode rewards
+- Frame-by-frame visualizations
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+---
 
-## Expanding the ESLint configuration
+## 🚀 Features
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+- 🧠 Live agent rollout viewer (WebSocket-connected)
+- 🖼 Animated episode playback with frame loop
+- 🕹 Environment selector
+- 🎛 Dynamic control for:
+  - Frame playback speed
+  - Backend episode-frame interval
+- ⏸ Pause & resume streaming
+- 📈 Real-time reward charting
+
+---
+
+## 🛠 Tech Stack
+
+- **React 18**
+- **Vite** (fast dev server)
+- **Chart.js** for reward plotting
+- **WebSocket** for rollout streaming
+
+---
+
+## ⚙️ Setup
+
+### 1. Install dependencies
+
+```bash
+npm install
+```
+
+### 2. Run the application!
+```bash
+npm run dev
+```
