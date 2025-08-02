@@ -2,8 +2,11 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import asyncio
 import gymnasium as gym
 import json
+import cv2
+import base64
 
 app = FastAPI()
+
 
 @app.websocket("/ws/rollout")
 async def rollout_stream(websocket: WebSocket, env_name:str = "CartPole-v1"):
@@ -13,6 +16,11 @@ async def rollout_stream(websocket: WebSocket, env_name:str = "CartPole-v1"):
     #query = websocket.headers.get("sec-websocket-protocol", "CartPole-v1")
     #env_name = query or "CartPole-v1"
     
+    def render_env(env):#mode="rgb_array"):
+        frame = env.render()
+        _, buffer = cv2.imencode('.jpg', frame)
+        print(buffer.shape)
+        return base64.b64encode(buffer).decode("utf-8")
 
     try:
         env = gym.make(env_name, render_mode="rgb_array")
@@ -21,6 +29,8 @@ async def rollout_stream(websocket: WebSocket, env_name:str = "CartPole-v1"):
         episodes_seen = 0
 
         ep_reward = 0
+        send_frame_interval = 5
+        ep_frames = []
         while True:
             action = env.action_space.sample()
             next_obs, reward, terminated, truncated, _ = env.step(action)
@@ -30,12 +40,14 @@ async def rollout_stream(websocket: WebSocket, env_name:str = "CartPole-v1"):
 
             # Prepare for next step
             if done:
+                frames = ep_frames if episodes_seen % send_frame_interval == 0 else []
                 # Construct the data payload
                 data = {
                     #"step": step,
                     "episode": episodes_seen,
                     #"observation": obs.tolist(),
                     #"action": int(action),
+                    "ep_frames": frames,
                     "reward": float(ep_reward),
                     #"done": done
                 }
@@ -46,7 +58,10 @@ async def rollout_stream(websocket: WebSocket, env_name:str = "CartPole-v1"):
                 step = 0
                 ep_reward = 0
                 episodes_seen += 1
+                ep_frames = []
             else:
+                if episodes_seen % send_frame_interval == 0 :
+                    ep_frames.append(render_env(env))
                 obs = next_obs
                 step += 1
                 ep_reward += 1

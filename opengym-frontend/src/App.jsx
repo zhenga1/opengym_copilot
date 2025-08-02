@@ -9,9 +9,16 @@ ChartJS.register(LineElement, CategoryScale, LinearScale, PointElement);
 
 function App() {
   const [rollouts, setRollouts] = useState([]);
+  const [frames, setFrames] = useState([]);
+  const [currentFrame, setCurrentFrame] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  // Stores info on the CURRENT episode
+  const [episodeInfo, setEpisodeInfo] = useState({episode: 0, reward: 0});
+
   const [envName, setEnvName] = useState("CartPole-v1");
   const [isPaused, setIsPaused] = useState(false);
   const isPausedRef = useRef(false);
+  const intervalRef = useRef(null);
 
   const handleEnvChange = (e) => {
     setEnvName(e.target.value)
@@ -26,7 +33,7 @@ function App() {
 
   /* Here we are adding envName to the dependency array of useEffect, so useEffect will rerun when envName changes*/
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8000/ws/rollout?env=${envName}');
+    const ws = new WebSocket(`ws://localhost:8000/ws/rollout?env=${envName}`);
 
     console.log("envName: ", envName);
     ws.onmessage = (event) => {
@@ -34,13 +41,49 @@ function App() {
       if (isPausedRef.current) return;
 
       const data = JSON.parse(event.data);
+      setEpisodeInfo({ episode: data.episode, reward: data.reward });
+      if(data.ep_frames.length > 0){
+        setFrames(data.ep_frames);        // store all frames
+      }
+      setCurrentFrame(0);            // start at first frame
+      setIsPlaying(true);            // start playback automatically
       setRollouts((prev) => [data, ...prev.slice(0, 19)]);
     };
 
+    console.log("frames: ", frames &&frames.length)
     ws.onerror = (err) => console.error("WebSocket Error: ", err);
     ws.onclose = () => console.log("WebSocket Closed. ");
     return () => ws.close();
   }, [envName]);
+
+  // This is the useEffect for the frame Data from the video
+  useEffect(() => {
+    console.log("Frames: ", frames)
+    console.log("isPlaying: ", isPlaying)
+    if (!isPlaying || (frames && frames.length) === 0) return;
+    //advance frame at ferquency of 20fps
+    intervalRef.current = setInterval(() => {
+      setCurrentFrame((prev) => {
+        if (Array.isArray(frames) && prev < frames.length - 1) return prev + 1;  // advance frame
+        clearInterval(intervalRef.current);             // stop at end
+        return prev;
+      });
+    }, 50); // ~20 FPS
+
+    return () => clearInterval(intervalRef.current); // clean up
+  }, [isPlaying, frames]);
+
+  const handlePlay = () => setIsPlaying(true);
+  const handlePause = () => {
+    console.log("handlePause");
+    setIsPlaying(false);
+    console.log("isPlaying.current: ", isPlaying);
+    clearInterval(intervalRef.current);
+  };
+  const handleRestart = () => {
+    setCurrentFrame(0);
+    setIsPlaying(true);
+  };
 
   /*console.log("Rollout rewards:", rollouts.map((r) => r.reward));*/
   return (
@@ -64,6 +107,21 @@ function App() {
         <option value="Acrobot-v1">Acrobot-v1</option>
         <option value="Humanoid-v4">Humanoid-v4</option>
       </select>
+      <h3>Simulation Toggler</h3>
+      <div className="mt-4 flex gap-3">
+        <button onClick={handlePlay}>▶️ Play</button>
+        <button onClick={handlePause}>⏸ Pause</button>
+        <button onClick={handleRestart}>⏮ Restart</button>
+      </div>
+      <p>Episode {episodeInfo.episode}, Reward: {episodeInfo.reward}. Visualization:</p>
+      {frames &&frames.length > 0 && (
+        <img
+          src={`data:image/jpeg;base64,${frames[currentFrame]}`}
+          alt={`frame ${currentFrame}`}
+          className="w-full max-w-xl rounded shadow"
+        />
+      )}
+      <h3>Reward Curve per Episode</h3>
       <ul>
         {/* {rollouts.map((r, idx) => (
           <li key={idx}>
