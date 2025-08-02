@@ -39,3 +39,9 @@ Designing reward functions is one of the hardest parts of RL. **OpenGym Copilot*
 ```bash
 git clone https://github.com/zhenga1/opengym-copilot.git
 cd opengym-copilot
+```
+
+### 2. Run the streamlit app
+```bash
+streamlit run streamlit_app.py
+```
