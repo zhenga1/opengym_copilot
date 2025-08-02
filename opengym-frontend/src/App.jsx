@@ -93,34 +93,74 @@ function App() {
     setIsPlaying(true);
   };
 
+  const buttonStyle = (bg) => ({
+    padding: '0.4rem 1rem',
+    backgroundColor: bg,
+    color: 'white',
+    border: 'none',
+    borderRadius: '6px',
+    fontWeight: 600,
+    fontSize: '1rem',
+    cursor: 'pointer',
+    boxShadow: '0 3px 6px rgba(0,0,0,0.15)',
+    transition: 'all 0.2s ease',
+  });
+
   /*console.log("Rollout rewards:", rollouts.map((r) => r.reward));*/
   return (
-  <div style={{ padding: '2rem', fontFamily: 'sans-serif', maxWidth: '900px', margin: 'auto' }}>
-    <h1 style={{ fontSize: '2rem', fontWeight: 'bold', textAlign: 'center' }}>🧠 OpenGym Copilot</h1>
+  <div
+    style={{
+      padding: '2rem',
+      fontFamily: 'Segoe UI, sans-serif',
+      maxWidth: '900px',
+      margin: 'auto',
+      background: 'linear-gradient(145deg, #f0f9ff, #e0e7ff)',
+      borderRadius: '12px',
+      boxShadow: '0 8px 20px rgba(0,0,0,0.1)',
+    }}
+  >
+    <h1 style={{ fontSize: '2.2rem', fontWeight: 700, textAlign: 'center', color: '#4f46e5' }}>
+      ⚡ OpenGym Copilot
+    </h1>
 
-    {/* TOP CONTROLS */}
-    <div style={{ display: 'flex',justifyContent:'center', gap: '1rem', alignItems: 'center', margin: '1.5rem 0' }}>
+    {/* Top Control Row */}
+    <div
+      style={{
+        display: 'flex',
+        gap: '1rem',
+        alignItems: 'center',
+        margin: '2rem 0 1rem 0',
+        justifyContent: 'center',
+      }}
+    >
       <button
         onClick={togglePause}
         style={{
-          padding: '0.5rem 1rem',
+          padding: '0.5rem 1.2rem',
           fontSize: '1rem',
-          backgroundColor: isPaused ? '#4ade80' : '#f87171',
+          backgroundColor: isPaused ? '#10b981' : '#ef4444',
           color: 'white',
           border: 'none',
-          borderRadius: '6px',
+          borderRadius: '8px',
           cursor: 'pointer',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
         }}
       >
         {isPaused ? '▶ Continue' : '⏸ Pause'}
       </button>
 
-      <label htmlFor="envSelect">Environment:</label>
+      <label htmlFor="envSelect" style={{ fontWeight: 600 }}>Environment:</label>
       <select
         id="envSelect"
         value={envName}
         onChange={handleEnvChange}
-        style={{ padding: '4px 8px', fontSize: '1rem' }}
+        style={{
+          padding: '6px 10px',
+          borderRadius: '6px',
+          border: '1px solid #cbd5e1',
+          backgroundColor: '#f9fafb',
+          fontSize: '1rem',
+        }}
       >
         <option value="CartPole-v1">CartPole-v1</option>
         <option value="MountainCar-v0">MountainCar-v0</option>
@@ -129,24 +169,32 @@ function App() {
       </select>
     </div>
 
-    {/* SIMULATION CONTROLS */}
-    <div style={{ marginTop: '2rem' }}>
-      <h3 style={{ fontSize: '1.2rem' }}>🎮 Simulation Controls</h3>
-      <div style={{ marginTop: '0.5rem',
-        display: 'flex',
-        justifyContent: 'center',
-        gap: '1rem',
-        }}>
-        <button onClick={handlePlay}>▶️ Play</button>
-        <button onClick={handlePause}>⏸ Pause</button>
-        <button onClick={handleRestart}>⏮ Restart</button>
+    {/* Playback Controls */}
+    <div style={{ marginTop: '2rem', textAlign: 'center' }}>
+      <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem', color: '#3b82f6' }}>🎮 Simulation Controls</h3>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'center',
+          gap: '1rem',
+          marginBottom: '0.5rem',
+        }}
+      >
+        <button style={buttonStyle('#3b82f6')} onClick={handlePlay}>▶️ Play</button>
+        <button style={buttonStyle('#8b5cf6')} onClick={handlePause}>⏸ Pause</button>
+        <button style={buttonStyle('#f97316')} onClick={handleRestart}>⏮ Restart</button>
       </div>
-      <p style={{ marginTop: '0.5rem' }}>Simulating Episode <strong>{episodeNumForSimulation}</strong></p>
+      <p style={{ fontSize: '1rem' }}>
+        Simulating Episode <strong style={{ color: '#0ea5e9' }}>{episodeNumForSimulation}</strong>
+      </p>
     </div>
 
-    {/* PLAYBACK SPEED */}
-    <div style={{ marginTop: '1.5rem' }}>
-      <label htmlFor="replaySpeed"><strong>Playback Speed</strong> (ms per frame):</label>
+    {/* Playback Speed Slider */}
+    <div style={{ marginTop: '2rem', textAlign: 'center' }}>
+      <label htmlFor="replaySpeed" style={{ fontWeight: 600 }}>
+        🎞 Frame Playback Speed:
+      </label>
+      <br />
       <input
         id="replaySpeed"
         type="range"
@@ -155,7 +203,7 @@ function App() {
         step="10"
         value={replayInterval}
         onChange={(e) => setReplayInterval(Number(e.target.value))}
-        style={{ width: '200px', margin: '0 1rem' }}
+        style={{ width: '200px', margin: '0.5rem' }}
       />
       <input
         type="number"
@@ -164,25 +212,39 @@ function App() {
         step="10"
         value={replayInterval}
         onChange={(e) => setReplayInterval(Number(e.target.value))}
-        style={{ width: '60px' }}
+        style={{
+          width: '70px',
+          padding: '4px',
+          border: '1px solid #d1d5db',
+          borderRadius: '4px',
+        }}
       />
     </div>
 
-    {/* FRAME DISPLAY */}
+    {/* Frame display */}
     {frames && frames.length > 0 && (
       <div style={{ marginTop: '2rem', textAlign: 'center' }}>
         <img
           src={`data:image/jpeg;base64,${frames[currentFrame]}`}
           alt={`frame ${currentFrame}`}
-          style={{ width: '100%', maxWidth: '600px', borderRadius: '10px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+          style={{
+            width: '100%',
+            maxWidth: '600px',
+            borderRadius: '12px',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+            border: '3px solid #c084fc',
+          }}
         />
       </div>
     )}
 
-    {/* REWARD CHART */}
+    {/* Reward Chart */}
     <div style={{ marginTop: '3rem' }}>
-      <h3 style={{ fontSize: '1.2rem' }}>📈 Reward Curve</h3>
-      <p>Episode <strong>{episodeInfo.episode}</strong>, Reward: <strong>{episodeInfo.reward}</strong></p>
+      <h3 style={{ fontSize: '1.25rem', color: '#6366f1' }}>📈 Reward Chart</h3>
+      <p>
+        Episode <strong>{episodeInfo.episode}</strong>, Reward:{' '}
+        <strong style={{ color: '#10b981' }}>{episodeInfo.reward}</strong>
+      </p>
       <div style={{ width: '100%', maxWidth: '600px', height: '300px' }}>
         <Line
           data={{
@@ -192,8 +254,9 @@ function App() {
                 label: "Reward",
                 data: rollouts.map((r) => r.reward).reverse(),
                 fill: false,
-                borderColor: 'rgb(75, 192, 192)',
-                tension: 0.1,
+                borderColor: 'rgb(56, 189, 248)',
+                backgroundColor: 'rgba(56, 189, 248, 0.2)',
+                tension: 0.25,
               },
             ],
           }}
@@ -210,6 +273,7 @@ function App() {
     </div>
   </div>
 );
+
 
 }
 
