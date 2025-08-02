@@ -12,6 +12,10 @@ function App() {
   const [frames, setFrames] = useState([]);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  // defined
+  const [renewFrameInterval, setRenewFrameInterval] = useState(5);
+  const [replayInterval, setReplayInterval] = useState(50); // in ms
+  const [episodeNumForSimulation, setEpisodeNumForSimulation] = useState(0);
   // Stores info on the CURRENT episode
   const [episodeInfo, setEpisodeInfo] = useState({episode: 0, reward: 0});
 
@@ -44,9 +48,12 @@ function App() {
       setEpisodeInfo({ episode: data.episode, reward: data.reward });
       if(data.ep_frames.length > 0){
         setFrames(data.ep_frames);        // store all frames
+        setCurrentFrame(0);            // start at first frame
       }
-      setCurrentFrame(0);            // start at first frame
-      setIsPlaying(true);            // start playback automatically
+      if(data.sim_frame_episode_number) {
+        setEpisodeNumForSimulation(data.sim_frame_episode_number);
+      }
+      //setIsPlaying(true); <- playback controlled by isPlaying var           // start playback automatically
       setRollouts((prev) => [data, ...prev.slice(0, 19)]);
     };
 
@@ -65,10 +72,11 @@ function App() {
     intervalRef.current = setInterval(() => {
       setCurrentFrame((prev) => {
         if (Array.isArray(frames) && prev < frames.length - 1) return prev + 1;  // advance frame
-        clearInterval(intervalRef.current);             // stop at end
-        return prev;
+        // want to implement looping, so no stop at end
+        //clearInterval(intervalRef.current);             // stop at end
+        return 0;
       });
-    }, 50); // ~20 FPS
+    }, replayInterval); // ~20 FPS
 
     return () => clearInterval(intervalRef.current); // clean up
   }, [isPlaying, frames]);
@@ -113,7 +121,29 @@ function App() {
         <button onClick={handlePause}>⏸ Pause</button>
         <button onClick={handleRestart}>⏮ Restart</button>
       </div>
-      <p>Episode {episodeInfo.episode}, Reward: {episodeInfo.reward}. Visualization:</p>
+      <p>Simulating Episode {episodeNumForSimulation}</p>
+      <div style={{ marginTop: '1rem' }}>
+      <label htmlFor="replaySpeed">Playback Speed (ms per frame):</label>
+      <input
+        id="replaySpeed"
+        type="range"
+        min="10"
+        max="500"
+        step="10"
+        value={replayInterval}
+        onChange={(e) => setReplayInterval(Number(e.target.value))}
+        style={{ width: '200px', margin: '0 1rem' }}
+      />
+      <input
+        type="number"
+        min="10"
+        max="500"
+        step="10"
+        value={replayInterval}
+        onChange={(e) => setReplayInterval(Number(e.target.value))}
+        style={{ width: '60px' }}
+      />
+    </div>
       {frames &&frames.length > 0 && (
         <img
           src={`data:image/jpeg;base64,${frames[currentFrame]}`}
@@ -122,6 +152,7 @@ function App() {
         />
       )}
       <h3>Reward Curve per Episode</h3>
+      <p>Episode {episodeInfo.episode}, Reward: {episodeInfo.reward}. Visualization:</p>
       <ul>
         {/* {rollouts.map((r, idx) => (
           <li key={idx}>
