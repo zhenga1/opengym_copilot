@@ -3,6 +3,7 @@ import reactLogo from './assets/react.svg'
 import viteLogo from '/vite.svg'
 import './App.css'
 import {Line} from 'react-chartjs-2'
+import ProgressBar from './ProgressBar'
 import {Chart as ChartJS, LineElement, CategoryScale, LinearScale, PointElement} from 'chart.js'
 
 ChartJS.register(LineElement, CategoryScale, LinearScale, PointElement);
@@ -16,6 +17,9 @@ function App() {
   const [renewFrameInterval, setRenewFrameInterval] = useState(5);
   const [replayInterval, setReplayInterval] = useState(50); // in ms
   const [episodeNumForSimulation, setEpisodeNumForSimulation] = useState(0);
+  // whether to train in the backend
+  const [trainSteps, setTrainSteps] = useState(1000);
+  const [trainMode, setTrainMode] = useState(false);
   // Stores info on the CURRENT episode
   const [episodeInfo, setEpisodeInfo] = useState({episode: 0, reward: 0});
 
@@ -37,9 +41,10 @@ function App() {
 
   /* Here we are adding envName to the dependency array of useEffect, so useEffect will rerun when envName changes*/
   useEffect(() => {
-    const ws = new WebSocket(`ws://localhost:8000/ws/rollout?env=${envName}`);
+    const ws = new WebSocket(`ws://localhost:8000/ws/rollout?env=${envName}&train=${trainMode}&train_steps=${trainSteps}`);
     setRollouts([]); // restart the graph simulation from the beginning, upon new simulation
     console.log("envName: ", envName);
+    console.log("trainMode: ", trainMode);
     ws.onmessage = (event) => {
       /* DO NOT UPDATE THE STATE IF THE SIMULATION IS PAUSED*/
       if (isPausedRef.current) return;
@@ -61,12 +66,12 @@ function App() {
     ws.onerror = (err) => console.error("WebSocket Error: ", err);
     ws.onclose = () => console.log("WebSocket Closed. ");
     return () => ws.close();
-  }, [envName]);
+  }, [envName,trainMode]);
 
   // This is the useEffect for the frame Data from the video
   useEffect(() => {
-    console.log("Frames: ", frames)
-    console.log("isPlaying: ", isPlaying)
+    // console.log("Frames: ", frames)
+    // console.log("isPlaying: ", isPlaying)
     if (!isPlaying || (frames && frames.length) === 0) return;
     //advance frame at ferquency of 20fps
     intervalRef.current = setInterval(() => {
@@ -93,6 +98,9 @@ function App() {
     setIsPlaying(true);
   };
 
+  const toggleTrainMode = () => {
+    setTrainMode((prev) => !prev);
+  }
   const buttonStyle = (bg) => ({
     padding: '0.4rem 1rem',
     backgroundColor: bg,
@@ -123,6 +131,36 @@ function App() {
       ⚡ OpenGym Copilot
     </h1>
 
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+      <label htmlFor="trainSteps" style={{ fontWeight: 600 }}>
+        🧠 Train Steps:
+      </label>
+
+      <input
+        id='trainSteps'
+        type="range"
+        min="1000"
+        max="100000"
+        step="1000"
+        value={trainSteps}
+        onChange={(e) => setTrainSteps(Number(e.target.value))}
+        style={{ width: '200px', margin: '0.5rem' }}
+      /> 
+      <input
+        type="number"
+        min="1000"
+        max="100000"
+        step="1000"
+        value={trainSteps}
+        onChange={(e) =>  setTrainSteps(Number(e.target.value))}
+        style={{
+          width: '70px',
+          padding: '4px',
+          border: '1px solid #d1d5db',
+          borderRadius: '4px',
+        }}
+      /> 
+    </div>
     {/* Top Control Row */}
     <div
       style={{
@@ -133,6 +171,27 @@ function App() {
         justifyContent: 'center',
       }}
     >
+
+      <button
+        onClick={toggleTrainMode}
+        style={{
+          padding: '0.5rem 1.2rem',
+          fontSize: '1rem',
+          backgroundColor: trainMode ? '#3b82f6' : '#9ca3af', // blue if on, gray if off
+          color: 'white',
+          border: 'none',
+          borderRadius: '999px', // pill shape
+          cursor: 'pointer',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+          transition: 'all 0.3s ease-in-out',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '0.5rem',
+        }}
+      >
+        {trainMode ? '🧠 Training Active' : '🚫 Training Disabled'}
+      </button>
+      
       <button
         onClick={togglePause}
         style={{
@@ -168,6 +227,32 @@ function App() {
         <option value="Humanoid-v4">Humanoid-v4</option>
       </select>
     </div>
+      
+    {trainMode && (
+      <ProgressBar isTraining={trainMode} />
+    // <div style={{ margin: '1.5rem auto', textAlign: 'center' }}>
+    //   <div style={{
+    //     height: '8px',
+    //     width: '60%',
+    //     backgroundColor: '#e5e7eb',
+    //     borderRadius: '999px',
+    //     overflow: 'hidden',
+    //     margin: '0 auto',
+    //     position: 'relative'
+    //   }}>
+    //     <div style={{
+    //       height: '100%',
+    //       width: '40%',
+    //       backgroundColor: '#3b82f6',
+    //       animation: 'progress-slide 1.5s infinite ease-in-out'
+    //     }} />
+    //   </div>
+    //   <p style={{ marginTop: '0.5rem', color: '#4b5563', fontWeight: 500 }}>
+    //     Training in progress...
+    //   </p>
+    // </div>
+  )}
+
 
     {/* Playback Controls */}
     <div style={{ marginTop: '2rem', textAlign: 'center' }}>
