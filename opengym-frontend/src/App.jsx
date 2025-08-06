@@ -4,6 +4,7 @@ import viteLogo from '/vite.svg'
 import './App.css'
 import {Line} from 'react-chartjs-2'
 import ProgressBar from './ProgressBar'
+import axios  from 'axios'
 import {Chart as ChartJS, LineElement, CategoryScale, LinearScale, PointElement} from 'chart.js'
 
 ChartJS.register(LineElement, CategoryScale, LinearScale, PointElement);
@@ -98,7 +99,7 @@ function App() {
     setIsPlaying(true);
   };
 
-  const toggleTrainMode = () => {
+  const toggleTrainMode = async () => {
     setTrainMode((prev) => !prev);
   }
   const buttonStyle = (bg) => ({

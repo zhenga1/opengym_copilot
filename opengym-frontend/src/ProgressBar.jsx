@@ -14,7 +14,10 @@ export default function ProgressBar({ isTraining }) {
 
     const interval = setInterval(async () => {
       try {
+        console.log("BEGIN GETTING from /progress");
         const res = await axios.get("/progress");
+        //console.log("RESPONSE html:", res.data);
+        console.log("RESPONSE data:", res.data.progress);
         const value = res.data.progress;
         setProgress(value);
 
@@ -33,7 +36,7 @@ export default function ProgressBar({ isTraining }) {
   if (!isTraining) return null;
 
   return (
-    <div style={{ margin: '1.5rem auto', textAlign: 'center' }}>
+    <div style={{ margin: '1.5rem auto', textAlign: 'center'}}>
       <div style={{
         height: '8px',
         width: '60%',

@@ -8,27 +8,51 @@ import cv2
 import base64
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.callbacks import BaseCallback
-import constants
+#import constants
 
 from urllib.parse import parse_qs
 
 app = FastAPI()
+env_name = "" # unknown for now
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+file = open("progress_bar.log", "w")
+train_run_progress = 0
 class ProgressBarCallback(BaseCallback):
     def __init__(self, total_timesteps, verbose=0):
         super().__init__(verbose)
         self.total_timesteps = total_timesteps
     
     def _on_step(self) -> bool:
-        pct = 100 * self.model.num_timesteps / self.total_timesteps
+        global train_run_progress
+        # bound the progress bar percentage by the minimum of n_calls and total_timesteps, so self.n_calls never exceeds self.total_timesteps
+        pct = 100 * min(self.n_calls, self.total_timesteps) / self.total_timesteps
+        # file.write(f"Progress: {pct:.2f}%\n")
+        # file.write(f"n_calls: {self.n_calls}\n total_timesteps: {self.total_timesteps}\n")
+        # file.flush()
         print(f"Progress: {pct:.2f}%", end='\r') # or send to the frontend
-        constants.train_run_progress = min(int(pct), 100)
+        
+        train_run_progress = min(int(pct), 100)
         return True
     
 from fastapi import WebSocket
-@app.get("/ws/progress")
+from threading import Thread
+from datetime import datetime
+#@app.post("/start")
+def start_training(model: PPO = None, train_steps:int = 1000, reset_num_timesteps = False,callback: BaseCallback = None):
+    def train():
+        global train_run_progress
+        train_run_progress = 0
+        model.learn(total_timesteps=train_steps, reset_num_timesteps=False, callback=callback)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        model.save(f"models/ppo_model_{env_name}_{timestamp}.zip")
+        print("Training complete")
+    Thread(target=train).start()
+    # status option
+    return {"status": "training started"}
+
+@app.get("/progress")
 def get_progress():
 #async def websocket_endpoint(websocket: WebSocket):
     # await websocket.accept()
@@ -36,10 +60,11 @@ def get_progress():
     #     await websocket.send_json({"progress": train_run_progress})
     #     await asyncio.sleep(0.1)
     # await websocket.close()
-    return {"progress": constants.train_run_progress}
-
+    file.write(f"Put variable by name progress: {train_run_progress}\n")
+    return {"progress": train_run_progress}
 @app.websocket("/ws/rollout")
 async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
+    global env_name
     await websocket.accept()
 
     query = parse_qs(websocket.url.query)
@@ -85,8 +110,10 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
             
             # Train
             callback = ProgressBarCallback(total_timesteps=train_steps)
-            constants.train_run_progress = 0
-            model.learn(total_timesteps=train_steps, reset_num_timesteps=False, callback=callback)
+            global train_run_progress
+            train_run_progress= 0
+            start_training(model, train_steps=train_steps, reset_num_timesteps=False, callback=callback)
+            #model.learn(total_timesteps=train_steps, reset_num_timesteps=False, callback=callback)
 
             # Save
             model.save("ppo_model")

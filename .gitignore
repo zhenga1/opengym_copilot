@@ -1,3 +1,5 @@
 tensorboard_logs/
 __pycache__/
 ppo_model.zip
+models/
+progress_bar.log
