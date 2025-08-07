@@ -55,16 +55,16 @@ function App() {
               justifyContent: 'center',
             }}
           >
-            <div
-              style={{
-                width: '100%',
-                maxWidth: '800px',
-                margin: '0 auto',
-                textAlign: 'center',
-              }}
-            >
-            {windows[currentIndex]}
-          </div>
+            {windows.map((win, i) => (
+              <div
+                key={i}
+                style={{
+                  display: i === currentIndex ? 'block' : 'none',
+                }}
+              >
+                {win}
+              </div>
+            ))}
         
         </div>
       ) : (
