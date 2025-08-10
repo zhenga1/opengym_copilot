@@ -34,7 +34,10 @@ function RolloutWindow() {
     setEnvName(e.target.value)
   }
 
-  const togglePause = () => {
+  const togglePause = async() => {
+    // const newState = !isPaused;
+    // console.log("Sending pause state:", newState);
+    // await axios.post("/pause_rollout", { paused: newState });
     setIsPaused((prev) => {
       isPausedRef.current = !prev;
       return !prev;

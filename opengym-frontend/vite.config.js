@@ -7,7 +7,8 @@ export default defineConfig({
   server:{
     proxy: {
     '/progress': 'http://localhost:8000',
-    '/start': 'http://localhost:8000'
+    '/start': 'http://localhost:8000',
+    '/pause_rollout': 'http://localhost:8000',
     }
   }
 })

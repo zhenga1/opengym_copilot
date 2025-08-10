@@ -11,6 +11,14 @@ function App() {
     setWindows((prev) => [...prev, newWindow]);
     setCurrentIndex(windows.length); // slide to the new one
   };
+  const removeRollout = () => {
+    setWindows(prev => {
+      if (prev.length === 0) return prev;           // nothing to remove
+      const next = prev.slice(0, -1);               // drop the last window
+      setCurrentIndex(next.length ? next.length - 1 : 0); // clamp index
+      return next;
+    });
+  };
 
   const prev = () => {
     if (currentIndex > 0) setCurrentIndex((i) => i - 1);
@@ -39,6 +47,22 @@ function App() {
           }}
         >
           ➕ Add Rollout
+        </button>
+
+        <button
+          onClick={removeRollout}
+          style={{
+            margin: '0 1rem',
+            backgroundColor: '#8b5cf6',
+            color: 'white',
+            padding: '0.5rem 1rem',
+            borderRadius: '8px',
+            border: 'none',
+            cursor: 'pointer',
+            fontWeight: 'bold',
+          }}
+        >
+          ➖ Remove Rollout
         </button>
 
         <button

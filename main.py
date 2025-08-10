@@ -62,6 +62,14 @@ def get_progress():
     # await websocket.close()
     file.write(f"Put variable by name progress: {train_run_progress}\n")
     return {"progress": train_run_progress}
+
+rollout_pause_state = {"paused": False}
+from fastapi import Body
+@app.post("/pause_rollout")
+def pause_rollout(paused: bool = Body(...)):
+    rollout_pause_state["paused"] = paused
+    return {"status": "paused" if paused else "resumed"}
+
 @app.websocket("/ws/rollout")
 async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
     global env_name
@@ -136,6 +144,9 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
         #         traced_policy = torch.jit.trace(model.policy, example_obs)
         while True:
             action = None
+            while rollout_pause_state["paused"]:
+                # supposed to keep looping until unpaused
+                await asyncio.sleep(0.1)
             if train_mode:
                 obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).to("cpu")
                 with torch.no_grad():
