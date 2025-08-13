@@ -4,6 +4,7 @@ import gymnasium as gym
 import torch
 from stable_baselines3 import PPO
 import json
+import numpy as np
 import cv2
 import base64
 from stable_baselines3.common.vec_env import DummyVecEnv
@@ -52,6 +53,9 @@ def start_training(model: PPO = None, train_steps:int = 1000, reset_num_timestep
     # status option
     return {"status": "training started"}
 
+from pydantic import BaseModel
+class PauseRequest(BaseModel):
+    paused: bool
 @app.get("/progress")
 def get_progress():
 #async def websocket_endpoint(websocket: WebSocket):
@@ -63,12 +67,27 @@ def get_progress():
     file.write(f"Put variable by name progress: {train_run_progress}\n")
     return {"progress": train_run_progress}
 
-rollout_pause_state = {"paused": False}
+rollout_pause_state = {}# session_id: paused or not
 from fastapi import Body
+from pydantic import BaseModel
+class PauseRequest(BaseModel):
+    session_id: str
+    paused: bool
 @app.post("/pause_rollout")
-def pause_rollout(paused: bool = Body(...)):
-    rollout_pause_state["paused"] = paused
-    return {"status": "paused" if paused else "resumed"}
+def pause_rollout(req: PauseRequest):
+    session_id = req.session_id
+    rollout_pause_state["paused"] = req.paused
+    return {"status": "paused" if req.paused else "resumed",  
+            "session_id": session_id}
+
+
+class SessionState:
+    def __init__(self):
+        self.resume_event = asyncio.Event()
+        self.resume_event.set()  # start un-paused
+        self.paused = False
+
+sessions: dict[str, SessionState] = {}  # session_id -> state
 
 @app.websocket("/ws/rollout")
 async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
@@ -82,7 +101,6 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
     train_mode = train_mode_str.lower() == "true"   # ✅ real boolean
     train_steps = query.get("train_steps", [1000])[0]
     train_steps = int(train_steps)
-
 
     print("env_name: ", env_name)
     print("train_steps: ", train_steps)
@@ -153,7 +171,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                     action, _ = model.predict(obs_tensor)
                     #print("example action output: ", action)
                     if isinstance(env.action_space, gym.spaces.Discrete):
-                        action = action.item()
+                        action = int(np.asarray(action).reshape(-1)[0])
                     else:
                         action = action.cpu().numpy()[0]
                     
@@ -171,6 +189,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                 # Construct the data payload
                 data = {
                     #"step": step,
+                    "type": "rollout",
                     "episode": episodes_seen,
                     #"observation": obs.tolist(),
                     #"action": int(action),

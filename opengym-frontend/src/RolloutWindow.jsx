@@ -26,6 +26,7 @@ function RolloutWindow() {
   const [envName, setEnvName] = useState("CartPole-v1");
   const [isPaused, setIsPaused] = useState(false);
   const isPausedRef = useRef(false);
+  const [sessionId, setSessionId] = useState(null);
   const intervalRef = useRef(null);
   const socketRef = useRef(null);
   const retryRef = useRef(null);
@@ -34,10 +35,10 @@ function RolloutWindow() {
     setEnvName(e.target.value)
   }
 
-  const togglePause = async() => {
-    // const newState = !isPaused;
-    // console.log("Sending pause state:", newState);
-    // await axios.post("/pause_rollout", { paused: newState });
+  const togglePause = async(ns) => {
+    const newState = ns !== undefined ? ns : !isPaused;
+    console.log("Sending pause state:", newState);
+    await axios.post("/pause_rollout", {sessionId: sessionId, paused: newState });
     setIsPaused((prev) => {
       isPausedRef.current = !prev;
       return !prev;
@@ -64,6 +65,12 @@ function RolloutWindow() {
         if (isPausedRef.current) return;
 
         const data = JSON.parse(event.data);
+        if (data.type === "session"){
+          setSessionId(data.sessionId);
+          // the websocket does not need to record any more data
+          return; 
+        }
+        // if data.type is not session
         setEpisodeInfo({ episode: data.episode, reward: data.reward });
         if(data.ep_frames.length > 0){
           setFrames(data.ep_frames);        // store all frames
@@ -77,6 +84,8 @@ function RolloutWindow() {
       };
       ws.onerror = (err) => console.error("WebSocket Error: ", err);
       ws.onclose = () => {
+        console.log("[WebSocket] Disconnected ❌");
+        console.log("WebSocket is Active: ", isActive);
         if(!isActive) return;
         
         console.log("WebSocket Disconnected, retrying in 1s. ");
@@ -86,6 +95,7 @@ function RolloutWindow() {
     
     setRollouts([]); // restart the graph simulation from the beginning, upon new simulation
     // initial attempt
+    togglePause(false);
     connect();
     console.log("envName: ", envName);
     console.log("trainMode: ", trainMode);
@@ -130,7 +140,11 @@ function RolloutWindow() {
   };
 
   const toggleTrainMode = async () => {
-    setTrainMode((prev) => !prev);
+    const newValue = !trainMode;
+    const newPauseValue = trainMode;
+    setTrainMode(newValue);
+    console.log("Toggling the pause value to:", newPauseValue);
+    togglePause(newPauseValue); // pause if train mode is toggled
   }
   const buttonStyle = (bg) => ({
     padding: '0.4rem 1rem',
@@ -224,7 +238,7 @@ function RolloutWindow() {
       </button>
       
       <button
-        onClick={togglePause}
+        onClick={() => togglePause()}
         style={{
           padding: '0.5rem 1.2rem',
           fontSize: '1rem',
