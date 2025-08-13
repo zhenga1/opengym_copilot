@@ -36,9 +36,13 @@ function RolloutWindow() {
   }
 
   const togglePause = async(ns) => {
+    if (!sessionId) {
+      console.warn("Session ID not set yet, cannot pause/resume");
+      return;
+    }
     const newState = ns !== undefined ? ns : !isPaused;
     console.log("Sending pause state:", newState);
-    await axios.post("/pause_rollout", {sessionId: sessionId, paused: newState });
+    await axios.post("/pause_rollout", {session_id: sessionId, paused: newState });
     setIsPaused((prev) => {
       isPausedRef.current = !prev;
       return !prev;
@@ -66,7 +70,7 @@ function RolloutWindow() {
 
         const data = JSON.parse(event.data);
         if (data.type === "session"){
-          setSessionId(data.sessionId);
+          setSessionId(data.session_id);
           // the websocket does not need to record any more data
           return; 
         }

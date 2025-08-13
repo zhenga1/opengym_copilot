@@ -67,6 +67,10 @@ def get_progress():
     file.write(f"Put variable by name progress: {train_run_progress}\n")
     return {"progress": train_run_progress}
 
+import uuid
+def generate_session_id():
+    return str(uuid.uuid4())  # e.g., '550e8400-e29b-41d4-a716-446655440000'
+
 rollout_pause_state = {}# session_id: paused or not
 from fastapi import Body
 from pydantic import BaseModel
@@ -76,7 +80,7 @@ class PauseRequest(BaseModel):
 @app.post("/pause_rollout")
 def pause_rollout(req: PauseRequest):
     session_id = req.session_id
-    rollout_pause_state["paused"] = req.paused
+    rollout_pause_state[session_id] = req.paused
     return {"status": "paused" if req.paused else "resumed",  
             "session_id": session_id}
 
@@ -94,6 +98,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
     global env_name
     await websocket.accept()
 
+
     query = parse_qs(websocket.url.query)
     print("query: ", query)
     env_name = query.get("env", ["CartPole-v1"])[0]
@@ -104,6 +109,13 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
 
     print("env_name: ", env_name)
     print("train_steps: ", train_steps)
+
+    
+    # generate + send a session ID
+    session_id = generate_session_id()
+    rollout_pause_state[session_id] = False  # default: not paused
+    await websocket.send_json({"type": "session", "session_id": session_id})
+
     # get a query parameter
     #query = websocket.headers.get("sec-websocket-protocol", "CartPole-v1")
     #env_name = query or "CartPole-v1"
@@ -162,7 +174,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
         #         traced_policy = torch.jit.trace(model.policy, example_obs)
         while True:
             action = None
-            while rollout_pause_state["paused"]:
+            while rollout_pause_state[session_id]:
                 # supposed to keep looping until unpaused
                 await asyncio.sleep(0.1)
             if train_mode:
