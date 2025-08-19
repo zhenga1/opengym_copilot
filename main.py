@@ -1,6 +1,7 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import asyncio
 import gymnasium as gym
+from pyparsing import Optional
 import torch
 from stable_baselines3 import PPO
 import json
@@ -53,6 +54,25 @@ def start_training(model: PPO = None, train_steps:int = 1000, reset_num_timestep
     # status option
     return {"status": "training started"}
 
+import os
+from fastapi import UploadFile, File
+MODELS_DIR = "models"
+os.makedirs(MODELS_DIR, exist_ok=True)
+@app.get("/models")
+def list_models():
+    os.makedirs(MODELS_DIR, exist_ok=True)
+    files = [f for f in os.listdir(MODELS_DIR) if f.endswith('.zip')]
+    return {"models": sorted(files)}
+
+@app.post("/upload_model")
+async def upload_model(file: UploadFile = File(...)):
+  if not file.filename.endswith(".zip"):
+      return {"ok": False, "error": "must be a .zip"}
+  dest = os.path.join(MODELS_DIR, file.filename)
+  with open(dest, "wb") as f:
+      f.write(await file.read())
+  return {"ok": True, "model_name": file.filename}
+
 from pydantic import BaseModel
 class PauseRequest(BaseModel):
     paused: bool
@@ -90,9 +110,31 @@ class SessionState:
         self.resume_event = asyncio.Event()
         self.resume_event.set()  # start un-paused
         self.paused = False
+        self.model:Optional[PPO] = None
+
 
 sessions: dict[str, SessionState] = {}  # session_id -> state
 
+class LoadRequest(BaseModel):
+    session_id:str
+    model_name:str
+
+@app.post("/load_model")
+def load_model(req: LoadRequest):
+    from os.path import join, exists
+    path = join(MODELS_DIR, req.model_name)
+    if not exists(path):
+        return {"ok": False, "error": "model_not_found"}
+    # Load the model
+    state = sessions.get(req.session_id)
+    if state is None:
+        return {"ok": False, "error": "session_not_found"}
+    try:
+        state.model = PPO.load(path)
+        return {"ok": True, "session_id": req.session_id, "model": req.model_name}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    
 @app.websocket("/ws/rollout")
 async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
     global env_name

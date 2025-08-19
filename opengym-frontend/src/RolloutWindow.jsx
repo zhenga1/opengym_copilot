@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef} from 'react'
+import { useState, useEffect, useRef, use} from 'react'
 import reactLogo from './assets/react.svg'
 import viteLogo from '/vite.svg'
 import {Line} from 'react-chartjs-2'
@@ -28,8 +28,15 @@ function RolloutWindow() {
   const isPausedRef = useRef(false);
   const [sessionId, setSessionId] = useState(null);
   const intervalRef = useRef(null);
+
   const socketRef = useRef(null);
   const retryRef = useRef(null);
+
+  // Upload the files logistics:
+  const [serverModels, setServerModels] = useState([]);
+  const [selectedServerModel, setSelectedServerModel] = useState(""); // "" = None
+  const [file, setFile] = useState(null);
+  const [loading, setLoading] = useState(false);
 
   const handleEnvChange = (e) => {
     setEnvName(e.target.value)
@@ -49,6 +56,19 @@ function RolloutWindow() {
     });
   };
 
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        
+        const res = await axios.get("/models");
+        // Get the models that currently exist
+        setServerModels(res.data.models || []);
+      } catch (e) {
+        console.error("List the models process has failed: ", e);
+      }
+    };
+    fetchModels();
+  }, []);
   /* Here we are adding envName to the dependency array of useEffect, so useEffect will rerun when envName changes*/
   useEffect(() => {
     let isActive = true;
@@ -163,6 +183,55 @@ function RolloutWindow() {
     transition: 'all 0.2s ease',
   });
 
+  const handleModelUpload = (e) => {
+    const f = e.target.files?.[0] || null;
+    setFile(f);
+  };
+  const useNone = async () => {
+    setLoading(true);
+    try {
+      // “Clear” the session’s model by loading none; implement either:
+      // 1) a dedicated endpoint:
+      // await axios.post("/unload_model", { session_id: sessionId });
+      // OR 2) overload load_model with a sentinel:
+      await axios.post("/load_model", { session_id: sessionId, model_name: "" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadServerModel = async () => {
+    if (!selectedServerModel) return useNone();
+    setLoading(true);
+    try {
+      await axios.post("/load_model", {
+        session_id: sessionId,
+        model_name: selectedServerModel,
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const uploadAndLoad = async () => {
+    if (!file) return;
+    setLoading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file); // field name "file" expected by backend
+      const up = await axios.post("/upload_model", form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      const modelName = up.data?.model_name; // backend should return stored filename
+      if (modelName) {
+        await axios.post("/load_model", { session_id: sessionId, model_name: modelName });
+      }
+    } finally {
+      setLoading(false);
+      setFile(null);
+    }
+  };
+
   /*console.log("Rollout rewards:", rollouts.map((r) => r.reward));*/
   return (
   <div
@@ -209,6 +278,60 @@ function RolloutWindow() {
           borderRadius: '4px',
         }}
       /> 
+    </div>
+    
+    <div style={{ display: 'grid', gap: '0.75rem', margin: '1rem 0' }}>
+      {/* Row: “Load Model” label + file picker */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', justifyContent: 'center' }}>
+        <label htmlFor='loadModel' style={{ fontWeight: 600 }}>Load Model:</label>
+        <input
+          id='loadModel'
+          type="file"
+          accept=".zip"
+          onChange={handleModelUpload}
+          style={{ maxWidth: 260 }}
+        />
+        <button
+          onClick={uploadAndLoad}
+          disabled={!file || loading}
+          style={{ padding: '.4rem .75rem' }}
+          title="Upload selected .zip and load into this rollout session"
+        >
+          {loading ? "Uploading..." : "Upload & Load"}
+        </button>
+      </div>
+
+      {/* Row: server model dropdown */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', justifyContent: 'center' }}>
+        <label htmlFor="serverModel" style={{ fontWeight: 600 }}>From Server:</label>
+        <select
+          id="serverModel"
+          value={selectedServerModel}
+          onChange={(e) => setSelectedServerModel(e.target.value)}
+          style={{ padding: '.35rem .5rem', minWidth: 260 }}
+        >
+          <option value="">(None — random rollout)</option>
+          {serverModels.map(m => (
+            <option key={m} value={m}>{m}</option>
+          ))}
+        </select>
+        <button
+          onClick={loadServerModel}
+          disabled={loading}
+          style={{ padding: '.4rem .75rem' }}
+          title="Load the selected server model (or None)"
+        >
+          {loading ? "Loading..." : "Use Selection"}
+        </button>
+        <button
+          onClick={useNone}
+          disabled={loading}
+          style={{ padding: '.4rem .75rem' }}
+          title="Clear model for this session (random rollout)"
+        >
+          Use None
+        </button>
+      </div>
     </div>
     {/* Top Control Row */}
     <div
