@@ -40,6 +40,10 @@ function RolloutWindow() {
   const [isUsingNone, setIsUsingNone] = useState(true);
   const [loading, setLoading] = useState(false);
 
+  //set whether model parent directory file path is copied
+  const [filePathCopied, setFilePathCopied] = useState(false);
+  const [hoverOnFilePathButton, setHoverOnFilePathButton] = useState(false);
+
   const handleEnvChange = (e) => {
     setEnvName(e.target.value)
   }
@@ -241,6 +245,18 @@ function RolloutWindow() {
     }
   };
 
+  const getRootSavedModelsLink = async() => {
+    const result = await axios.get("/get_model_path");
+    console.log("Root saved models link from backend:", result.data);
+    let path = result.data;
+    try {
+      await navigator.clipboard.writeText(path);
+      setFilePathCopied(true);
+      setTimeout(() => setFilePathCopied(false), 1500); // reset after 1.5s
+    } catch (err) {
+      console.error("Failed to copy: ", err);
+    }
+  }
   /*console.log("Rollout rewards:", rollouts.map((r) => r.reward));*/
   return (
   <div
@@ -313,6 +329,40 @@ function RolloutWindow() {
       {/* Row: server model dropdown */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', justifyContent: 'center' }}>
         <label htmlFor="serverModel" style={{ fontWeight: 600 }}>From Server:</label>
+        <button
+        onClick={getRootSavedModelsLink}
+        onMouseEnter={() => setHoverOnFilePathButton(true)}
+        onMouseLeave={() => setHoverOnFilePathButton(false)}
+        style={{
+          border: "none",
+          background: "transparent",
+          cursor: "pointer",
+          fontSize: "1rem", // small text-sized
+          padding: "0.2rem",
+        }}
+        title={filePathCopied ? "Copied!" : "Copy folder link"}
+      >
+        {hoverOnFilePathButton ? "🔗" : "📁"}
+      </button>
+      {/* Short notification */}
+      {filePathCopied && (
+        <div
+          style={{
+            position: "absolute",
+            top: "-1.5rem",
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "#333",
+            color: "#fff",
+            fontSize: "0.75rem",
+            padding: "2px 6px",
+            borderRadius: "4px",
+            whiteSpace: "nowrap",
+          }}
+        >
+          Copied!
+        </div>
+      )}
         <select
           id="serverModel"
           value={selectedServerModel}

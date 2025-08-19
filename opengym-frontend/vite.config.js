@@ -15,7 +15,8 @@ export default defineConfig({
       changeOrigin: true,
       secure : false,
     },
-    '/models' : 'http://localhost:8000'
+    '/models' : 'http://localhost:8000',
+    '/get_model_path': 'http://localhost:8000'
     }
   }
 }

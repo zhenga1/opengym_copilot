@@ -122,6 +122,9 @@ class LoadRequest(BaseModel):
     session_id:str
     model_name:str
 
+@app.get("/get_model_path")
+def get_model_path():
+    return MODELS_DIR
 @app.post("/load_model")
 def load_model(req: LoadRequest):
     from os.path import join, exists
