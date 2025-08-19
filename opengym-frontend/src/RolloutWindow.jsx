@@ -36,6 +36,8 @@ function RolloutWindow() {
   const [serverModels, setServerModels] = useState([]);
   const [selectedServerModel, setSelectedServerModel] = useState(""); // "" = None
   const [file, setFile] = useState(null);
+  // whether is using default policy or not
+  const [isUsingNone, setIsUsingNone] = useState(true);
   const [loading, setLoading] = useState(false);
 
   const handleEnvChange = (e) => {
@@ -196,6 +198,7 @@ function RolloutWindow() {
   };
   const useNone = async () => {
     setLoading(true);
+    setIsUsingNone(true);
     try {
       // “Clear” the session’s model by loading none; implement either:
       // 1) a dedicated endpoint:
@@ -208,6 +211,7 @@ function RolloutWindow() {
   };
 
   const loadServerModel = async () => {
+    setIsUsingNone(false);
     if (!selectedServerModel) return useNone();
     setLoading(true);
     try {
@@ -323,7 +327,10 @@ function RolloutWindow() {
         <button
           onClick={loadServerModel}
           disabled={loading}
-          style={{ padding: '.4rem .75rem' }}
+          style={{ padding: '.4rem .75rem',
+            backgroundColor: !isUsingNone ? '#d1d5db' : '#10b981'
+          }}
+
           title="Load the selected server model (or None)"
         >
           {loading ? "Loading..." : "Use Selection"}
@@ -331,7 +338,9 @@ function RolloutWindow() {
         <button
           onClick={useNone}
           disabled={loading}
-          style={{ padding: '.4rem .75rem' }}
+          style={{ padding: '.4rem .75rem', 
+            backgroundColor: isUsingNone ? '#d1d5db' : '#10b981'
+          }}
           title="Clear model for this session (random rollout)"
         >
           Use None
