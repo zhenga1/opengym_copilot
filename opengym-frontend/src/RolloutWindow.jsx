@@ -57,17 +57,24 @@ function RolloutWindow() {
   };
 
   useEffect(() => {
+    let retryTimeout;
+    console.log("Fetching models from server...");
     const fetchModels = async () => {
       try {
-        
         const res = await axios.get("/models");
         // Get the models that currently exist
+        console.log("Available models: ", res);
         setServerModels(res.data.models || []);
       } catch (e) {
-        console.error("List the models process has failed: ", e);
+        console.error("List the models process has failed: Will retry in 5 seconds");
+        //retry timeout = 5 seconds
+        retryTimeout = setTimeout(fetchModels, 5000);
       }
     };
     fetchModels();
+    return () => {
+      if (retryTimeout) clearTimeout(retryTimeout);
+    }
   }, []);
   /* Here we are adding envName to the dependency array of useEffect, so useEffect will rerun when envName changes*/
   useEffect(() => {
@@ -219,9 +226,7 @@ function RolloutWindow() {
     try {
       const form = new FormData();
       form.append("file", file); // field name "file" expected by backend
-      const up = await axios.post("/upload_model", form, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      const up = await axios.post("/upload_model", form);
       const modelName = up.data?.model_name; // backend should return stored filename
       if (modelName) {
         await axios.post("/load_model", { session_id: sessionId, model_name: modelName });
@@ -393,10 +398,33 @@ function RolloutWindow() {
           fontSize: '1rem',
         }}
       >
+        {/* Classic Control Environments */}
+        <option value="CartPole-v0">CartPole-v0</option>
         <option value="CartPole-v1">CartPole-v1</option>
         <option value="MountainCar-v0">MountainCar-v0</option>
+        <option value="MountainCarContinuous-v0">MountainCarContinuous-v0</option>
         <option value="Acrobot-v1">Acrobot-v1</option>
+        <option value="Pendulum-v1">Pendulum-v1</option>
+
+        {/* Box2D */}
+        <option value="LunarLander-v2">LunarLander-v2</option>
+        <option value="LunarLanderContinuous-v2">LunarLanderContinuous-v2</option>
+        <option value="BipedalWalker-v3">BipedalWalker-v3</option>
+        <option value="BipedalWalkerHardcore-v3">BipedalWalkerHardcore-v3</option>
+        <option value="CarRacing-v2">CarRacing-v2</option>
+
+        {/*Mujoco (Continuous Control)*/}
         <option value="Humanoid-v4">Humanoid-v4</option>
+        <option value="HumanoidStandup-v4">HumanoidStandup-v4</option>
+        <option value="Ant-v4">Ant-v4</option>
+        <option value="HalfCheetah-v4">HalfCheetah-v4</option>
+        <option value="Hopper-v4">Hopper-v4</option>
+        <option value="Walker2d-v4">Walker2d-v4</option>
+        <option value="Swimmer-v4">Swimmer-v4</option>
+        <option value="Reacher-v4">Reacher-v4</option>
+        <option value="Pusher-v4">Pusher-v4</option>
+        <option value="InvertedPendulum-v4">InvertedPendulum-v4</option>
+        <option value="InvertedDoublePendulum-v4">InvertedDoublePendulum-v4</option>
       </select>
     </div>
       

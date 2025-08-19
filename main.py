@@ -56,7 +56,8 @@ def start_training(model: PPO = None, train_steps:int = 1000, reset_num_timestep
 
 import os
 from fastapi import UploadFile, File
-MODELS_DIR = "models"
+MODELS_DIR = os.path.join(os.getcwd(), "models")
+print("Models directory: ", MODELS_DIR)
 os.makedirs(MODELS_DIR, exist_ok=True)
 @app.get("/models")
 def list_models():
@@ -64,14 +65,6 @@ def list_models():
     files = [f for f in os.listdir(MODELS_DIR) if f.endswith('.zip')]
     return {"models": sorted(files)}
 
-@app.post("/upload_model")
-async def upload_model(file: UploadFile = File(...)):
-  if not file.filename.endswith(".zip"):
-      return {"ok": False, "error": "must be a .zip"}
-  dest = os.path.join(MODELS_DIR, file.filename)
-  with open(dest, "wb") as f:
-      f.write(await file.read())
-  return {"ok": True, "model_name": file.filename}
 
 from pydantic import BaseModel
 class PauseRequest(BaseModel):
@@ -112,9 +105,19 @@ class SessionState:
         self.paused = False
         self.model:Optional[PPO] = None
 
+@app.post("/upload_model")
+async def upload_model(file: UploadFile = File(...)):
+  if not file.filename.endswith(".zip"):
+      return {"ok": False, "error": "must be a .zip"}
+  dest = os.path.join(MODELS_DIR, file.filename)
+  with open(dest, "wb") as f:
+      f.write(await file.read())
+  return {"ok": True, "model_name": file.filename}
 
-sessions: dict[str, SessionState] = {}  # session_id -> state
+# sessions: dict[str, SessionState] = {}  # session_id -> state
 
+import collections
+current_model = collections.defaultdict(None)
 class LoadRequest(BaseModel):
     session_id:str
     model_name:str
@@ -122,15 +125,23 @@ class LoadRequest(BaseModel):
 @app.post("/load_model")
 def load_model(req: LoadRequest):
     from os.path import join, exists
+    print("model loading began: ")
+    if req.model_name == "":
+        current_model[req.session_id]  = None
+        print("load model is None")
+        return {"ok": True, "session_id": req.session_id, "model":""}
     path = join(MODELS_DIR, req.model_name)
     if not exists(path):
         return {"ok": False, "error": "model_not_found"}
     # Load the model
-    state = sessions.get(req.session_id)
-    if state is None:
-        return {"ok": False, "error": "session_not_found"}
+    # print("Sessions are this: ", sessions)
+    # state = sessions.get(req.session_id)
+    # print("State is this: ", state)
+    # if state is None:
+    #     return {"ok": False, "error": "session_not_found"}
     try:
-        state.model = PPO.load(path)
+        current_model[req.session_id] = PPO.load(path)
+        print("load model is", current_model)
         return {"ok": True, "session_id": req.session_id, "model": req.model_name}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -230,11 +241,19 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                         action = action.cpu().numpy()[0]
                     
             else:
-                action = env.action_space.sample()
+                if session_id not in current_model or current_model[session_id] is None: 
+                    action = env.action_space.sample()
+                else:
+                    obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).to("cpu")
+                    #print("--- Using custom model right now ---")
+                    with torch.no_grad():
+                        action, _ = current_model[session_id].predict(obs_tensor)
+                        if isinstance(env.action_space, gym.spaces.Discrete):
+                            action = int(np.asarray(action).reshape(-1)[0])
+                        else:
+                            action = action.cpu().numpy()[0]
             next_obs, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
-
-            
 
             # Prepare for next step
             if done:
