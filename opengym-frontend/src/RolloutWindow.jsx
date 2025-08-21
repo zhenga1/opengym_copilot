@@ -61,16 +61,29 @@ function RolloutWindow() {
   const openPathPopup = () => setShowPathPopup(true);
   const closePathPopup = () => setShowPathPopup(false);
 
+  const toggleTrainPauseTogether = () => {
+    const newValue = !trainMode;
+    const newPauseValue = trainMode;
+    setTrainMode(newValue);
+    console.log("Toggling the pause value to:", newPauseValue);
+    togglePause(newPauseValue); // pause if train mode is toggled
+  };
   const saveTrainingPath = async (path, device) => {
     if (!sessionId) {
       console.warn("Session ID not set yet, cannot pause/resume");
       return;
     }
     try {
+      // Set Train path FIRST
+      // THEN SET THE TRAIN MODE AND toggle pause
       // persist to backend (example endpoint)
       await axios.post("/set_training_dir", { "session_id": sessionId, "train_dir_path": path, "device": device });
       setTrainingPath(path);
       closePathPopup();
+
+      toggleTrainPauseTogether();
+
+      
     } catch (e) {
       console.error("Failed to set training path:", e);
       // optionally show a toast here
@@ -206,15 +219,12 @@ function RolloutWindow() {
   };
 
   const toggleTrainMode = async () => {
-    const newValue = !trainMode;
-    const newPauseValue = trainMode;
-    setTrainMode(newValue);
-    console.log("Toggling the pause value to:", newPauseValue);
-    togglePause(newPauseValue); // pause if train mode is toggled
     if(!trainMode) {
       openPathPopup();
+      // process the trainMode variable WITHIN the popup (i.e. after popup closes)
     } else {
       closePathPopup();
+      toggleTrainPauseTogether();
     }
   }
   const buttonStyle = (bg) => ({

@@ -14,6 +14,10 @@ from stable_baselines3.common.callbacks import BaseCallback
 
 from urllib.parse import parse_qs
 
+
+trained_model_paths = {} # session_id to most recent saved model paths
+training_model_devices = {} # session_id to device to use
+
 app = FastAPI()
 env_name = "" # unknown for now
 
@@ -41,14 +45,20 @@ class ProgressBarCallback(BaseCallback):
 from fastapi import WebSocket
 from threading import Thread
 from datetime import datetime
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+default_model_path = f"models/ppo_model_{env_name}_{timestamp}.zip"
 #@app.post("/start")
-def start_training(model: PPO = None, train_steps:int = 1000, reset_num_timesteps = False,callback: BaseCallback = None):
+def start_training(model: PPO = None, session_id: str = None, train_steps:int = 1000, reset_num_timesteps = False,callback: BaseCallback = None):
     def train():
         global train_run_progress
         train_run_progress = 0
         model.learn(total_timesteps=train_steps, reset_num_timesteps=False, callback=callback)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        model.save(f"models/ppo_model_{env_name}_{timestamp}.zip")
+        train_model_actual_path = ""
+        if session_id not in trained_model_paths:
+            train_model_actual_path = default_model_path
+        else:
+            train_model_actual_path = trained_model_paths[session_id]
+        model.save(train_model_actual_path)
         print("Training complete")
     Thread(target=train).start()
     # status option
@@ -102,8 +112,6 @@ class SetTrainingDirRequest(BaseModel):
     train_dir_path: str
     device:str
 
-trained_model_paths = {} # session_id to most recent saved model paths
-
 @app.post("/set_training_dir")
 def set_training_dir(req: SetTrainingDirRequest):
     session_id = req.session_id
@@ -113,6 +121,7 @@ def set_training_dir(req: SetTrainingDirRequest):
     device = req.device
     print("Device obtainied ", device)
     trained_model_paths[session_id] = where_to_save_trained_model
+    training_model_devices[session_id] = device
     # Here you would typically set the training directory for the session
     return {"status": "training directory set", "session_id": session_id, "path": where_to_save_trained_model}
 
@@ -213,6 +222,9 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
             # Check for GPU availability and use it
             device = "cpu"#"cuda" if torch.cuda.is_available() else "cpu"
 
+            if session_id in training_model_devices:
+                device = training_model_devices[session_id]
+
             model = PPO(
                 "MlpPolicy",
                 vec_env,
@@ -225,7 +237,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
             callback = ProgressBarCallback(total_timesteps=train_steps)
             global train_run_progress
             train_run_progress= 0
-            start_training(model, train_steps=train_steps, reset_num_timesteps=False, callback=callback)
+            start_training(model, session_id=session_id, train_steps=train_steps, reset_num_timesteps=False, callback=callback)
             #model.learn(total_timesteps=train_steps, reset_num_timesteps=False, callback=callback)
 
             # Save
