@@ -97,6 +97,22 @@ def pause_rollout(req: PauseRequest):
     return {"status": "paused" if req.paused else "resumed",  
             "session_id": session_id}
 
+class SetTrainingDirRequest(BaseModel):
+    session_id: str
+    train_dir_path: str
+
+trained_model_paths = {} # session_id to most recent saved model paths
+
+@app.post("/set_training_dir")
+def set_training_dir(req: SetTrainingDirRequest):
+    session_id = req.session_id
+    where_to_save_trained_model = req.train_dir_path
+
+    print("New parameter obtained: Here is where save trained model - ", where_to_save_trained_model)
+    trained_model_paths[session_id] = where_to_save_trained_model
+    # Here you would typically set the training directory for the session
+    return {"status": "training directory set", "session_id": session_id, "path": where_to_save_trained_model}
+
 
 class SessionState:
     def __init__(self):

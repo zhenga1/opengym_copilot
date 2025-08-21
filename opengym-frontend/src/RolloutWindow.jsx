@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, use} from 'react'
 import reactLogo from './assets/react.svg'
 import viteLogo from '/vite.svg'
 import {Line} from 'react-chartjs-2'
+import Popup from './TrainingPopup'
+import SetPathPopup from './SetPathPopup'
 import ProgressBar from './ProgressBar'
 import axios  from 'axios'
 import {Chart as ChartJS, LineElement, CategoryScale, LinearScale, PointElement} from 'chart.js'
@@ -31,10 +33,12 @@ function RolloutWindow() {
 
   const socketRef = useRef(null);
   const retryRef = useRef(null);
+  const timestamp = Date.now();
 
   // Upload the files logistics:
   const [serverModels, setServerModels] = useState([]);
   const [selectedServerModel, setSelectedServerModel] = useState(""); // "" = None
+  const [showPopup, setShowPopup] = useState(false);
   const [file, setFile] = useState(null);
   // whether is using default policy or not
   const [isUsingNone, setIsUsingNone] = useState(true);
@@ -47,6 +51,32 @@ function RolloutWindow() {
   const handleEnvChange = (e) => {
     setEnvName(e.target.value)
   }
+  // This effectively flips the showPopup
+  const togglePopup = () => {
+    setShowPopup((prev) => !prev);
+  };
+
+  const [showPathPopup, setShowPathPopup] = useState(false);
+  const [trainingPath, setTrainingPath] = useState("models/basic_model.zip");
+
+  const openPathPopup = () => setShowPathPopup(true);
+  const closePathPopup = () => setShowPathPopup(false);
+
+  const saveTrainingPath = async (path) => {
+    if (!sessionId) {
+      console.warn("Session ID not set yet, cannot pause/resume");
+      return;
+    }
+    try {
+      // persist to backend (example endpoint)
+      await axios.post("/set_training_dir", { "session_id": sessionId, "train_dir_path": path });
+      setTrainingPath(path);
+      closePathPopup();
+    } catch (e) {
+      console.error("Failed to set training path:", e);
+      // optionally show a toast here
+    }
+  };
 
   const togglePause = async(ns) => {
     if (!sessionId) {
@@ -177,6 +207,11 @@ function RolloutWindow() {
   };
 
   const toggleTrainMode = async () => {
+    if(!trainMode) {
+      openPathPopup();
+    } else {
+      closePathPopup();
+    }
     const newValue = !trainMode;
     const newPauseValue = trainMode;
     setTrainMode(newValue);
@@ -427,6 +462,12 @@ function RolloutWindow() {
       >
         {trainMode ? '🧠 Training Active' : '🚫 Training Disabled'}
       </button>
+      <SetPathPopup
+        isOpen={showPathPopup}
+        defaultPath={`models/ppo_model_${envName}_${timestamp}.zip`}
+        onConfirm={saveTrainingPath}
+        onClose={closePathPopup}
+      />
       
       <button
         onClick={() => togglePause()}
@@ -470,7 +511,7 @@ function RolloutWindow() {
         <option value="LunarLanderContinuous-v2">LunarLanderContinuous-v2</option>
         <option value="BipedalWalker-v3">BipedalWalker-v3</option>
         <option value="BipedalWalkerHardcore-v3">BipedalWalkerHardcore-v3</option>
-        <option value="CarRacing-v2">CarRacing-v2</option>
+        <option value="CarRacing-v3">CarRacing-v3</option>
 
         {/*Mujoco (Continuous Control)*/}
         <option value="Humanoid-v4">Humanoid-v4</option>
