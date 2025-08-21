@@ -100,6 +100,7 @@ def pause_rollout(req: PauseRequest):
 class SetTrainingDirRequest(BaseModel):
     session_id: str
     train_dir_path: str
+    device:str
 
 trained_model_paths = {} # session_id to most recent saved model paths
 
@@ -109,6 +110,8 @@ def set_training_dir(req: SetTrainingDirRequest):
     where_to_save_trained_model = req.train_dir_path
 
     print("New parameter obtained: Here is where save trained model - ", where_to_save_trained_model)
+    device = req.device
+    print("Device obtainied ", device)
     trained_model_paths[session_id] = where_to_save_trained_model
     # Here you would typically set the training directory for the session
     return {"status": "training directory set", "session_id": session_id, "path": where_to_save_trained_model}

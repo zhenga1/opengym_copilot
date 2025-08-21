@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, use} from 'react'
 import reactLogo from './assets/react.svg'
 import viteLogo from '/vite.svg'
 import {Line} from 'react-chartjs-2'
-import Popup from './TrainingPopup'
 import SetPathPopup from './SetPathPopup'
 import ProgressBar from './ProgressBar'
 import axios  from 'axios'
@@ -62,14 +61,14 @@ function RolloutWindow() {
   const openPathPopup = () => setShowPathPopup(true);
   const closePathPopup = () => setShowPathPopup(false);
 
-  const saveTrainingPath = async (path) => {
+  const saveTrainingPath = async (path, device) => {
     if (!sessionId) {
       console.warn("Session ID not set yet, cannot pause/resume");
       return;
     }
     try {
       // persist to backend (example endpoint)
-      await axios.post("/set_training_dir", { "session_id": sessionId, "train_dir_path": path });
+      await axios.post("/set_training_dir", { "session_id": sessionId, "train_dir_path": path, "device": device });
       setTrainingPath(path);
       closePathPopup();
     } catch (e) {

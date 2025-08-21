@@ -7,11 +7,14 @@ const SetPathPopup = ({
   onClose,
 }) => {
   const [path, setPath] = useState(defaultPath);
+  const [device, setDevice] = useState("cuda"); // default gpu = cuda
   const inputRef = useRef(null);
+  const frozenDefaultRef = useRef(null);
 
   // reset path when opened & focus the input
   useEffect(() => {
     if (isOpen) {
+      frozenDefaultRef.current = defaultPath; // store the initial value
       setPath(defaultPath);
       // focus after mount
       setTimeout(() => inputRef.current?.focus(), 0);
@@ -20,7 +23,7 @@ const SetPathPopup = ({
 
   // keyboard: Enter confirm, Esc close
   const onKeyDown = (e) => {
-    if (e.key === "Enter") onConfirm?.(path);
+    if (e.key === "Enter") onConfirm?.(path, device);
     if (e.key === "Escape") onClose?.();
   };
 
@@ -48,11 +51,21 @@ const SetPathPopup = ({
             This is a <strong>server</strong> path. Browsers can’t browse your server’s filesystem,
             but you can type or paste it here.
           </div>
+
+          <label style={{ display: "block", marginBottom: 6 }}>Training Device</label>
+            <select
+            value={device}
+            onChange={(e) => setDevice(e.target.value === "gpu" ? "cuda" : "cpu")}
+            style={{ width: "100%", marginBottom: 12 }}
+            >
+            <option value="gpu">GPU</option>
+            <option value="cpu">CPU</option>
+            </select>
         </div>
 
         <div className="popup-actions">
           <button className="btn secondary" onClick={onClose}>Cancel (Esc)</button>
-          <button className="btn primary" onClick={() => onConfirm?.(path)}>Save (Enter)</button>
+          <button className="btn primary" onClick={() => onConfirm?.(path, device)}>Save (Enter)</button>
         </div>
       </div>
     </div>
