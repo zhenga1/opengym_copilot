@@ -206,16 +206,16 @@ function RolloutWindow() {
   };
 
   const toggleTrainMode = async () => {
-    if(!trainMode) {
-      openPathPopup();
-    } else {
-      closePathPopup();
-    }
     const newValue = !trainMode;
     const newPauseValue = trainMode;
     setTrainMode(newValue);
     console.log("Toggling the pause value to:", newPauseValue);
     togglePause(newPauseValue); // pause if train mode is toggled
+    if(!trainMode) {
+      openPathPopup();
+    } else {
+      closePathPopup();
+    }
   }
   const buttonStyle = (bg) => ({
     padding: '0.4rem 1rem',
