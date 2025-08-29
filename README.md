@@ -18,7 +18,7 @@
 
 ## 🖥 Demo Preview
 
-![OpenGym Copilot Demo](./demos/opengym_first_demo.gif)
+![OpenGym Copilot Demo](./demos/opengym_demo.gif)
 
 ---
 
