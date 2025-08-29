@@ -15,8 +15,8 @@ from stable_baselines3.common.callbacks import BaseCallback
 from urllib.parse import parse_qs
 
 
-trained_model_paths = {} # session_id to most recent saved model paths
-training_model_devices = {} # session_id to device to use
+trained_model_paths = {} # run_id to most recent saved model paths
+training_model_devices = {} # run_id to device to use
 
 app = FastAPI()
 env_name = "" # unknown for now
@@ -48,16 +48,16 @@ from datetime import datetime
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 default_model_path = f"models/ppo_model_{env_name}_{timestamp}.zip"
 #@app.post("/start")
-def start_training(model: PPO = None, session_id: str = None, train_steps:int = 1000, reset_num_timesteps = False,callback: BaseCallback = None):
+def start_training(model: PPO = None, run_id: str = None, train_steps:int = 1000, reset_num_timesteps = False,callback: BaseCallback = None):
     def train():
         global train_run_progress
         train_run_progress = 0
         model.learn(total_timesteps=train_steps, reset_num_timesteps=False, callback=callback)
         train_model_actual_path = ""
-        if session_id not in trained_model_paths:
+        if run_id not in trained_model_paths:
             train_model_actual_path = default_model_path
         else:
-            train_model_actual_path = trained_model_paths[session_id]
+            train_model_actual_path = trained_model_paths[run_id]
         model.save(train_model_actual_path)
         print("Training complete")
     Thread(target=train).start()
@@ -91,10 +91,18 @@ def get_progress():
     return {"progress": train_run_progress}
 
 import uuid
+def generate_run_id():
+    return str(uuid.uuid4())  # e.g., '550e8400-e29b-41d4-a716-446655440000'
 def generate_session_id():
     return str(uuid.uuid4())  # e.g., '550e8400-e29b-41d4-a716-446655440000'
 
-rollout_pause_state = {}# session_id: paused or not
+@app.get("/unique_run_id")
+def get_unique_run_id():
+    run_id = generate_run_id()
+    print("run_id:", run_id)
+    return {"run_id": run_id}
+
+rollout_pause_state = {}# run_id: paused or not
 from fastapi import Body
 from pydantic import BaseModel
 class PauseRequest(BaseModel):
@@ -108,22 +116,22 @@ def pause_rollout(req: PauseRequest):
             "session_id": session_id}
 
 class SetTrainingDirRequest(BaseModel):
-    session_id: str
+    run_id: str
     train_dir_path: str
     device:str
 
 @app.post("/set_training_dir")
 def set_training_dir(req: SetTrainingDirRequest):
-    session_id = req.session_id
+    run_id = req.run_id
     where_to_save_trained_model = req.train_dir_path
 
     print("New parameter obtained: Here is where save trained model - ", where_to_save_trained_model)
     device = req.device
     print("Device obtainied ", device)
-    trained_model_paths[session_id] = where_to_save_trained_model
-    training_model_devices[session_id] = device
+    trained_model_paths[run_id] = where_to_save_trained_model
+    training_model_devices[run_id] = device
     # Here you would typically set the training directory for the session
-    return {"status": "training directory set", "session_id": session_id, "path": where_to_save_trained_model}
+    return {"status": "training directory set", "run_id": run_id, "path": where_to_save_trained_model}
 
 
 class SessionState:
@@ -147,7 +155,7 @@ async def upload_model(file: UploadFile = File(...)):
 import collections
 current_model = collections.defaultdict(None)
 class LoadRequest(BaseModel):
-    session_id:str
+    run_id:str
     model_name:str
 
 @app.get("/get_model_path")
@@ -158,9 +166,9 @@ def load_model(req: LoadRequest):
     from os.path import join, exists
     print("model loading began: ")
     if req.model_name == "":
-        current_model[req.session_id]  = None
+        current_model[req.run_id]  = None
         print("load model is None")
-        return {"ok": True, "session_id": req.session_id, "model":""}
+        return {"ok": True, "run_id": req.run_id, "model":""}
     path = join(MODELS_DIR, req.model_name)
     if not exists(path):
         return {"ok": False, "error": "model_not_found"}
@@ -171,12 +179,29 @@ def load_model(req: LoadRequest):
     # if state is None:
     #     return {"ok": False, "error": "session_not_found"}
     try:
-        current_model[req.session_id] = PPO.load(path)
+        current_model[req.run_id] = PPO.load(path)
         print("load model is", current_model)
-        return {"ok": True, "session_id": req.session_id, "model": req.model_name}
+        return {"ok": True, "run_id": req.run_id, "model": req.model_name}
     except Exception as e:
         return {"ok": False, "error": str(e)}
     
+
+@app.websocket("/ws/training")
+async def training_procedure(websocket: WebSocket):
+    await websocket.accept()
+    while True:
+        message = await websocket.receive_text()
+        if message == "pause":
+            # Pause the training
+            await websocket.send_text("Training paused")
+        elif message == "resume":
+            # Resume the training
+            await websocket.send_text("Training resumed")
+        elif message == "stop":
+            # Stop the training
+            await websocket.send_text("Training stopped")
+            break
+
 @app.websocket("/ws/rollout")
 async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
     global env_name
@@ -185,6 +210,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
 
     query = parse_qs(websocket.url.query)
     print("query: ", query)
+    run_id = query.get("runid", [None])[0]
     env_name = query.get("env", ["CartPole-v1"])[0]
     train_mode_str = query.get("train", ["true"])[0]
     train_mode = train_mode_str.lower() == "true"   # ✅ real boolean
@@ -222,8 +248,8 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
             # Check for GPU availability and use it
             device = "cpu"#"cuda" if torch.cuda.is_available() else "cpu"
 
-            if session_id in training_model_devices:
-                device = training_model_devices[session_id]
+            if run_id in training_model_devices:
+                device = training_model_devices[run_id]
 
             model = PPO(
                 "MlpPolicy",
@@ -237,7 +263,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
             callback = ProgressBarCallback(total_timesteps=train_steps)
             global train_run_progress
             train_run_progress= 0
-            start_training(model, session_id=session_id, train_steps=train_steps, reset_num_timesteps=False, callback=callback)
+            start_training(model, run_id=run_id, train_steps=train_steps, reset_num_timesteps=False, callback=callback)
             #model.learn(total_timesteps=train_steps, reset_num_timesteps=False, callback=callback)
 
             # Save
@@ -275,13 +301,13 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                         action = action.squeeze(0)
                     
             else:
-                if session_id not in current_model or current_model[session_id] is None: 
+                if run_id not in current_model or current_model[run_id] is None:
                     action = env.action_space.sample()
                 else:
                     obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).to("cpu")
                     #print("--- Using custom model right now ---")
                     with torch.no_grad():
-                        action, _ = current_model[session_id].predict(obs_tensor)
+                        action, _ = current_model[run_id].predict(obs_tensor)
                         if isinstance(env.action_space, gym.spaces.Discrete):
                             action = int(np.asarray(action).reshape(-1)[0])
                         else:

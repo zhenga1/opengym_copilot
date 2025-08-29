@@ -28,11 +28,22 @@ function RolloutWindow() {
   const [isPaused, setIsPaused] = useState(false);
   const isPausedRef = useRef(false);
   const [sessionId, setSessionId] = useState(null);
+  const [runId, setRunId] = useState(null);
   const intervalRef = useRef(null);
 
   const socketRef = useRef(null);
   const retryRef = useRef(null);
-  const timestamp = Date.now();
+  function formatDate(ts) {
+    const d = new Date(ts);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    const hh = String(d.getHours()).padStart(2, "0");
+    const min = String(d.getMinutes()).padStart(2, "0");
+    const ss = String(d.getSeconds()).padStart(2, "0");
+    return `${yyyy}${mm}${dd}_${hh}${min}${ss}`;
+  }
+  const timestamp = formatDate(Date.now());
 
   // Upload the files logistics:
   const [serverModels, setServerModels] = useState([]);
@@ -83,15 +94,15 @@ function RolloutWindow() {
     togglePause(newPauseValue); // pause if train mode is toggled
   };
   const saveTrainingPath = async (path, device) => {
-    if (!sessionId) {
-      console.warn("Session ID not set yet, cannot pause/resume");
+    if (!runId) {
+      console.warn("Run ID not set yet, cannot pause/resume");
       return;
     }
     try {
       // Set Train path FIRST
       // THEN SET THE TRAIN MODE AND toggle pause
       // persist to backend (example endpoint)
-      await axios.post("/set_training_dir", { "session_id": sessionId, "train_dir_path": path, "device": device });
+      await axios.post("/set_training_dir", { "run_id": runId, "train_dir_path": path, "device": device });
       setTrainingPath(path);
       closePathPopup();
 
@@ -113,7 +124,7 @@ function RolloutWindow() {
     }
     const newState = ns !== undefined ? ns : !isPaused;
     console.log("Sending pause state:", newState);
-    await axios.post("/pause_rollout", {session_id: sessionId, paused: newState });
+    await axios.post("/pause_rollout", { session_id: sessionId, paused: newState });
     setIsPaused((prev) => {
       isPausedRef.current = !prev;
       return !prev;
@@ -140,69 +151,85 @@ function RolloutWindow() {
       if (retryTimeout) clearTimeout(retryTimeout);
     }
   }, []);
+  useEffect(() => {
+    async function fetchRunId() {
+      const returnData = await axios.get("/unique_run_id");
+      setRunId(returnData.data.run_id);
+    }
+    fetchRunId();
+    console.log("Run id current: ", runId);
+  }, []);
   /* Here we are adding envName to the dependency array of useEffect, so useEffect will rerun when envName changes*/
   useEffect(() => {
+
     let isActive = true;
-    const connect = () => {
-      const url = `ws://localhost:8000/ws/rollout?env=${envName}&train=${trainMode}&train_steps=${trainSteps}`
-      console.log("Attempting to connect to : ", url);
-      const ws = new WebSocket(url);
-
-      ws.onopen = () => {
-        console.log("[WebSocket] Connected ✅");
-        socketRef.current = ws;
-        retryRef.current = null;
-      };
-
-      ws.onmessage = (event) => {
-        if (!isActive) return;
-        /* DO NOT UPDATE THE STATE IF THE SIMULATION IS PAUSED*/
-        if (isPausedRef.current) return;
-
-        const data = JSON.parse(event.data);
-        if (data.type === "session"){
-          setSessionId(data.session_id);
-          // the websocket does not need to record any more data
-          return; 
-        }
-        // if data.type is not session
-        setEpisodeInfo({ episode: data.episode, reward: data.reward });
-        if(data.ep_frames.length > 0){
-          setFrames(data.ep_frames);        // store all frames
-          setCurrentFrame(0);            // start at first frame
-        }
-        if(data.sim_frame_episode_number) {
-          setEpisodeNumForSimulation(data.sim_frame_episode_number);
-        }
-        //setIsPlaying(true); <- playback controlled by isPlaying var           // start playback automatically
-        setRollouts((prev) => [data, ...prev.slice(0, 19)]);
-      };
-      ws.onerror = (err) => console.error("WebSocket Error: ", err);
-      ws.onclose = () => {
-        console.log("[WebSocket] Disconnected ❌");
-        console.log("WebSocket is Active: ", isActive);
-        if(!isActive) return;
-        
-        console.log("WebSocket Disconnected, retrying in 1s. ");
-        retryRef.current = setTimeout(connect, 1000); // retry after 1 second
-      }
+    if (!runId) {
+      console.warn("Run ID not set yet, cannot connect");
+      return;
     }
-    
-    setRollouts([]); // restart the graph simulation from the beginning, upon new simulation
-    // initial attempt
-    togglePause(false);
-    connect();
-    console.log("envName: ", envName);
-    console.log("trainMode: ", trainMode);
-    
+    else {
+      const connect = () => {
+        const url = `ws://localhost:8000/ws/rollout?runid=${runId}&env=${envName}&train=${trainMode}&train_steps=${trainSteps}`
+        console.log("Attempting to connect to : ", url);
+        const ws = new WebSocket(url);
 
-    console.log("frames: ", frames &&frames.length)
-    return () => {
-      isActive = false;
-      if (socketRef.current) socketRef.current.close();
-      if (retryRef.current) clearTimeout(retryRef.current);
-    };
-  }, [envName,trainMode]);
+        ws.onopen = () => {
+          console.log("[WebSocket] Connected ✅");
+          socketRef.current = ws;
+          retryRef.current = null;
+        };
+
+        ws.onmessage = (event) => {
+          if (!isActive) return;
+          /* DO NOT UPDATE THE STATE IF THE SIMULATION IS PAUSED*/
+          if (isPausedRef.current) return;
+
+          const data = JSON.parse(event.data);
+          if (data.type === "session"){
+            setSessionId(data.session_id);
+            // the websocket does not need to record any more data
+            return; 
+          }
+          // if data.type is not session
+          setEpisodeInfo({ episode: data.episode, reward: data.reward });
+          if(data.ep_frames.length > 0){
+            setFrames(data.ep_frames);        // store all frames
+            setCurrentFrame(0);            // start at first frame
+          }
+          if(data.sim_frame_episode_number) {
+            setEpisodeNumForSimulation(data.sim_frame_episode_number);
+          }
+          //setIsPlaying(true); <- playback controlled by isPlaying var           // start playback automatically
+          setRollouts((prev) => [data, ...prev.slice(0, 19)]);
+        };
+        ws.onerror = (err) => console.error("WebSocket Error: ", err);
+        ws.onclose = () => {
+          console.log("[WebSocket] Disconnected ❌");
+          console.log("WebSocket is Active: ", isActive);
+          if(!isActive) return;
+          
+          console.log("WebSocket Disconnected, retrying in 1s. ");
+          retryRef.current = setTimeout(connect, 1000); // retry after 1 second
+        }
+      }
+      
+      setRollouts([]); // restart the graph simulation from the beginning, upon new simulation
+      // initial attempt
+      togglePause(false);
+      connect();
+      console.log("envName: ", envName);
+      console.log("trainMode: ", trainMode);
+      
+
+      console.log("frames: ", frames &&frames.length)
+      return () => {
+        // cleanup function, run before next component runs
+        isActive = false;
+        if (socketRef.current) socketRef.current.close();
+        if (retryRef.current) clearTimeout(retryRef.current);
+      };
+    }
+  }, [envName,trainMode, runId]);
 
   // This is the useEffect for the frame Data from the video
   useEffect(() => {
@@ -268,19 +295,23 @@ function RolloutWindow() {
       // 1) a dedicated endpoint:
       // await axios.post("/unload_model", { session_id: sessionId });
       // OR 2) overload load_model with a sentinel:
-      await axios.post("/load_model", { session_id: sessionId, model_name: "" });
+      await axios.post("/load_model", { run_id: runId, model_name: "" });
     } finally {
       setLoading(false);
     }
   };
 
   const loadServerModel = async () => {
+    if (!runId) {
+      console.warn("Run ID not set yet, cannot load model");
+      return;
+    }
     setIsUsingNone(false);
     if (!selectedServerModel) return useNone();
     setLoading(true);
     try {
       await axios.post("/load_model", {
-        session_id: sessionId,
+        runId: runId,
         model_name: selectedServerModel,
       });
     } finally {
@@ -297,7 +328,7 @@ function RolloutWindow() {
       const up = await axios.post("/upload_model", form);
       const modelName = up.data?.model_name; // backend should return stored filename
       if (modelName) {
-        await axios.post("/load_model", { session_id: sessionId, model_name: modelName });
+        await axios.post("/load_model", { runId: runId, model_name: modelName });
       }
     } finally {
       setLoading(false);
