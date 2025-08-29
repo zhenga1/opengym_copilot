@@ -17,18 +17,21 @@ from urllib.parse import parse_qs
 
 trained_model_paths = {} # run_id to most recent saved model paths
 training_model_devices = {} # run_id to device to use
+RUNS_TRAINING_STATUS = {}  # run_id -> {"status": "running|done|error", "model_path": str|None, ...}
+
 
 app = FastAPI()
 env_name = "" # unknown for now
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-file = open("progress_bar.log", "w")
-train_run_progress = 0
+progress_bar_log_file = open("progress_bar.log", "w")
+train_run_progresses = {}
 class ProgressBarCallback(BaseCallback):
-    def __init__(self, total_timesteps, verbose=0):
+    def __init__(self, total_timesteps, runId, verbose=0):
         super().__init__(verbose)
         self.total_timesteps = total_timesteps
+        self.runId = runId
     
     def _on_step(self) -> bool:
         global train_run_progress
@@ -39,7 +42,7 @@ class ProgressBarCallback(BaseCallback):
         # file.flush()
         print(f"Progress: {pct:.2f}%", end='\r') # or send to the frontend
         
-        train_run_progress = min(int(pct), 100)
+        train_run_progresses[self.runId] = pct
         return True
     
 from fastapi import WebSocket
@@ -49,17 +52,24 @@ timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 default_model_path = f"models/ppo_model_{env_name}_{timestamp}.zip"
 #@app.post("/start")
 def start_training(model: PPO = None, run_id: str = None, train_steps:int = 1000, reset_num_timesteps = False,callback: BaseCallback = None):
+    RUNS_TRAINING_STATUS.setdefault(run_id, {"status": "running", "model_path": None, "error": None})
     def train():
-        global train_run_progress
+        global train_run_progress, RUNS_TRAINING_STATUS
         train_run_progress = 0
-        model.learn(total_timesteps=train_steps, reset_num_timesteps=False, callback=callback)
-        train_model_actual_path = ""
-        if run_id not in trained_model_paths:
-            train_model_actual_path = default_model_path
-        else:
-            train_model_actual_path = trained_model_paths[run_id]
-        model.save(train_model_actual_path)
-        print("Training complete")
+        try:
+            model.learn(total_timesteps=train_steps, reset_num_timesteps=False, callback=callback)
+            train_model_actual_path = ""
+            if run_id not in trained_model_paths:
+                train_model_actual_path = default_model_path
+            else:
+                train_model_actual_path = trained_model_paths[run_id]
+            model.save(train_model_actual_path)
+            RUNS_TRAINING_STATUS[run_id]["status"] = "done"
+            RUNS_TRAINING_STATUS[run_id]["model_path"] = train_model_actual_path
+            print("Training complete")
+        except Exception as e:
+            RUNS_TRAINING_STATUS[run_id]["status"] = "error"
+            RUNS_TRAINING_STATUS[run_id]["error"] = str(e)
     Thread(target=train).start()
     # status option
     return {"status": "training started"}
@@ -76,19 +86,20 @@ def list_models():
     return {"models": sorted(files)}
 
 
+# @app.get("/training_runs/{run_id}")
+# def get_run(run_id: str):
+#     return RUNS_TRAINING_STATUS.get(run_id, {"status": "unknown"})
+
 from pydantic import BaseModel
 class PauseRequest(BaseModel):
     paused: bool
-@app.get("/progress")
-def get_progress():
-#async def websocket_endpoint(websocket: WebSocket):
-    # await websocket.accept()
-    # for i in range(100):
-    #     await websocket.send_json({"progress": train_run_progress})
+@app.get("/progress/{run_id}")
+def get_progress(run_id: str):
+    #return {"progress": train_run_progresses.get(run_id, 0)}
     #     await asyncio.sleep(0.1)
     # await websocket.close()
-    file.write(f"Put variable by name progress: {train_run_progress}\n")
-    return {"progress": train_run_progress}
+    progress_bar_log_file.write(f"Put variable by name progress {train_run_progresses} for run_id {run_id}\n")
+    return {"progress": train_run_progresses.get(run_id, 0)}
 
 import uuid
 def generate_run_id():
@@ -260,7 +271,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
             )
             
             # Train
-            callback = ProgressBarCallback(total_timesteps=train_steps)
+            callback = ProgressBarCallback(total_timesteps=train_steps, runId=run_id)
             global train_run_progress
             train_run_progress= 0
             start_training(model, run_id=run_id, train_steps=train_steps, reset_num_timesteps=False, callback=callback)

@@ -18,7 +18,12 @@ export default defineConfig({
     '/models' : 'http://localhost:8000',
     '/get_model_path': 'http://localhost:8000',
     '/set_training_dir': 'http://localhost:8000',
-    '/unique_run_id': 'http://localhost:8000'
+    '/unique_run_id': 'http://localhost:8000',
+    "/training_runs": {
+        target: "http://localhost:8000", // FastAPI backend
+        changeOrigin: true,
+        secure: false,
+      },
     }
   }
 }

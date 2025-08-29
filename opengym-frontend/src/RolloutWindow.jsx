@@ -364,7 +364,8 @@ function RolloutWindow() {
     <h1 style={{ fontSize: '2.2rem', fontWeight: 700, textAlign: 'center', color: '#4f46e5' }}>
       ⚡ OpenGym Copilot
     </h1>
-
+    <h3 style={{ fontSize: '1.6rem', marginBottom: '1rem', color: '#3b82f6' }}>🎮 Training Controls 🎮</h3>
+      
     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
       <label htmlFor="trainSteps" style={{ fontWeight: 600 }}>
         🧠 Train Steps:
@@ -396,7 +397,133 @@ function RolloutWindow() {
       /> 
     </div>
     
-    <div style={{ display: 'grid', gap: '0.75rem', margin: '1rem 0' }}>
+    
+    {/* Top Control Row */}
+    <div
+      style={{
+        display: 'flex',
+        gap: '1rem',
+        alignItems: 'center',
+        margin: '2rem 0 1rem 0',
+        justifyContent: 'center',
+      }}
+    >
+      <button
+        onClick={toggleTrainMode}
+        style={{
+          padding: '0.5rem 1.2rem',
+          fontSize: '1rem',
+          backgroundColor: trainMode ? '#3b82f6' : '#9ca3af', // blue if on, gray if off
+          color: 'white',
+          border: 'none',
+          borderRadius: '999px', // pill shape
+          cursor: 'pointer',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+          transition: 'all 0.3s ease-in-out',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '0.5rem',
+        }}
+      >
+        {trainMode ? '🧠 Training Active' : '🚫 Training Disabled'}
+      </button>
+      <SetPathPopup
+        isOpen={showPathPopup}
+        defaultPath={frozenPath !== null ? frozenPath : `models/ppo_model_${envName}_${timestamp}.zip`}
+        onConfirm={saveTrainingPath}
+        onClose={closePathPopup}
+      />
+      
+      <button
+        onClick={() => togglePause()}
+        style={{
+          padding: '0.5rem 1.2rem',
+          fontSize: '1rem',
+          backgroundColor: isPaused ? '#10b981' : '#ef4444',
+          color: 'white',
+          border: 'none',
+          borderRadius: '8px',
+          cursor: 'pointer',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+        }}
+      >
+        {isPaused ? '▶ Continue' : '⏸ Pause'}
+      </button>
+
+      <label htmlFor="envSelect" style={{ fontWeight: 600 }}>Environment:</label>
+      <select
+        id="envSelect"
+        value={envName}
+        onChange={handleEnvChange}
+        style={{
+          padding: '6px 10px',
+          borderRadius: '6px',
+          border: '1px solid #cbd5e1',
+          backgroundColor: '#f9fafb',
+          fontSize: '1rem',
+        }}
+      >
+        {/* Classic Control Environments */}
+        <option value="CartPole-v0">CartPole-v0</option>
+        <option value="CartPole-v1">CartPole-v1</option>
+        <option value="MountainCar-v0">MountainCar-v0</option>
+        <option value="MountainCarContinuous-v0">MountainCarContinuous-v0</option>
+        <option value="Acrobot-v1">Acrobot-v1</option>
+        <option value="Pendulum-v1">Pendulum-v1</option>
+
+        {/* Box2D */}
+        <option value="LunarLander-v2">LunarLander-v2</option>
+        <option value="LunarLanderContinuous-v2">LunarLanderContinuous-v2</option>
+        <option value="BipedalWalker-v3">BipedalWalker-v3</option>
+        <option value="BipedalWalkerHardcore-v3">BipedalWalkerHardcore-v3</option>
+        <option value="CarRacing-v3">CarRacing-v3</option>
+
+        {/*Mujoco (Continuous Control)*/}
+        <option value="Humanoid-v4">Humanoid-v4</option>
+        <option value="HumanoidStandup-v4">HumanoidStandup-v4</option>
+        <option value="Ant-v4">Ant-v4</option>
+        <option value="HalfCheetah-v4">HalfCheetah-v4</option>
+        <option value="Hopper-v4">Hopper-v4</option>
+        <option value="Walker2d-v4">Walker2d-v4</option>
+        <option value="Swimmer-v4">Swimmer-v4</option>
+        <option value="Reacher-v4">Reacher-v4</option>
+        <option value="Pusher-v4">Pusher-v4</option>
+        <option value="InvertedPendulum-v4">InvertedPendulum-v4</option>
+        <option value="InvertedDoublePendulum-v4">InvertedDoublePendulum-v4</option>
+      </select>
+    </div>
+      
+    {trainMode && (
+      <ProgressBar isTraining={trainMode} runId={runId} />
+    // <div style={{ margin: '1.5rem auto', textAlign: 'center' }}>
+    //   <div style={{
+    //     height: '8px',
+    //     width: '60%',
+    //     backgroundColor: '#e5e7eb',
+    //     borderRadius: '999px',
+    //     overflow: 'hidden',
+    //     margin: '0 auto',
+    //     position: 'relative'
+    //   }}>
+    //     <div style={{
+    //       height: '100%',
+    //       width: '40%',
+    //       backgroundColor: '#3b82f6',
+    //       animation: 'progress-slide 1.5s infinite ease-in-out'
+    //     }} />
+    //   </div>
+    //   <p style={{ marginTop: '0.5rem', color: '#4b5563', fontWeight: 500 }}>
+    //     Training in progress...
+    //   </p>
+    // </div>
+  )}
+
+
+    {/* Playback Controls */}
+    <div style={{ marginTop: '2rem', textAlign: 'center' }}>
+      <h3 style={{ fontSize: '1.6rem', marginBottom: '1rem', color: '#3b82f6' }}>🎮 Simulation Controls 🎮</h3>
+      
+      <div style={{ display: 'grid', gap: '0.75rem', margin: '1rem 0' }}>
       {/* Row: “Load Model” label + file picker */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', justifyContent: 'center' }}>
         <label htmlFor='loadModel' style={{ fontWeight: 600 }}>Load Model:</label>
@@ -503,131 +630,6 @@ function RolloutWindow() {
         </button>
       </div>
     </div>
-    {/* Top Control Row */}
-    <div
-      style={{
-        display: 'flex',
-        gap: '1rem',
-        alignItems: 'center',
-        margin: '2rem 0 1rem 0',
-        justifyContent: 'center',
-      }}
-    >
-
-      <button
-        onClick={toggleTrainMode}
-        style={{
-          padding: '0.5rem 1.2rem',
-          fontSize: '1rem',
-          backgroundColor: trainMode ? '#3b82f6' : '#9ca3af', // blue if on, gray if off
-          color: 'white',
-          border: 'none',
-          borderRadius: '999px', // pill shape
-          cursor: 'pointer',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
-          transition: 'all 0.3s ease-in-out',
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: '0.5rem',
-        }}
-      >
-        {trainMode ? '🧠 Training Active' : '🚫 Training Disabled'}
-      </button>
-      <SetPathPopup
-        isOpen={showPathPopup}
-        defaultPath={frozenPath !== null ? frozenPath : `models/ppo_model_${envName}_${timestamp}.zip`}
-        onConfirm={saveTrainingPath}
-        onClose={closePathPopup}
-      />
-      
-      <button
-        onClick={() => togglePause()}
-        style={{
-          padding: '0.5rem 1.2rem',
-          fontSize: '1rem',
-          backgroundColor: isPaused ? '#10b981' : '#ef4444',
-          color: 'white',
-          border: 'none',
-          borderRadius: '8px',
-          cursor: 'pointer',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
-        }}
-      >
-        {isPaused ? '▶ Continue' : '⏸ Pause'}
-      </button>
-
-      <label htmlFor="envSelect" style={{ fontWeight: 600 }}>Environment:</label>
-      <select
-        id="envSelect"
-        value={envName}
-        onChange={handleEnvChange}
-        style={{
-          padding: '6px 10px',
-          borderRadius: '6px',
-          border: '1px solid #cbd5e1',
-          backgroundColor: '#f9fafb',
-          fontSize: '1rem',
-        }}
-      >
-        {/* Classic Control Environments */}
-        <option value="CartPole-v0">CartPole-v0</option>
-        <option value="CartPole-v1">CartPole-v1</option>
-        <option value="MountainCar-v0">MountainCar-v0</option>
-        <option value="MountainCarContinuous-v0">MountainCarContinuous-v0</option>
-        <option value="Acrobot-v1">Acrobot-v1</option>
-        <option value="Pendulum-v1">Pendulum-v1</option>
-
-        {/* Box2D */}
-        <option value="LunarLander-v2">LunarLander-v2</option>
-        <option value="LunarLanderContinuous-v2">LunarLanderContinuous-v2</option>
-        <option value="BipedalWalker-v3">BipedalWalker-v3</option>
-        <option value="BipedalWalkerHardcore-v3">BipedalWalkerHardcore-v3</option>
-        <option value="CarRacing-v3">CarRacing-v3</option>
-
-        {/*Mujoco (Continuous Control)*/}
-        <option value="Humanoid-v4">Humanoid-v4</option>
-        <option value="HumanoidStandup-v4">HumanoidStandup-v4</option>
-        <option value="Ant-v4">Ant-v4</option>
-        <option value="HalfCheetah-v4">HalfCheetah-v4</option>
-        <option value="Hopper-v4">Hopper-v4</option>
-        <option value="Walker2d-v4">Walker2d-v4</option>
-        <option value="Swimmer-v4">Swimmer-v4</option>
-        <option value="Reacher-v4">Reacher-v4</option>
-        <option value="Pusher-v4">Pusher-v4</option>
-        <option value="InvertedPendulum-v4">InvertedPendulum-v4</option>
-        <option value="InvertedDoublePendulum-v4">InvertedDoublePendulum-v4</option>
-      </select>
-    </div>
-      
-    {trainMode && (
-      <ProgressBar isTraining={trainMode} />
-    // <div style={{ margin: '1.5rem auto', textAlign: 'center' }}>
-    //   <div style={{
-    //     height: '8px',
-    //     width: '60%',
-    //     backgroundColor: '#e5e7eb',
-    //     borderRadius: '999px',
-    //     overflow: 'hidden',
-    //     margin: '0 auto',
-    //     position: 'relative'
-    //   }}>
-    //     <div style={{
-    //       height: '100%',
-    //       width: '40%',
-    //       backgroundColor: '#3b82f6',
-    //       animation: 'progress-slide 1.5s infinite ease-in-out'
-    //     }} />
-    //   </div>
-    //   <p style={{ marginTop: '0.5rem', color: '#4b5563', fontWeight: 500 }}>
-    //     Training in progress...
-    //   </p>
-    // </div>
-  )}
-
-
-    {/* Playback Controls */}
-    <div style={{ marginTop: '2rem', textAlign: 'center' }}>
-      <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem', color: '#3b82f6' }}>🎮 Simulation Controls</h3>
       <div
         style={{
           display: 'flex',

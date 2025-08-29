@@ -3,11 +3,17 @@ import { useState, useEffect } from "react";
 import axios from "axios";
 
 
-export default function ProgressBar({ isTraining }) {
+export default function ProgressBar({ isTraining, runId }) {
   const [progress, setProgress] = useState(0);
+  const [processComplete, setProcessComplete] = useState(false);
 
   useEffect(() => {
     if (!isTraining) {
+      setProgress(0);
+      return;
+    }
+    if (!runId) {
+      console.warn("Run ID not set yet, cannot pause/resume");
       setProgress(0);
       return;
     }
@@ -15,7 +21,7 @@ export default function ProgressBar({ isTraining }) {
     const interval = setInterval(async () => {
       try {
         console.log("BEGIN GETTING from /progress");
-        const res = await axios.get("/progress");
+        const res = await axios.get(`/progress/${runId}`);
         //console.log("RESPONSE html:", res.data);
         console.log("RESPONSE data:", res.data.progress);
         const value = res.data.progress;
@@ -23,6 +29,7 @@ export default function ProgressBar({ isTraining }) {
 
         if (value >= 100) {
           clearInterval(interval);
+          setProcessComplete(true);
         }
       } catch (err) {
         console.error("Error fetching progress:", err);
@@ -54,7 +61,7 @@ export default function ProgressBar({ isTraining }) {
         }} />
       </div>
       <p style={{ marginTop: '0.5rem', color: '#4b5563', fontWeight: 500 }}>
-        Training in progress...
+        {processComplete ? "Training complete!" : "Training in progress..."}
       </p>
     </div>
   );
