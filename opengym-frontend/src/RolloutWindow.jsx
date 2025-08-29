@@ -75,10 +75,24 @@ function RolloutWindow() {
       }
   }, [showPathPopup, envName, frozenPath]);
 
+  const setTrainModeWithBackendReq = (mode) => {
+    if (!sessionId) {
+      console.warn("Session ID not set yet, cannot push appropriate value to backend");
+      return;
+    }
+    axios.post("/set_train_mode", { session_id: sessionId, train_mode: mode })
+      .then(() => {
+        setTrainMode(mode);
+      })
+      .catch((e) => {
+        console.error("Failed to set train mode:", e);
+      });
+  };
   const toggleTrainPauseTogether = () => {
     const newValue = !trainMode;
     const newPauseValue = trainMode;
-    setTrainMode(newValue);
+    setTrainModeWithBackendReq(newValue);
+    //setTrainMode(newValue);
     console.log("Toggling the pause value to:", newPauseValue);
     togglePause(newPauseValue); // pause if train mode is toggled
   };
@@ -93,6 +107,7 @@ function RolloutWindow() {
       // persist to backend (example endpoint)
       await axios.post("/set_training_dir", { "session_id": sessionId, "train_dir_path": path, "device": device });
       setTrainingPath(path);
+      console.log("Training path set to:", path);
       closePathPopup();
 
       toggleTrainPauseTogether();
@@ -202,7 +217,7 @@ function RolloutWindow() {
       if (socketRef.current) socketRef.current.close();
       if (retryRef.current) clearTimeout(retryRef.current);
     };
-  }, [envName,trainMode]);
+  }, [envName]);
 
   // This is the useEffect for the frame Data from the video
   useEffect(() => {

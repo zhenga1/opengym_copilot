@@ -17,6 +17,8 @@ from urllib.parse import parse_qs
 
 trained_model_paths = {} # session_id to most recent saved model paths
 training_model_devices = {} # session_id to device to use
+session_id_train_mode = {} # session_id to train mode
+session_id_rollout_state = {} # session_id to rollout state
 
 app = FastAPI()
 env_name = "" # unknown for now
@@ -114,6 +116,7 @@ class SetTrainingDirRequest(BaseModel):
 
 @app.post("/set_training_dir")
 def set_training_dir(req: SetTrainingDirRequest):
+    global training_model_devices, training_model_paths
     session_id = req.session_id
     where_to_save_trained_model = req.train_dir_path
 
@@ -153,6 +156,18 @@ class LoadRequest(BaseModel):
 @app.get("/get_model_path")
 def get_model_path():
     return MODELS_DIR
+
+class SetTrainModeRequest(BaseModel):
+    session_id: str
+    train_mode: bool
+
+@app.post('/set_train_mode')
+def set_train_mode(req: SetTrainModeRequest):
+    session_id = req.session_id
+    train_mode = req.train_mode
+    session_id_train_mode[session_id] = train_mode
+    return {"status": "train mode set", "session_id": session_id, "train_mode": train_mode}
+
 @app.post("/load_model")
 def load_model(req: LoadRequest):
     from os.path import join, exists
@@ -177,17 +192,49 @@ def load_model(req: LoadRequest):
     except Exception as e:
         return {"ok": False, "error": str(e)}
     
+def initialize_training_pipeline(session_id, train_steps):
+    # Vectorized env improves sample efficiency and speed
+    vec_env = DummyVecEnv([lambda: gym.make(env_name)])
+    
+    # Check for GPU availability and use it
+    device = "cpu"#"cuda" if torch.cuda.is_available() else "cpu"
+
+    if session_id in training_model_devices:
+        device = training_model_devices[session_id]
+
+    model = PPO(
+        "MlpPolicy",
+        vec_env,
+        verbose=1,
+        device=device,
+        tensorboard_log="./tensorboard_logs"  # optional: for better training monitoring
+    )
+    
+    # Train
+    callback = ProgressBarCallback(total_timesteps=train_steps)
+    global train_run_progress
+    train_run_progress= 0
+    start_training(model, session_id=session_id, train_steps=train_steps, reset_num_timesteps=False, callback=callback)
+    #model.learn(total_timesteps=train_steps, reset_num_timesteps=False, callback=callback)
+
+    # Save
+    #model.save("ppo_model")
+
+    # Optional: delete vec_env to free RAM/GPU
+    vec_env.close()
 @app.websocket("/ws/rollout")
 async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
-    global env_name
+    global env_name, trained_model_paths, training_model_devices, session_id_train_mode
     await websocket.accept()
 
 
     query = parse_qs(websocket.url.query)
     print("query: ", query)
     env_name = query.get("env", ["CartPole-v1"])[0]
-    train_mode_str = query.get("train", ["true"])[0]
+    train_mode_str = query.get("train", ["false"])[0] # default to "false" i.e. do not train
     train_mode = train_mode_str.lower() == "true"   # ✅ real boolean
+    
+
     train_steps = query.get("train_steps", [1000])[0]
     train_steps = int(train_steps)
 
@@ -200,6 +247,9 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
     rollout_pause_state[session_id] = False  # default: not paused
     await websocket.send_json({"type": "session", "session_id": session_id})
 
+    # set the globals
+    session_id_train_mode[session_id] = train_mode
+    session_id_rollout_state[session_id] = rollout_pause_state[session_id]
     # get a query parameter
     #query = websocket.headers.get("sec-websocket-protocol", "CartPole-v1")
     #env_name = query or "CartPole-v1"
@@ -215,36 +265,10 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
         env = gym.make(env_name, render_mode="rgb_array")
         model = None
         print("Model loaded: ", model)
-        if train_mode:
-            # Vectorized env improves sample efficiency and speed
-            vec_env = DummyVecEnv([lambda: gym.make(env_name)])
-            
-            # Check for GPU availability and use it
-            device = "cpu"#"cuda" if torch.cuda.is_available() else "cpu"
-
-            if session_id in training_model_devices:
-                device = training_model_devices[session_id]
-
-            model = PPO(
-                "MlpPolicy",
-                vec_env,
-                verbose=1,
-                device=device,
-                tensorboard_log="./tensorboard_logs"  # optional: for better training monitoring
-            )
-            
-            # Train
-            callback = ProgressBarCallback(total_timesteps=train_steps)
-            global train_run_progress
-            train_run_progress= 0
-            start_training(model, session_id=session_id, train_steps=train_steps, reset_num_timesteps=False, callback=callback)
-            #model.learn(total_timesteps=train_steps, reset_num_timesteps=False, callback=callback)
-
-            # Save
-            model.save("ppo_model")
-
-            # Optional: delete vec_env to free RAM/GPU
-            vec_env.close()
+        
+        ### put everything below in the while true
+        if session_id in session_id_train_mode and session_id_train_mode[session_id]:
+            model = initialize_training_pipeline(session_id, train_steps)
         obs, _ = env.reset()
         step = 0
         episodes_seen = 0
@@ -269,10 +293,12 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                 with torch.no_grad():
                     action, _ = model.predict(obs_tensor)
                     #print("example action output: ", action)
+
+                    #action = int(np.asarray(action).reshape(-1)[0]) 
                     if isinstance(env.action_space, gym.spaces.Discrete):
                         action = int(np.asarray(action).reshape(-1)[0])
                     else:
-                        action = action.cpu().numpy()[0]
+                        action = action.squeeze(0)
                     
             else:
                 if session_id not in current_model or current_model[session_id] is None: 
@@ -286,7 +312,12 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                             action = int(np.asarray(action).reshape(-1)[0])
                         else:
                             action = action.cpu().numpy()[0]
-            next_obs, reward, terminated, truncated, _ = env.step(action)
+            try:
+                next_obs, reward, terminated, truncated, _ = env.step(action)
+            except Exception as e:
+                import pdb
+                pdb.set_trace()
+                print("Error occurred while stepping the environment:", e)
             done = terminated or truncated
 
             # Prepare for next step
