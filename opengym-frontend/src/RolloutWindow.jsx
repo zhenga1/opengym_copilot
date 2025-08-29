@@ -46,6 +46,7 @@ function RolloutWindow() {
   //set whether model parent directory file path is copied
   const [filePathCopied, setFilePathCopied] = useState(false);
   const [hoverOnFilePathButton, setHoverOnFilePathButton] = useState(false);
+  const [hoverOnDeleteAllTemp, setHoverOnDeleteAllTempButton] = useState(false);
 
   const handleEnvChange = (e) => {
     setEnvName(e.target.value)
@@ -60,6 +61,19 @@ function RolloutWindow() {
 
   const openPathPopup = () => setShowPathPopup(true);
   const closePathPopup = () => setShowPathPopup(false);
+
+  const [frozenPath, setFrozenPath] = useState(null);
+
+  //gets the frozen Path, so the default Path doesn't change too drastically. 
+  useEffect(() => {
+      if (showPathPopup && frozenPath === null) {
+        setFrozenPath(`models/ppo_model_${envName}_${timestamp}.zip`);
+      }
+      if (!showPathPopup) {
+        // reset so a new one is generated next time
+        setFrozenPath(null);
+      }
+  }, [showPathPopup, envName, frozenPath]);
 
   const toggleTrainPauseTogether = () => {
     const newValue = !trainMode;
@@ -89,7 +103,9 @@ function RolloutWindow() {
       // optionally show a toast here
     }
   };
-
+  const deleteAllTempModels = () => {
+    
+  }
   const togglePause = async(ns) => {
     if (!sessionId) {
       console.warn("Session ID not set yet, cannot pause/resume");
@@ -419,6 +435,21 @@ function RolloutWindow() {
           ))}
         </select>
         <button
+          onClick={deleteAllTempModels}
+          onMouseEnter={() => setHoverOnDeleteAllTempButton(true)}
+          onMouseLeave={() => setHoverOnDeleteAllTempButton(false)}
+          style={{
+            border: "none",
+            background: "transparent",
+            cursor: "pointer",
+            fontSize: "1rem", // small text-sized
+            padding: "0.2rem",
+          }}
+          title={filePathCopied ? "Copied!" : "Copy folder link"}
+        >
+          {hoverOnDeleteAllTemp ? "🗑 Delete All" : "🗑"}
+        </button>
+        <button
           onClick={loadServerModel}
           disabled={loading}
           style={{ padding: '.4rem .75rem',
@@ -473,7 +504,7 @@ function RolloutWindow() {
       </button>
       <SetPathPopup
         isOpen={showPathPopup}
-        defaultPath={`models/ppo_model_${envName}_${timestamp}.zip`}
+        defaultPath={frozenPath !== null ? frozenPath : `models/ppo_model_${envName}_${timestamp}.zip`}
         onConfirm={saveTrainingPath}
         onClose={closePathPopup}
       />
