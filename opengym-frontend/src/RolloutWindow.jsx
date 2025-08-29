@@ -668,7 +668,7 @@ function RolloutWindow() {
         Episode <strong>{episodeInfo.episode}</strong>, Reward:{' '}
         <strong style={{ color: '#10b981' }}>{episodeInfo.reward}</strong>
       </p>
-      <div style={{ width: '100%', maxWidth: '600px', height: '300px' }}>
+      <div style={{ width: '100%', maxWidth: '600px', height: '300px', margin: '0 auto'}}>
         <Line
           data={{
             labels: rollouts.map((r) => r.episode).reverse(),
