@@ -272,7 +272,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                     if isinstance(env.action_space, gym.spaces.Discrete):
                         action = int(np.asarray(action).reshape(-1)[0])
                     else:
-                        action = action.cpu().numpy()[0]
+                        action = action.squeeze(0)
                     
             else:
                 if session_id not in current_model or current_model[session_id] is None: 
@@ -285,7 +285,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                         if isinstance(env.action_space, gym.spaces.Discrete):
                             action = int(np.asarray(action).reshape(-1)[0])
                         else:
-                            action = action.cpu().numpy()[0]
+                            action = action.squeeze(0)
             next_obs, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
 
