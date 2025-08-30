@@ -14,6 +14,8 @@ from stable_baselines3.common.callbacks import BaseCallback
 
 from urllib.parse import parse_qs
 
+from train_backend_reward_tuning.cartpole_dance_left_right import CartPoleDanceWrapper
+
 
 trained_model_paths = {} # run_id to most recent saved model paths
 training_model_devices = {} # run_id to device to use
@@ -253,9 +255,13 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
         model = None
         print("Model loaded: ", model)
         if train_mode:
-            # Vectorized env improves sample efficiency and speed
-            vec_env = DummyVecEnv([lambda: gym.make(env_name)])
-            
+            # Vectorized env (many copies simiultaneously) improves sample efficiency and speed
+            vec_env = None
+            if "CartPole" in env_name:
+                vec_env = DummyVecEnv([lambda: CartPoleDanceWrapper(gym.make(env_name))])
+            else:
+                vec_env = DummyVecEnv([lambda: gym.make(env_name)]) 
+
             # Check for GPU availability and use it
             device = "cpu"#"cuda" if torch.cuda.is_available() else "cpu"
 
