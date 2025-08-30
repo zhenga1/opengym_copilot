@@ -86,9 +86,9 @@ def list_models():
     return {"models": sorted(files)}
 
 
-# @app.get("/training_runs/{run_id}")
-# def get_run(run_id: str):
-#     return RUNS_TRAINING_STATUS.get(run_id, {"status": "unknown"})
+@app.get("/training_runs/{run_id}")
+def get_run(run_id: str):
+    return RUNS_TRAINING_STATUS.get(run_id, {"status": "unknown"})
 
 from pydantic import BaseModel
 class PauseRequest(BaseModel):

@@ -433,22 +433,6 @@ function RolloutWindow() {
         onConfirm={saveTrainingPath}
         onClose={closePathPopup}
       />
-      
-      <button
-        onClick={() => togglePause()}
-        style={{
-          padding: '0.5rem 1.2rem',
-          fontSize: '1rem',
-          backgroundColor: isPaused ? '#10b981' : '#ef4444',
-          color: 'white',
-          border: 'none',
-          borderRadius: '8px',
-          cursor: 'pointer',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
-        }}
-      >
-        {isPaused ? '▶ Continue' : '⏸ Pause'}
-      </button>
 
       <label htmlFor="envSelect" style={{ fontWeight: 600 }}>Environment:</label>
       <select
@@ -519,83 +503,57 @@ function RolloutWindow() {
   )}
 
 
-    {/* Playback Controls */}
-    <div style={{ marginTop: '2rem', textAlign: 'center' }}>
-      <h3 style={{ fontSize: '1.6rem', marginBottom: '1rem', color: '#3b82f6' }}>🎮 Simulation Controls 🎮</h3>
-      
-      <div style={{ display: 'grid', gap: '0.75rem', margin: '1rem 0' }}>
-      {/* Row: “Load Model” label + file picker */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', justifyContent: 'center' }}>
-        <label htmlFor='loadModel' style={{ fontWeight: 600 }}>Load Model:</label>
-        <input
-          id='loadModel'
-          type="file"
-          accept=".zip"
-          onChange={handleModelUpload}
-          style={{ maxWidth: 260 }}
-        />
-        <button
-          onClick={uploadAndLoad}
-          disabled={!file || loading}
-          style={{ padding: '.4rem .75rem' }}
-          title="Upload selected .zip and load into this rollout session"
-        >
-          {loading ? "Uploading..." : "Upload & Load"}
-        </button>
-      </div>
-
-      {/* Row: server model dropdown */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', justifyContent: 'center' }}>
-        <label htmlFor="serverModel" style={{ fontWeight: 600 }}>From Server:</label>
-        <button
-        onClick={getRootSavedModelsLink}
-        onMouseEnter={() => setHoverOnFilePathButton(true)}
-        onMouseLeave={() => setHoverOnFilePathButton(false)}
-        style={{
-          border: "none",
-          background: "transparent",
-          cursor: "pointer",
-          fontSize: "1rem", // small text-sized
-          padding: "0.2rem",
-        }}
-        title={filePathCopied ? "Copied!" : "Copy folder link"}
-      >
-        {hoverOnFilePathButton ? "🔗" : "📁"}
-      </button>
-      {/* Short notification */}
-      {filePathCopied && (
-        <div
-          style={{
-            position: "absolute",
-            top: "-1.5rem",
-            left: "50%",
-            transform: "translateX(-50%)",
-            background: "#333",
-            color: "#fff",
-            fontSize: "0.75rem",
-            padding: "2px 6px",
-            borderRadius: "4px",
-            whiteSpace: "nowrap",
-          }}
-        >
-          Copied!
+      {/* Playback Controls */}
+      <div style={{ marginTop: '2rem', textAlign: 'center' }}>
+        <h3 style={{ fontSize: '1.6rem', marginBottom: '1rem', color: '#3b82f6' }}>🎮 Simulation Controls 🎮</h3>
+        
+        <div style={{ display: 'grid', gap: '0.75rem', margin: '1rem 0' }}>
+        {/* Row: “Load Model” label + file picker */}
+        <div style={{display: 'flex', alignItems: 'center', gap: '0.75rem', justifyContent:'center'}}>
+          <label htmlFor='loadModel' style={{ fontWeight: 1000 }}>Rollout Status:</label>
+          <button
+            onClick={() => togglePause()}
+            style={{
+              padding: '0.5rem 1.2rem',
+              fontSize: '1rem',
+              backgroundColor: isPaused ? '#10b981' : '#ef4444',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+            }}
+          >
+            {isPaused ? '▶ Continue' : '⏸ Pause'}
+          </button>
+          
         </div>
-      )}
-        <select
-          id="serverModel"
-          value={selectedServerModel}
-          onChange={(e) => setSelectedServerModel(e.target.value)}
-          style={{ padding: '.35rem .5rem', minWidth: 260 }}
-        >
-          <option value="">(None — random rollout)</option>
-          {serverModels.map(m => (
-            <option key={m} value={m}>{m}</option>
-          ))}
-        </select>
-        <button
-          onClick={deleteAllTempModels}
-          onMouseEnter={() => setHoverOnDeleteAllTempButton(true)}
-          onMouseLeave={() => setHoverOnDeleteAllTempButton(false)}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', justifyContent: 'center' }}>
+          <label htmlFor='loadModel' style={{ fontWeight: 600 }}>Load Model:</label>
+          <input
+            id='loadModel'
+            type="file"
+            accept=".zip"
+            onChange={handleModelUpload}
+            style={{ maxWidth: 260 }}
+          />
+          <button
+            onClick={uploadAndLoad}
+            disabled={!file || loading}
+            style={{ padding: '.4rem .75rem' }}
+            title="Upload selected .zip and load into this rollout session"
+          >
+            {loading ? "Uploading..." : "Upload & Load"}
+          </button>
+        </div>
+
+        {/* Row: server model dropdown */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', justifyContent: 'center' }}>
+          <label htmlFor="serverModel" style={{ fontWeight: 600 }}>From Server:</label>
+          <button
+          onClick={getRootSavedModelsLink}
+          onMouseEnter={() => setHoverOnFilePathButton(true)}
+          onMouseLeave={() => setHoverOnFilePathButton(false)}
           style={{
             border: "none",
             background: "transparent",
@@ -605,31 +563,79 @@ function RolloutWindow() {
           }}
           title={filePathCopied ? "Copied!" : "Copy folder link"}
         >
-          {hoverOnDeleteAllTemp ? "🗑 Delete All" : "🗑"}
+          {hoverOnFilePathButton ? "🔗" : "📁"}
         </button>
-        <button
-          onClick={loadServerModel}
-          disabled={loading}
-          style={{ padding: '.4rem .75rem',
-            backgroundColor: !isUsingNone ? '#d1d5db' : '#10b981'
-          }}
+        {/* Short notification */}
+        {filePathCopied && (
+          <div
+            style={{
+              position: "absolute",
+              top: "-1.5rem",
+              left: "50%",
+              transform: "translateX(-50%)",
+              background: "#333",
+              color: "#fff",
+              fontSize: "0.75rem",
+              padding: "2px 6px",
+              borderRadius: "4px",
+              whiteSpace: "nowrap",
+            }}
+          >
+            Copied!
+          </div>
+        )}
+          <select
+            id="serverModel"
+            value={selectedServerModel}
+            onChange={(e) => setSelectedServerModel(e.target.value)}
+            style={{ padding: '.35rem .5rem', minWidth: 260 }}
+          >
+            <option value="">(None — random rollout)</option>
+            {serverModels.map(m => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+          <button
+            onClick={deleteAllTempModels}
+            onMouseEnter={() => setHoverOnDeleteAllTempButton(true)}
+            onMouseLeave={() => setHoverOnDeleteAllTempButton(false)}
+            style={{
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              fontSize: "1rem", // small text-sized
+              padding: "0.2rem",
+            }}
+            title={filePathCopied ? "Copied!" : "Copy folder link"}
+          >
+            {hoverOnDeleteAllTemp ? "🗑 Delete All" : "🗑"}
+          </button>
+          <button
+            onClick={loadServerModel}
+            disabled={loading}
+            style={{ padding: '.4rem .75rem',
+              backgroundColor: !isUsingNone ? '#d1d5db' : '#10b981'
+            }}
 
-          title="Load the selected server model (or None)"
-        >
-          {loading ? "Loading..." : "Use Selection"}
-        </button>
-        <button
-          onClick={useNone}
-          disabled={loading}
-          style={{ padding: '.4rem .75rem', 
-            backgroundColor: isUsingNone ? '#d1d5db' : '#10b981'
-          }}
-          title="Clear model for this session (random rollout)"
-        >
-          Use None
-        </button>
+            title="Load the selected server model (or None)"
+          >
+            {loading ? "Loading..." : "Use Selection"}
+          </button>
+          <button
+            onClick={useNone}
+            disabled={loading}
+            style={{ padding: '.4rem .75rem', 
+              backgroundColor: isUsingNone ? '#d1d5db' : '#10b981'
+            }}
+            title="Clear model for this session (random rollout)"
+          >
+            Use None
+          </button>
+        </div>
       </div>
-    </div>
+      <p style={{ fontSize: '1rem' }}>
+        Simulating Episode <strong style={{ color: '#0ea5e9' }}>{episodeNumForSimulation}</strong>
+      </p>
       <div
         style={{
           display: 'flex',
@@ -642,9 +648,6 @@ function RolloutWindow() {
         <button style={buttonStyle('#8b5cf6')} onClick={handlePause}>⏸ Pause</button>
         <button style={buttonStyle('#f97316')} onClick={handleRestart}>⏮ Restart</button>
       </div>
-      <p style={{ fontSize: '1rem' }}>
-        Simulating Episode <strong style={{ color: '#0ea5e9' }}>{episodeNumForSimulation}</strong>
-      </p>
     </div>
 
     {/* Playback Speed Slider */}
