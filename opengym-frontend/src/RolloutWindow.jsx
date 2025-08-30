@@ -358,7 +358,7 @@ function RolloutWindow() {
       margin: 'auto',
       background: 'linear-gradient(145deg, #f0f9ff, #e0e7ff)',
       borderRadius: '12px',
-      boxShadow: '0 8px 20px rgba(0,0,0,0.1)',
+      boxShadow: '0 8px 20px rgba(0,0,0,0.1)'
     }}
   >
     <h1 style={{ fontSize: '2.2rem', fontWeight: 700, textAlign: 'center', color: '#4f46e5' }}>

@@ -29,8 +29,16 @@ function App() {
   };
 
   return (
-    <div style={{ padding: '1rem', textAlign: 'center' }}>
-      <div style={{ marginBottom: '1rem' }}>
+    <div style={{ padding: '1rem', textAlign: 'center',
+      padding: '2rem',
+      fontFamily: 'Segoe UI, sans-serif',
+      maxWidth: '900px',
+      margin: 'auto',
+      borderRadius: '12px',
+      boxShadow: '0 8px 20px rgba(0,0,0,0.1)',
+    }}>
+      <div style={{ marginBottom: '1rem',
+      }}>
         <button onClick={prev} disabled={currentIndex === 0}>⬅️</button>
 
         <button
@@ -70,13 +78,16 @@ function App() {
           disabled={currentIndex >= windows.length - 1}
         >➡️</button>
       </div>
-
       {windows.length > 0 ? (
         <div
             style={{
               width: '100%',
               display: 'flex',
               justifyContent: 'center',
+              paddingTop: '1rem',
+              paddingBottom: 16,
+              overflowY: 'auto',
+              height:'90vh'
             }}
           >
             {windows.map((win, i) => (
@@ -84,6 +95,8 @@ function App() {
                 key={i}
                 style={{
                   display: i === currentIndex ? 'block' : 'none',
+                  padding: '1rem',
+                  borderBottom: '1px solid #ccc'
                 }}
               >
                 {win}
@@ -94,6 +107,7 @@ function App() {
       ) : (
         <p>No rollouts yet. Click "Add Rollout" to begin.</p>
       )}
+
     </div>
   );
 }
