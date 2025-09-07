@@ -16,6 +16,7 @@ function RolloutWindow() {
   const [currentFrame, setCurrentFrame] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [stepInterval, setStepInterval] = useState(5);
+  const [hoveronReloadTempModels, setHoveronReloadTempModels] = useState(false); // [false,]
   // defined
   const [renewFrameInterval, setRenewFrameInterval] = useState(5);
   const [replayInterval, setReplayInterval] = useState(50); // in ms
@@ -82,6 +83,8 @@ function RolloutWindow() {
   const [showPathPopup, setShowPathPopup] = useState(false);
   const [trainingPath, setTrainingPath] = useState("models/basic_model.zip");
 
+  // basically triggers the /models POST request again so the models can be read again
+  const [reloadAllTempModelsSwitcher, setReloadAllTempModelsSwitcher] = useState(false);
   const openPathPopup = () => setShowPathPopup(true);
   const closePathPopup = () => setShowPathPopup(false);
 
@@ -106,6 +109,15 @@ function RolloutWindow() {
     togglePause(newPauseValue); // pause if train mode is toggled
   };
 
+  const reloadTempModels = () => {
+    if (!runId) {
+      console.warn("Run ID not set yet, cannot pause/resume");
+      return;
+    }
+    // should force useEffect to run again
+    setReloadAllTempModelsSwitcher(prev => !prev);
+  };
+
   const updateRolloutSpeed = async (newSpeed) => {
     setRolloutSpeed(newSpeed);
 
@@ -114,7 +126,7 @@ function RolloutWindow() {
     } catch (e) {
       console.error("Failed to set rollout speed:", e);
     }
-  }
+  };
   const saveTrainingPath = async (path, device) => {
     if (!runId) {
       console.warn("Run ID not set yet, cannot pause/resume");
@@ -137,6 +149,7 @@ function RolloutWindow() {
     }
   };
   const deleteAllTempModels = () => {
+    // delete all the models in the temporary directory
     
   };
   const changeNumberOfSteps = async (steps) => {
@@ -185,7 +198,7 @@ function RolloutWindow() {
     return () => {
       if (retryTimeout) clearTimeout(retryTimeout);
     }
-  }, []);
+  }, [reloadAllTempModelsSwitcher]);
   useEffect(() => {
     async function fetchRunId() {
       const returnData = await axios.get("/unique_run_id");
@@ -687,9 +700,24 @@ function RolloutWindow() {
               fontSize: "1rem", // small text-sized
               padding: "0.2rem",
             }}
-            title={filePathCopied ? "Copied!" : "Copy folder link"}
+            title={"Delete ALl models in the temporary directory"}
           >
             {hoverOnDeleteAllTemp ? "🗑 Delete All" : "🗑"}
+          </button>
+          <button
+            onClick={reloadTempModels}
+            onMouseEnter={() => setHoveronReloadTempModels(true)}
+            onMouseLeave={() => setHoveronReloadTempModels(false)}
+            style={{
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              fontSize: "1rem", // small text-sized
+              padding: "0.2rem",
+            }}
+            title="Reload all models in the temporary directory"
+          >
+            {hoveronReloadTempModels ? "↻ Reload" : "↻"}
           </button>
           <button
             onClick={loadServerModel}
