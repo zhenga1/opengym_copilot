@@ -10,9 +10,12 @@
 
 - 🔁 **Real-time environment rollout streaming** over WebSocket
 - 🖼 **Episode frame playback** with looped simulation in-browser
-- 🎛 **Adjustable frame capture interval** (e.g., every N episodes)
 - 📦 **Environment selector** (e.g., `CartPole-v1`, `MountainCar-v0`)
 - 🧠 **Built for easy Copilot & training integration (coming soon)**
+- 🟰 **Parallelizable environments!!!**
+
+COMING SOON:
+- 🎛 **Adjustable frame capture interval** (e.g., every N episodes)
 
 ---
 
