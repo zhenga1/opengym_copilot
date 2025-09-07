@@ -25,6 +25,7 @@ export default defineConfig({
         secure: false,
       },
     "/rollout_speed": 'http://localhost:8000',
+    "/save_rollouts_data": 'http://localhost:8000',
     }
   }
 }

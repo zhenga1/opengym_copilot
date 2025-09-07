@@ -27,8 +27,8 @@ app = FastAPI()
 env_name = "" # unknown for now
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-time_interval = 0.05
-rollout_fps = 20
+time_intervals = {}
+rollout_fps = {}
 
 progress_bar_log_file = open("progress_bar.log", "w")
 train_run_progresses = {}
@@ -92,20 +92,23 @@ def list_models():
     return {"models": sorted(files)}
 
 class RolloutSpeedRequest(BaseModel):
+    run_id: str
     fps: int
     delay: float
 @app.post("/rollout_speed")
 def change_rollout_speed(rollReq:RolloutSpeedRequest):
-    global time_interval, rollout_fps
-    rollout_fps = rollReq.fps
-    time_interval = rollReq.delay
-    print("Time interval is : ", time_interval)
-    return {"fps": rollout_fps, "delay": time_interval}
+    global time_intervals, rollout_fps
+    runId = rollReq.run_id
+    rollout_fps[runId] = rollReq.fps
+    time_intervals[runId] = rollReq.delay
+    print(f"Run id is {runId}. Time interval is : {rollReq.delay}")
+    return {"fps": rollout_fps[runId], "delay": time_intervals[runId]}
 
 
 @app.get("/training_runs/{run_id}")
 def get_run(run_id: str):
     return RUNS_TRAINING_STATUS.get(run_id, {"status": "unknown"})
+
 
 
 class PauseRequest(BaseModel):
@@ -161,7 +164,23 @@ def set_training_dir(req: SetTrainingDirRequest):
     # Here you would typically set the training directory for the session
     return {"status": "training directory set", "run_id": run_id, "path": where_to_save_trained_model}
 
+class SaveRolloutRequest(BaseModel):
+    run_id: str
+    rollout_filename: str
+    rollouts: list
 
+rollouts_dir = os.path.join(os.getcwd(), "rollouts")
+os.makedirs(rollouts_dir, exist_ok=True)
+@app.post("/save_rollouts_data")
+def save_rollouts_data(saveRolloutRequest: SaveRolloutRequest):
+    run_id = saveRolloutRequest.run_id
+    rollout_filename = saveRolloutRequest.rollout_filename
+    if rollout_filename == "" or rollout_filename is None or (len(rollout_filename)>=4 and rollout_filename[-4:] != ".json"):
+        rollout_filename = f"rollouts_{run_id}.json"
+    rollouts = saveRolloutRequest.rollouts
+    with open(os.path.join(rollouts_dir, rollout_filename), "w") as f:
+        json.dump(rollouts, f)
+    return {"status": "success", "run_id": run_id, "rollouts": rollouts}
 class SessionState:
     def __init__(self):
         self.resume_event = asyncio.Event()
@@ -379,6 +398,6 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                 step += 1
                 ep_reward += reward
 
-            await asyncio.sleep(time_interval)  # throttle to ~20 FPS
+            await asyncio.sleep(time_intervals[run_id] if (run_id in time_intervals) else 0.05)  # throttle to ~20 FPS
     except WebSocketDisconnect:
         print("Client disconnected. ")

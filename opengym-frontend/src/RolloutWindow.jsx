@@ -3,6 +3,7 @@ import reactLogo from './assets/react.svg'
 import viteLogo from '/vite.svg'
 import {Line} from 'react-chartjs-2'
 import SetPathPopup from './SetPathPopup'
+import SaveRolloutPopup from './RolloutPopup'
 import ProgressBar from './ProgressBar'
 import axios  from 'axios'
 import {Chart as ChartJS, LineElement, CategoryScale, LinearScale, PointElement} from 'chart.js'
@@ -29,9 +30,14 @@ function RolloutWindow() {
 
   // the FPS of rollout, default is 20FPS (delay = 1/20 = 0.05 seconds)
   const [rolloutSpeed, setRolloutSpeed] = useState(20);
+  const [showSavePopup, setShowSavePopup] = useState(false);
+  const setShowSavePopupToTrue = () => setShowSavePopup(true);
+  const closeShowSavePopup = () => setShowSavePopup(false);
 
   const isPausedRef = useRef(false);
   const [sessionId, setSessionId] = useState(null);
+  // whether or not the current rollout (all the rewards) is being saved
+  const [saving_rollouts, setSavingRollouts] = useState(false);
   const [runId, setRunId] = useState(null);
   const intervalRef = useRef(null);
 
@@ -67,6 +73,7 @@ function RolloutWindow() {
     setEnvName(e.target.value)
   }
   // This effectively flips the showPopup
+  // showPopup = true => showPopup = false, and vice versa
   const togglePopup = () => {
     setShowPopup((prev) => !prev);
   };
@@ -102,7 +109,7 @@ function RolloutWindow() {
     setRolloutSpeed(newSpeed);
 
     try {
-      await axios.post("/rollout_speed", { "fps":newSpeed,"delay": 1.0 / newSpeed });
+      await axios.post("/rollout_speed", { "run_id": runId, "fps":newSpeed,"delay": 1.0 / newSpeed });
     } catch (e) {
       console.error("Failed to set rollout speed:", e);
     }
@@ -336,6 +343,28 @@ function RolloutWindow() {
     }
   };
 
+  const handleSave = async (filename) => {
+    if (!rollouts || rollouts.length === 0){
+      alert("No rollouts to save.");
+      return;
+    }
+    if (!filename) {
+      alert("Please enter a filename! filename is empty.");
+      return;
+    }
+    setSavingRollouts(true);
+    try {
+      const res = await axios.post("/save_rollouts_data", { run_id: runId, rollout_filename: filename, rollouts: rollouts});
+      console.log("Saved rollout data with status:  ", res.status);
+    } catch (err) {
+      console.error("Failed to save: ", err);
+      alert("Failed to save rollout data: " + err);
+    } finally {
+      setSavingRollouts(false);
+      setShowSavePopup(false);
+    }
+  };
+
   const uploadAndLoad = async () => {
     if (!file) return;
     setLoading(true);
@@ -450,6 +479,12 @@ function RolloutWindow() {
         onConfirm={saveTrainingPath}
         onClose={closePathPopup}
       />
+      <SaveRolloutPopup
+        runId={runId}
+        isOpen={showSavePopup}
+        onConfirm={handleSave}
+        onClose={closeShowSavePopup}
+      />
 
       <label htmlFor="envSelect" style={{ fontWeight: 600 }}>Environment:</label>
       <select
@@ -543,7 +578,22 @@ function RolloutWindow() {
           >
             {isPaused ? '▶ Continue' : '⏸ Pause'}
           </button>
-          
+          <button
+            onClick={setShowSavePopupToTrue}
+            disabled={saving_rollouts}
+            style={{
+              backgroundColor: "#2563eb",
+              color: "white",
+              fontWeight: 600,
+              padding: "8px 16px",
+              border: "none",
+              borderRadius: "6px",
+              cursor: saving_rollouts ? "not-allowed" : "pointer",
+              boxShadow: "0 1px 2px rgba(0,0,0,0.1)",
+            }}
+          >
+            {saving_rollouts ? "Saving..." : "💾 Save Rollouts"}
+          </button>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', justifyContent: 'center' }}>
           <label htmlFor='loadModel' style={{ fontWeight: 600 }}>Load Model:</label>
