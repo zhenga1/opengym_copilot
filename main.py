@@ -175,7 +175,8 @@ os.makedirs(rollouts_dir, exist_ok=True)
 def save_rollouts_data(saveRolloutRequest: SaveRolloutRequest):
     run_id = saveRolloutRequest.run_id
     rollout_filename = saveRolloutRequest.rollout_filename
-    if rollout_filename == "" or rollout_filename is None or (len(rollout_filename)>=4 and rollout_filename[-4:] != ".json"):
+    if rollout_filename == "" or rollout_filename is None or (len(rollout_filename)>=4 and ".json" not in rollout_filename):
+        print("Rollout filename", rollout_filename)
         rollout_filename = f"rollouts_{run_id}.json"
     rollouts = saveRolloutRequest.rollouts
     with open(os.path.join(rollouts_dir, rollout_filename), "w") as f:
