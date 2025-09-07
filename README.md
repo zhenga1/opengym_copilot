@@ -13,8 +13,6 @@
 - 📦 **Environment selector** (e.g., `CartPole-v1`, `MountainCar-v0`)
 - 🧠 **Built for easy Copilot & training integration (coming soon)**
 - 🟰 **Parallelizable environments!!!**
-
-COMING SOON:
 - 🎛 **Adjustable frame capture interval** (e.g., every N episodes)
 
 ---
