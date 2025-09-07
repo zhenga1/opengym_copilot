@@ -1,6 +1,7 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import asyncio
 import gymnasium as gym
+from pydantic import BaseModel
 from pyparsing import Optional
 import torch
 from stable_baselines3 import PPO
@@ -26,6 +27,8 @@ app = FastAPI()
 env_name = "" # unknown for now
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+time_interval = 0.05
+rollout_fps = 20
 
 progress_bar_log_file = open("progress_bar.log", "w")
 train_run_progresses = {}
@@ -52,6 +55,7 @@ from threading import Thread
 from datetime import datetime
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 default_model_path = f"models/ppo_model_{env_name}_{timestamp}.zip"
+
 #@app.post("/start")
 def start_training(model: PPO = None, run_id: str = None, train_steps:int = 1000, reset_num_timesteps = False,callback: BaseCallback = None):
     RUNS_TRAINING_STATUS.setdefault(run_id, {"status": "running", "model_path": None, "error": None})
@@ -87,12 +91,23 @@ def list_models():
     files = [f for f in os.listdir(MODELS_DIR) if f.endswith('.zip')]
     return {"models": sorted(files)}
 
+class RolloutSpeedRequest(BaseModel):
+    fps: int
+    delay: float
+@app.post("/rollout_speed")
+def change_rollout_speed(rollReq:RolloutSpeedRequest):
+    global time_interval, rollout_fps
+    rollout_fps = rollReq.fps
+    time_interval = rollReq.delay
+    print("Time interval is : ", time_interval)
+    return {"fps": rollout_fps, "delay": time_interval}
+
 
 @app.get("/training_runs/{run_id}")
 def get_run(run_id: str):
     return RUNS_TRAINING_STATUS.get(run_id, {"status": "unknown"})
 
-from pydantic import BaseModel
+
 class PauseRequest(BaseModel):
     paused: bool
 @app.get("/progress/{run_id}")
@@ -199,21 +214,21 @@ def load_model(req: LoadRequest):
         return {"ok": False, "error": str(e)}
     
 
-@app.websocket("/ws/training")
-async def training_procedure(websocket: WebSocket):
-    await websocket.accept()
-    while True:
-        message = await websocket.receive_text()
-        if message == "pause":
-            # Pause the training
-            await websocket.send_text("Training paused")
-        elif message == "resume":
-            # Resume the training
-            await websocket.send_text("Training resumed")
-        elif message == "stop":
-            # Stop the training
-            await websocket.send_text("Training stopped")
-            break
+# @app.websocket("/ws/training")
+# async def training_procedure(websocket: WebSocket):
+#     await websocket.accept()
+#     while True:
+#         message = await websocket.receive_text()
+#         if message == "pause":
+#             # Pause the training
+#             await websocket.send_text("Training paused")
+#         elif message == "resume":
+#             # Resume the training
+#             await websocket.send_text("Training resumed")
+#         elif message == "stop":
+#             # Stop the training
+#             await websocket.send_text("Training stopped")
+#             break
 
 @app.websocket("/ws/rollout")
 async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
@@ -257,10 +272,10 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
         if train_mode:
             # Vectorized env (many copies simiultaneously) improves sample efficiency and speed
             vec_env = None
-            if "CartPole" in env_name:
-                vec_env = DummyVecEnv([lambda: CartPoleDanceWrapper(gym.make(env_name))])
-            else:
-                vec_env = DummyVecEnv([lambda: gym.make(env_name)]) 
+            # if "CartPole" in env_name:
+            #     vec_env = DummyVecEnv([lambda: gym.make(env_name)])
+            # else:
+            vec_env = DummyVecEnv([lambda: gym.make(env_name)]) 
 
             # Check for GPU availability and use it
             device = "cpu"#"cuda" if torch.cuda.is_available() else "cpu"
@@ -308,7 +323,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                 # supposed to keep looping until unpaused
                 await asyncio.sleep(0.1)
             if train_mode:
-                obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).to("cpu")
+                obs_tensor = torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0).to("cpu")
                 with torch.no_grad():
                     action, _ = model.predict(obs_tensor)
                     #print("example action output: ", action)
@@ -321,7 +336,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                 if run_id not in current_model or current_model[run_id] is None:
                     action = env.action_space.sample()
                 else:
-                    obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).to("cpu")
+                    obs_tensor = torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0).to("cpu")
                     #print("--- Using custom model right now ---")
                     with torch.no_grad():
                         action, _ = current_model[run_id].predict(obs_tensor)
@@ -351,6 +366,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
 
                 # Send JSON over WebSocket
                 await websocket.send_text(json.dumps(data))
+                #print("Sent data: ", data)
                 obs, _ = env.reset()
                 step = 0
                 ep_reward = 0
@@ -363,6 +379,6 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                 step += 1
                 ep_reward += reward
 
-            await asyncio.sleep(0.05)  # throttle to ~20 FPS
+            await asyncio.sleep(time_interval)  # throttle to ~20 FPS
     except WebSocketDisconnect:
         print("Client disconnected. ")

@@ -26,6 +26,10 @@ function RolloutWindow() {
 
   const [envName, setEnvName] = useState("CartPole-v1");
   const [isPaused, setIsPaused] = useState(false);
+
+  // the FPS of rollout, default is 20FPS (delay = 1/20 = 0.05 seconds)
+  const [rolloutSpeed, setRolloutSpeed] = useState(20);
+
   const isPausedRef = useRef(false);
   const [sessionId, setSessionId] = useState(null);
   const [runId, setRunId] = useState(null);
@@ -93,6 +97,16 @@ function RolloutWindow() {
     console.log("Toggling the pause value to:", newPauseValue);
     togglePause(newPauseValue); // pause if train mode is toggled
   };
+
+  const updateRolloutSpeed = async (newSpeed) => {
+    setRolloutSpeed(newSpeed);
+
+    try {
+      await axios.post("/rollout_speed", { "fps":newSpeed,"delay": 1.0 / newSpeed });
+    } catch (e) {
+      console.error("Failed to set rollout speed:", e);
+    }
+  }
   const saveTrainingPath = async (path, device) => {
     if (!runId) {
       console.warn("Run ID not set yet, cannot pause/resume");
@@ -196,6 +210,9 @@ function RolloutWindow() {
             setFrames(data.ep_frames);        // store all frames
             setCurrentFrame(0);            // start at first frame
           }
+          console.log("Episode: ", data.episode, "   Reward: ", data.reward);
+          console.log("Frames received length: ", data.ep_frames.length);
+          console.log("Data sim frame episode number: ", data.sim_frame_episode_number);
           if(data.sim_frame_episode_number) {
             setEpisodeNumForSimulation(data.sim_frame_episode_number);
           }
@@ -311,7 +328,7 @@ function RolloutWindow() {
     setLoading(true);
     try {
       await axios.post("/load_model", {
-        runId: runId,
+        run_id: runId,
         model_name: selectedServerModel,
       });
     } finally {
@@ -328,7 +345,7 @@ function RolloutWindow() {
       const up = await axios.post("/upload_model", form);
       const modelName = up.data?.model_name; // backend should return stored filename
       if (modelName) {
-        await axios.post("/load_model", { runId: runId, model_name: modelName });
+        await axios.post("/load_model", { run_id: runId, model_name: modelName });
       }
     } finally {
       setLoading(false);
@@ -704,6 +721,35 @@ function RolloutWindow() {
         Episode <strong>{episodeInfo.episode}</strong>, Reward:{' '}
         <strong style={{ color: '#10b981' }}>{episodeInfo.reward}</strong>
       </p>
+      <div style={{ marginTop: "2rem", textAlign: "center" }}>
+      <label htmlFor="rolloutSpeed" style={{ fontWeight: 600 }}>
+        ⚡ Rollout Speed (FPS):
+      </label>
+      <br />
+      <input
+        id="rolloutSpeed"
+        type="range"
+        min="1"
+        max="500"
+        step="10"
+        value={rolloutSpeed}
+        onChange={(e) => updateRolloutSpeed(Number(e.target.value))}
+        style={{ width: "200px", margin: "0.5rem" }}
+      />
+      <input
+        type="number"
+        min="1"
+        step="10"
+        value={rolloutSpeed}
+        onChange={(e) => updateRolloutSpeed(Number(e.target.value))}
+        style={{
+          width: "70px",
+          padding: "4px",
+          border: "1px solid #d1d5db",
+          borderRadius: "4px",
+        }}
+      />
+    </div>
       <div style={{ width: '100%', maxWidth: '600px', height: '300px', margin: '0 auto'}}>
         <Line
           data={{

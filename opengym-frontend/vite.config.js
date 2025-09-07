@@ -24,6 +24,7 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
+    "/rollout_speed": 'http://localhost:8000',
     }
   }
 }
