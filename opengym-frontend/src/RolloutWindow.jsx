@@ -15,6 +15,7 @@ function RolloutWindow() {
   const [frames, setFrames] = useState([]);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [stepInterval, setStepInterval] = useState(5);
   // defined
   const [renewFrameInterval, setRenewFrameInterval] = useState(5);
   const [replayInterval, setReplayInterval] = useState(50); // in ms
@@ -137,7 +138,20 @@ function RolloutWindow() {
   };
   const deleteAllTempModels = () => {
     
-  }
+  };
+  const changeNumberOfSteps = async (steps) => {
+    setStepInterval(steps);
+    if (!runId) {
+      console.warn("Run ID not set yet, cannot pause/resume");
+      return;
+    }
+    try {
+      await axios.post("/change_number_of_steps", { "run_id": runId, "number_of_steps": steps });
+    } catch (e) {
+      console.error("Failed to change number of steps:", e);
+    }
+  };
+
   const togglePause = async(ns) => {
     if (!sessionId) {
       console.warn("Session ID not set yet, cannot pause/resume");
@@ -700,6 +714,28 @@ function RolloutWindow() {
           </button>
         </div>
       </div>
+      
+      {/* Playback Controls */}
+      <p style={{ fontSize: '1rem'}}>
+        Simulating per every {" "}
+        <select 
+          value={stepInterval}
+          onChange={(e) => changeNumberOfSteps(e.target.value)}
+          style={{
+            padding: "4px",
+            borderRadius: "4px",
+            border: "1px solid #d1d5db",
+            marginLeft: "0.25rem",
+          }}>
+            <option value={1}>1</option>
+            <option value={2}>2</option>
+            <option value={5}>5</option>
+            <option value={8}>8</option>
+            <option value={12}>12</option>
+            <option value={18}>18</option>
+        </select> {" "}
+        steps
+      </p>
       <p style={{ fontSize: '1rem' }}>
         Simulating Episode <strong style={{ color: '#0ea5e9' }}>{episodeNumForSimulation}</strong>
       </p>

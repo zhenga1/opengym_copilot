@@ -176,7 +176,7 @@ def save_rollouts_data(saveRolloutRequest: SaveRolloutRequest):
     run_id = saveRolloutRequest.run_id
     rollout_filename = saveRolloutRequest.rollout_filename
     if rollout_filename == "" or rollout_filename is None or (len(rollout_filename)>=4 and ".json" not in rollout_filename):
-        print("Rollout filename", rollout_filename)
+        print(f"Rollout filename: {rollout_filename} is invalid, please check. ")
         rollout_filename = f"rollouts_{run_id}.json"
     rollouts = saveRolloutRequest.rollouts
     with open(os.path.join(rollouts_dir, rollout_filename), "w") as f:
@@ -209,6 +209,19 @@ class LoadRequest(BaseModel):
 @app.get("/get_model_path")
 def get_model_path():
     return MODELS_DIR
+
+number_of_steps_dictionary = {}
+class ChangeNumberOfStepsRequest(BaseModel):
+    run_id: str
+    number_of_steps: int
+@app.post("/change_number_of_steps")
+def change_number_of_steps(req: ChangeNumberOfStepsRequest):
+    global number_of_steps_dictionary
+    run_id = req.run_id
+    number_of_steps = req.number_of_steps
+    number_of_steps_dictionary[run_id] = number_of_steps
+    return {"status": "success", "number_of_steps": number_of_steps}
+
 @app.post("/load_model")
 def load_model(req: LoadRequest):
     from os.path import join, exists
@@ -328,7 +341,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
         episodes_seen = 0
 
         ep_reward = 0
-        send_frame_interval = 5
+        send_frame_interval = 5 if run_id not in number_of_steps_dictionary else number_of_steps_dictionary[run_id]
         ep_frames = []
 
         # Script once outside the loop (TorchScript is optional but gives speedup)
@@ -366,7 +379,9 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                             action = action.squeeze(0)
             next_obs, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
-
+            
+            send_frame_interval = 5 if run_id not in number_of_steps_dictionary else number_of_steps_dictionary[run_id]
+            
             # Prepare for next step
             if done:
                 frames = ep_frames if episodes_seen % send_frame_interval == 0 else []
