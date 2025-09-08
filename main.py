@@ -16,6 +16,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from urllib.parse import parse_qs
 
 from train_backend_reward_tuning.cartpole_dance_left_right import CartPoleDanceWrapper
+from training_progress_callback import TrainingProgressCallback
 
 
 trained_model_paths = {} # run_id to most recent saved model paths
@@ -49,21 +50,60 @@ class ProgressBarCallback(BaseCallback):
         
         train_run_progresses[self.runId] = pct
         return True
+
+# Example helpers (safe from a background thread):
+def make_tick_sender(ws_manager):
+    """Return a function that schedules a tick to be broadcast to all clients."""
+    def _send_tick(payload: dict):
+        # e.g., ws_manager.broadcast_json(payload)  (thread-safe or queue-based)
+        ws_manager.enqueue_json(payload)
+    return _send_tick
+
+def make_frame_sender(ws_manager, encoder):
+    """Return a function that schedules an encoded frame send."""
+    def _send_frame(frame_np):
+        # encode to JPEG/PNG bytes, then enqueue
+        ws_manager.enqueue_bytes(encoder(frame_np))
+    return _send_frame
     
-from fastapi import WebSocket
+from fastapi import WebSocket, APIRouter, WebSocketDisconnect
 from threading import Thread
 from datetime import datetime
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 default_model_path = f"models/ppo_model_{env_name}_{timestamp}.zip"
 
+def encode_jpeg(frame_np, quality=80):
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.fromarray(frame_np).save(buf, format="jpeg", quality=quality)
+    return buf.getvalue()
+
+
+from stable_baselines3.common.callbacks import CallbackList
 #@app.post("/start")
-def start_training(model: PPO = None, run_id: str = None, train_steps:int = 1000, reset_num_timesteps = False,callback: BaseCallback = None):
+def start_training(model: PPO = None, run_id: str = None, train_steps:int = 1000, reset_num_timesteps = False,callback: BaseCallback = None,
+                   ws_manager=None, frame_fn=None, every_n_steps:int = 20):
     RUNS_TRAINING_STATUS.setdefault(run_id, {"status": "running", "model_path": None, "error": None})
+
+    # Build a progress callback
+    progress_data_cb = TrainingProgressCallback(
+        run_id=run_id,
+        status_dict=RUNS_TRAINING_STATUS,
+        total_steps=train_steps,
+        every_n_steps=every_n_steps,
+        frame_fn=frame_fn,                                  # None if you don't want frames
+        send_tick=make_tick_sender(ws_manager) if ws_manager else None,
+        send_frame=make_frame_sender(ws_manager, encoder=encode_jpeg) if (ws_manager and frame_fn) else None,
+    )
+
+    callbacks_list = CallbackList([progress_data_cb, callback])
+
     def train():
         global train_run_progress, RUNS_TRAINING_STATUS
         train_run_progress = 0
         try:
-            model.learn(total_timesteps=train_steps, reset_num_timesteps=False, callback=callback)
+            model.learn(total_timesteps=train_steps, reset_num_timesteps=False, callback=callbacks_list)
             train_model_actual_path = ""
             if run_id not in trained_model_paths:
                 train_model_actual_path = default_model_path
@@ -268,6 +308,18 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
     global env_name
     await websocket.accept()
 
+    
+    from ws_manager import WSManager 
+    router = APIRouter()
+    ws_manager = WSManager()
+    
+    client = await ws_manager.register(websocket)
+
+    # Start the pump in the background (runs until cancelled/disconnect)
+    pump_task = asyncio.create_task(ws_manager.pump(client))
+
+
+
 
     query = parse_qs(websocket.url.query)
     print("query: ", query)
@@ -328,7 +380,9 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
             callback = ProgressBarCallback(total_timesteps=train_steps, runId=run_id)
             global train_run_progress
             train_run_progress= 0
-            start_training(model, run_id=run_id, train_steps=train_steps, reset_num_timesteps=False, callback=callback)
+
+            start_training(model, run_id=run_id, train_steps=train_steps, reset_num_timesteps=False, callback=callback, 
+                           ws_manager=ws_manager, frame_fn=render_env, every_n_steps=5)
             #model.learn(total_timesteps=train_steps, reset_num_timesteps=False, callback=callback)
 
             # Save
@@ -381,7 +435,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
             done = terminated or truncated
             
             send_frame_interval = 5 if run_id not in number_of_steps_dictionary else number_of_steps_dictionary[run_id]
-            
+
             # Prepare for next step
             if done:
                 frames = ep_frames if episodes_seen % send_frame_interval == 0 else []
