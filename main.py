@@ -54,16 +54,16 @@ class ProgressBarCallback(BaseCallback):
 # Example helpers (safe from a background thread):
 def make_tick_sender(ws_manager):
     """Return a function that schedules a tick to be broadcast to all clients."""
-    def _send_tick(payload: dict):
+    def _send_tick(payload: dict, run_id: str, topic:str="training"):
         # e.g., ws_manager.broadcast_json(payload)  (thread-safe or queue-based)
-        ws_manager.enqueue_json(payload)
+        ws_manager.enqueue_json(topic, payload, run_id=run_id)
     return _send_tick
 
 def make_frame_sender(ws_manager, encoder):
     """Return a function that schedules an encoded frame send."""
-    def _send_frame(frame_np):
+    def _send_frame(frame_np, run_id: str, topic:str="training"):
         # encode to JPEG/PNG bytes, then enqueue
-        ws_manager.enqueue_bytes(encoder(frame_np))
+        ws_manager.enqueue_bytes(topic, encoder(frame_np), run_id=run_id)
     return _send_frame
     
 from fastapi import WebSocket, APIRouter, WebSocketDisconnect
@@ -312,16 +312,10 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
     from ws_manager import WSManager 
     router = APIRouter()
     ws_manager = WSManager()
-    
-    client = await ws_manager.register(websocket)
 
-    # Start the pump in the background (runs until cancelled/disconnect)
-    pump_task = asyncio.create_task(ws_manager.pump(client))
-
-
-
-
+    # register some basic variables in relation to ws_manager and the websocket
     query = parse_qs(websocket.url.query)
+    topic = "training" # only training for now
     print("query: ", query)
     run_id = query.get("runid", [None])[0]
     env_name = query.get("env", ["CartPole-v1"])[0]
@@ -329,6 +323,11 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
     train_mode = train_mode_str.lower() == "true"   # ✅ real boolean
     train_steps = query.get("train_steps", [1000])[0]
     train_steps = int(train_steps)
+
+    
+    client = await ws_manager.register(websocket, topic=topic, run_id=run_id)
+    # Start the pump in the background (runs until cancelled/disconnect)
+    pump_task = asyncio.create_task(ws_manager.pump(client))
 
     print("env_name: ", env_name)
     print("train_steps: ", train_steps)
@@ -408,6 +407,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
             action = None
             while rollout_pause_state[session_id]:
                 # supposed to keep looping until unpaused
+                print("Rollout paused for 0.1 seconds")
                 await asyncio.sleep(0.1)
             if train_mode:
                 obs_tensor = torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0).to("cpu")
@@ -452,6 +452,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                     "reward": float(ep_reward),
                     #"done": done
                 }
+                print("Rollout data sent with reward: ", float(ep_reward));
 
                 # Send JSON over WebSocket
                 await websocket.send_text(json.dumps(data))

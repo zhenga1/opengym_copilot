@@ -87,7 +87,7 @@ class TrainingProgressCallback(BaseCallback):
                         "reward_mean": reward_mean,
                         "fps": fps,
                         "ts": time.time(),
-                    })
+                    }, self.run_id)
                 except Exception:
                     pass
             
@@ -96,7 +96,8 @@ class TrainingProgressCallback(BaseCallback):
                 try:
                     frame = self.frame_fn()
                     if frame is not None:
-                        self.send_frame(frame) # Can encode this inside of the sender
+                        print("Sending frame from training_progress_callback")
+                        self.send_frame(frame, self.run_id) # Can encode this inside of the sender
                 except Exception:
                     pass
         

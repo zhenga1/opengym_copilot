@@ -200,12 +200,38 @@ function RolloutWindow() {
     }
   }, [reloadAllTempModelsSwitcher]);
   useEffect(() => {
+    let cancelled = false;
+    let retryTimer = null;
+    let attempt = 0;
+
     async function fetchRunId() {
-      const returnData = await axios.get("/unique_run_id");
-      setRunId(returnData.data.run_id);
+      try {
+        const returnData = await axios.get("/unique_run_id");
+        if (!cancelled) {
+          setRunId(returnData.data.run_id);
+          attempt = 0; // reset the backoff attempt after success
+        }
+      } catch (error) {
+        if (!cancelled) {
+          // if intential cancel, don't retry
+          if (axios.isCancel?.(error) || error?.name === "CanceledError") return;
+          attempt ++;
+          const delay = Math.min(30000, 1000 * 2 ** attempt); // exponential backoff up to 30s
+          retryTimer  = setTimeout(fetchRunId, delay);
+          console.warn(`run_id fetch failed (attempt ${attempt}), retrying in ${delay}ms`);
+
+        }
+        console.error("Error fetching unique run ID:", error);
+      }
+      
     }
     fetchRunId();
     console.log("Run id current: ", runId);
+    return () => {
+      // run when cancelled
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    }
   }, []);
   /* Here we are adding envName to the dependency array of useEffect, so useEffect will rerun when envName changes*/
   useEffect(() => {
@@ -228,6 +254,7 @@ function RolloutWindow() {
         };
 
         ws.onmessage = (event) => {
+          console.log("Is Active is ", isActive, "event is currently ", event);
           if (!isActive) return;
           /* DO NOT UPDATE THE STATE IF THE SIMULATION IS PAUSED*/
           if (isPausedRef.current) return;
