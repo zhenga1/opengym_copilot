@@ -10,7 +10,10 @@ import numpy as np
 import cv2
 import base64
 from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.vec_env import VecMonitor
 from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.monitor import Monitor
 #import constants
 
 from urllib.parse import parse_qs
@@ -216,7 +219,7 @@ def save_rollouts_data(saveRolloutRequest: SaveRolloutRequest):
     run_id = saveRolloutRequest.run_id
     rollout_filename = saveRolloutRequest.rollout_filename
     if rollout_filename == "" or rollout_filename is None or (len(rollout_filename)>=4 and ".json" not in rollout_filename):
-        print(f"Rollout filename: {rollout_filename} is invalid, please check. ")
+        #print(f"Rollout filename: {rollout_filename} is invalid, please check. ")
         rollout_filename = f"rollouts_{run_id}.json"
     rollouts = saveRolloutRequest.rollouts
     with open(os.path.join(rollouts_dir, rollout_filename), "w") as f:
@@ -285,23 +288,6 @@ def load_model(req: LoadRequest):
         return {"ok": True, "run_id": req.run_id, "model": req.model_name}
     except Exception as e:
         return {"ok": False, "error": str(e)}
-    
-
-# @app.websocket("/ws/training")
-# async def training_procedure(websocket: WebSocket):
-#     await websocket.accept()
-#     while True:
-#         message = await websocket.receive_text()
-#         if message == "pause":
-#             # Pause the training
-#             await websocket.send_text("Training paused")
-#         elif message == "resume":
-#             # Resume the training
-#             await websocket.send_text("Training resumed")
-#         elif message == "stop":
-#             # Stop the training
-#             await websocket.send_text("Training stopped")
-#             break
 
 @app.websocket("/ws/rollout")
 async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
@@ -327,7 +313,8 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
     
     client = await ws_manager.register(websocket, topic=topic, run_id=run_id)
     # Start the pump in the background (runs until cancelled/disconnect)
-    pump_task = asyncio.create_task(ws_manager.pump(client))
+    # app.state.client = client
+    # app.state.pump_task = asyncio.create_task(ws_manager.pump(client), name="pump")
 
     print("env_name: ", env_name)
     print("train_steps: ", train_steps)
@@ -351,15 +338,16 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
     try:
         
         env = gym.make(env_name, render_mode="rgb_array")
+        #env = Monitor(env)
         model = None
         print("Model loaded: ", model)
         if train_mode:
             # Vectorized env (many copies simiultaneously) improves sample efficiency and speed
             vec_env = None
-            # if "CartPole" in env_name:
-            #     vec_env = DummyVecEnv([lambda: gym.make(env_name)])
-            # else:
-            vec_env = DummyVecEnv([lambda: gym.make(env_name)]) 
+            #vec_env = DummyVecEnv([lambda: gym.make(env_name)]) 
+            vec_env = make_vec_env("CartPole-v1", n_envs=8, env_kwargs={"render_mode": "rgb_array"})
+            vec_env = VecMonitor(vec_env)
+
 
             # Check for GPU availability and use it
             device = "cpu"#"cuda" if torch.cuda.is_available() else "cpu"
@@ -452,7 +440,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                     "reward": float(ep_reward),
                     #"done": done
                 }
-                print("Rollout data sent with reward: ", float(ep_reward));
+                #print("Rollout data sent with reward: ", float(ep_reward));
 
                 # Send JSON over WebSocket
                 await websocket.send_text(json.dumps(data))

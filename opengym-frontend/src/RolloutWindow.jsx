@@ -12,6 +12,7 @@ ChartJS.register(LineElement, CategoryScale, LinearScale, PointElement);
 
 function RolloutWindow() {
   const [rollouts, setRollouts] = useState([]);
+  const [trainingRollouts, setTrainingRollouts] = useState([]);
   const [frames, setFrames] = useState([]);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -105,7 +106,7 @@ function RolloutWindow() {
     const newValue = !trainMode;
     const newPauseValue = trainMode;
     setTrainMode(newValue);
-    console.log("Toggling the pause value to:", newPauseValue);
+    // console.log("Toggling the pause value to:", newPauseValue); // DEBUG:FRONTEND
     togglePause(newPauseValue); // pause if train mode is toggled
   };
 
@@ -171,7 +172,7 @@ function RolloutWindow() {
       return;
     }
     const newState = ns !== undefined ? ns : !isPaused;
-    console.log("Sending pause state:", newState);
+    // console.log("Sending pause state:", newState); // DEBUG:FRONTEND
     await axios.post("/pause_rollout", { session_id: sessionId, paused: newState });
     setIsPaused((prev) => {
       isPausedRef.current = !prev;
@@ -181,12 +182,12 @@ function RolloutWindow() {
 
   useEffect(() => {
     let retryTimeout;
-    console.log("Fetching models from server...");
+    // console.log("Fetching models from server..."); // DEBUG:FRONTEND
     const fetchModels = async () => {
       try {
         const res = await axios.get("/models");
         // Get the models that currently exist
-        console.log("Available models: ", res);
+        // console.log("Available models: ", res); // DEBUG:FRONTEND
         setServerModels(res.data.models || []);
       } catch (e) {
         console.error("List the models process has failed: Will retry in 5 seconds");
@@ -226,7 +227,7 @@ function RolloutWindow() {
       
     }
     fetchRunId();
-    console.log("Run id current: ", runId);
+    // console.log("Run id current: ", runId); // DEBUG:FRONTEND
     return () => {
       // run when cancelled
       cancelled = true;
@@ -244,49 +245,57 @@ function RolloutWindow() {
     else {
       const connect = () => {
         const url = `ws://localhost:8000/ws/rollout?runid=${runId}&env=${envName}&train=${trainMode}&train_steps=${trainSteps}`
-        console.log("Attempting to connect to : ", url);
+        // console.log("Attempting to connect to : ", url); // DEBUG:FRONTEND
         const ws = new WebSocket(url);
 
         ws.onopen = () => {
-          console.log("[WebSocket] Connected ✅");
+          // console.log("[WebSocket] Connected ✅"); // DEBUG:FRONTEND
           socketRef.current = ws;
           retryRef.current = null;
         };
 
         ws.onmessage = (event) => {
-          console.log("Is Active is ", isActive, "event is currently ", event);
+          //console.log("Is Active is ", isActive, "event is currently ", event);
           if (!isActive) return;
           /* DO NOT UPDATE THE STATE IF THE SIMULATION IS PAUSED*/
           if (isPausedRef.current) return;
 
           const data = JSON.parse(event.data);
+          console.log("Received data type ", data.type);
           if (data.type === "session"){
             setSessionId(data.session_id);
             // the websocket does not need to record any more data
             return; 
-          }
-          // if data.type is not session
-          setEpisodeInfo({ episode: data.episode, reward: data.reward });
-          if(data.ep_frames.length > 0){
-            setFrames(data.ep_frames);        // store all frames
-            setCurrentFrame(0);            // start at first frame
-          }
-          console.log("Episode: ", data.episode, "   Reward: ", data.reward);
-          console.log("Frames received length: ", data.ep_frames.length);
-          console.log("Data sim frame episode number: ", data.sim_frame_episode_number);
-          if(data.sim_frame_episode_number) {
-            setEpisodeNumForSimulation(data.sim_frame_episode_number);
-          }
-          //setIsPlaying(true); <- playback controlled by isPlaying var           // start playback automatically
-          setRollouts((prev) => [data, ...prev.slice(0, 19)]);
+          } else if (data.type === "tick") {
+            // set the training rollouts to the right value
+            rewardData = {reward: data.reward, step: data.step};
+            setTrainingRollouts((prev) => [rewardData, ...prev.slice(0, 19)]);
+          } else {
+            // if data.type is not session
+            setEpisodeInfo({ episode: data.episode, reward: data.reward });
+            if(data.ep_frames.length > 0){
+              setFrames(data.ep_frames);        // store all frames
+              setCurrentFrame(0);            // start at first frame
+            }
+            // console.log("Episode: ", data.episode, "   Reward: ", data.reward); // DEBUG:FRONTEND
+            // console.log("Frames received length: ", data.ep_frames.length); // DEBUG:FRONTEND
+            // console.log("Data sim frame episode number: ", data.sim_frame_episode_number); // DEBUG:FRONTEND
+            if(data.sim_frame_episode_number) {
+              setEpisodeNumForSimulation(data.sim_frame_episode_number);
+            }
+            //setIsPlaying(true); <- playback controlled by isPlaying var           // start playback automatically
+            // don't need all the other information
+            const newData = {reward: data.reward, episode: data.episode};
+            setRollouts((prev) => [newData, ...prev.slice(0, 19)]);
+          };
         };
         ws.onerror = (err) => console.error("WebSocket Error: ", err);
         ws.onclose = () => {
-          console.log("[WebSocket] Disconnected ❌");
-          console.log("WebSocket is Active: ", isActive);
+          // console.log("[WebSocket] Disconnected ❌"); // DEBUG:FRONTEND
+          // console.log("WebSocket is Active: ", isActive); // DEBUG:FRONTEND
           if(!isActive) return;
           
-          console.log("WebSocket Disconnected, retrying in 1s. ");
+          // console.log("WebSocket Disconnected, retrying in 1s. "); // DEBUG:FRONTEND
           retryRef.current = setTimeout(connect, 1000); // retry after 1 second
         }
       }
@@ -295,11 +304,11 @@ function RolloutWindow() {
       // initial attempt
       togglePause(false);
       connect();
-      console.log("envName: ", envName);
-      console.log("trainMode: ", trainMode);
+      // console.log("envName: ", envName); // DEBUG:FRONTEND
+      // console.log("trainMode: ", trainMode);// DEBUG:FRONTEND
       
 
-      console.log("frames: ", frames &&frames.length)
+      // console.log("frames: ", frames &&frames.length) // DEBUG:FRONTEND
       return () => {
         // cleanup function, run before next component runs
         isActive = false;
@@ -311,8 +320,6 @@ function RolloutWindow() {
 
   // This is the useEffect for the frame Data from the video
   useEffect(() => {
-    // console.log("Frames: ", frames)
-    // console.log("isPlaying: ", isPlaying)
     if (!isPlaying || (frames && frames.length) === 0) return;
     //advance frame at ferquency of 20fps
     intervalRef.current = setInterval(() => {
@@ -329,9 +336,9 @@ function RolloutWindow() {
 
   const handlePlay = () => setIsPlaying(true);
   const handlePause = () => {
-    console.log("handlePause");
+    // console.log("handlePause"); // DEBUG:FRONTEND
     setIsPlaying(false);
-    console.log("isPlaying.current: ", isPlaying);
+    // console.log("isPlaying.current: ", isPlaying); // DEBUG:FRONTEND
     clearInterval(intervalRef.current);
   };
   const handleRestart = () => {
@@ -409,7 +416,7 @@ function RolloutWindow() {
     setSavingRollouts(true);
     try {
       const res = await axios.post("/save_rollouts_data", { run_id: runId, rollout_filename: filename, rollouts: rollouts});
-      console.log("Saved rollout data with status:  ", res.status);
+      // console.log("Saved rollout data with status:  ", res.status); // DEBUG:FRONTEND
     } catch (err) {
       console.error("Failed to save: ", err);
       alert("Failed to save rollout data: " + err);
@@ -438,7 +445,7 @@ function RolloutWindow() {
 
   const getRootSavedModelsLink = async() => {
     const result = await axios.get("/get_model_path");
-    console.log("Root saved models link from backend:", result.data);
+    // console.log("Root saved models link from backend:", result.data); // DEBUG:FRONTEND
     let path = result.data;
     try {
       await navigator.clipboard.writeText(path);
@@ -447,8 +454,7 @@ function RolloutWindow() {
     } catch (err) {
       console.error("Failed to copy: ", err);
     }
-  }
-  /*console.log("Rollout rewards:", rollouts.map((r) => r.reward));*/
+  };
   return (
   <div
     style={{
@@ -582,30 +588,33 @@ function RolloutWindow() {
         <option value="InvertedDoublePendulum-v4">InvertedDoublePendulum-v4</option>
       </select>
     </div>
-      
+    {trainMode && (<div style={{ width: '100%', maxWidth: '600px', height: '300px', margin: '0 auto'}}>
+        <Line
+          data={{
+            labels: trainingRollouts.map((r) => r.step).reverse(),
+            datasets: [
+              {
+                label: "Reward",
+                data: trainingRollouts.map((r) => r.reward).reverse(),
+                fill: false,
+                borderColor: 'rgb(56, 189, 248)',
+                backgroundColor: 'rgba(56, 189, 248, 0.2)',
+                tension: 0.25,
+              },
+            ],
+          }}
+          options={{
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              x: { title: { display: true, text: "Episode" } },
+              y: { title: { display: true, text: "Reward" } },
+            },
+          }}
+        />
+      </div>)}
     {trainMode && (
       <ProgressBar isTraining={trainMode} runId={runId} />
-    // <div style={{ margin: '1.5rem auto', textAlign: 'center' }}>
-    //   <div style={{
-    //     height: '8px',
-    //     width: '60%',
-    //     backgroundColor: '#e5e7eb',
-    //     borderRadius: '999px',
-    //     overflow: 'hidden',
-    //     margin: '0 auto',
-    //     position: 'relative'
-    //   }}>
-    //     <div style={{
-    //       height: '100%',
-    //       width: '40%',
-    //       backgroundColor: '#3b82f6',
-    //       animation: 'progress-slide 1.5s infinite ease-in-out'
-    //     }} />
-    //   </div>
-    //   <p style={{ marginTop: '0.5rem', color: '#4b5563', fontWeight: 500 }}>
-    //     Training in progress...
-    //   </p>
-    // </div>
   )}
 
 

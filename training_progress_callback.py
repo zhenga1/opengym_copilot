@@ -55,17 +55,11 @@ class TrainingProgressCallback(BaseCallback):
 
         # Pull Reward stats if available
         reward_last = None
-        if "infos" in self.locals and self.locals["infos"]:
-            ep_info = self.locals["infos"][-1].get("episode")
-            if ep_info and "r" in ep_info:
-                reward_last = ep_info["r"]
-
         reward_mean = None
         if getattr(self.model, "ep_info_buffer", None):
-            try:
-                reward_mean = float(np.mean([e["r"] for e in self.model.ep_info_buffer]))
-            except Exception:
-                pass
+            ep_rewards = [ep_info["r"] for ep_info in self.model.ep_info_buffer]
+            reward_last = ep_rewards[-1] if ep_rewards else None
+            reward_mean = np.mean(ep_rewards) if ep_rewards else None
         
         # Update shared status (frontend can poll this)
         status.update({
@@ -74,16 +68,19 @@ class TrainingProgressCallback(BaseCallback):
             "reward_mean": reward_mean,
             "fps": fps,
         })
-
+        
+        # print(f"Preparing to send training progress callback with reward {reward_last} and mean reward {reward_mean}")
+        # print(f"Current steps done {steps_done}, steps last emit {self._last_emit}, every_n_steps {self.every_n_steps}")
         if (steps_done - self._last_emit) >= self.every_n_steps:
             self._last_emit = steps_done
             if self.send_tick:
                 try:
+                    # print(f"Sending tick from training_progress_callback with reward of {reward_last} and reward_mean of {reward_mean}")
                     self.send_tick({
                         "type": "tick",
                         "run_id": self.run_id,
                         "step": steps_done,
-                        "reward_last": reward_last,
+                        "reward": reward_last,
                         "reward_mean": reward_mean,
                         "fps": fps,
                         "ts": time.time(),
