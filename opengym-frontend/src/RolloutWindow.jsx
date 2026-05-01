@@ -1,6 +1,4 @@
-import { useState, useEffect, useRef, use} from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
+import { useState, useEffect, useRef } from 'react'
 import {Line} from 'react-chartjs-2'
 import SetPathPopup from './SetPathPopup'
 import SaveRolloutPopup from './RolloutPopup'
@@ -10,7 +8,7 @@ import {Chart as ChartJS, LineElement, CategoryScale, LinearScale, PointElement}
 
 ChartJS.register(LineElement, CategoryScale, LinearScale, PointElement);
 
-function RolloutWindow() {
+function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
   const [rollouts, setRollouts] = useState([]);
   const [trainingRollouts, setTrainingRollouts] = useState([]);
   const [frames, setFrames] = useState([]);
@@ -27,6 +25,15 @@ function RolloutWindow() {
   const [trainMode, setTrainMode] = useState(false);
   // Stores info on the CURRENT episode
   const [episodeInfo, setEpisodeInfo] = useState({episode: 0, reward: 0});
+  const [rewardConfig, setRewardConfig] = useState([]);
+  const [rewardConfigDirty, setRewardConfigDirty] = useState(false);
+  const [rewardConfigLoading, setRewardConfigLoading] = useState(false);
+  const [rewardConfigStatus, setRewardConfigStatus] = useState("Loading reward terms...");
+  const [supportsCustomReward, setSupportsCustomReward] = useState(false);
+  const [trainingRewardBreakdown, setTrainingRewardBreakdown] = useState({});
+  const [trainingRewardBreakdownMean, setTrainingRewardBreakdownMean] = useState({});
+  const [rolloutRewardBreakdown, setRolloutRewardBreakdown] = useState({});
+  const [rewardLogs, setRewardLogs] = useState([]);
 
   const [envName, setEnvName] = useState("CartPole-v1");
   const [isPaused, setIsPaused] = useState(false);
@@ -57,6 +64,11 @@ function RolloutWindow() {
     return `${yyyy}${mm}${dd}_${hh}${min}${ss}`;
   }
   const timestamp = formatDate(Date.now());
+  const rewardLogLimit = 30;
+
+  const appendRewardLog = (entry) => {
+    setRewardLogs((prev) => [entry, ...prev.slice(0, rewardLogLimit - 1)]);
+  };
 
   // Upload the files logistics:
   const [serverModels, setServerModels] = useState([]);
@@ -75,6 +87,44 @@ function RolloutWindow() {
   const handleEnvChange = (e) => {
     setEnvName(e.target.value)
   }
+
+  const updateRewardTerm = (termKey, field, value) => {
+    setRewardConfig((prev) =>
+      prev.map((term) =>
+        term.key === termKey ? { ...term, [field]: field === 'weight' ? Number(value) : value } : term
+      )
+    );
+    setRewardConfigDirty(true);
+    setRewardConfigStatus("Unsaved reward changes.");
+  };
+
+  const saveRewardConfig = async () => {
+    if (!runId) {
+      console.warn("Run ID not set yet, cannot save reward config");
+      return;
+    }
+
+    setRewardConfigLoading(true);
+    try {
+      const response = await axios.post("/reward_config", {
+        run_id: runId,
+        env_name: envName,
+        terms: rewardConfig.map((term) => ({
+          key: term.key,
+          weight: Number(term.weight),
+          enabled: Boolean(term.enabled),
+        })),
+      });
+      setRewardConfig(response.data.terms || []);
+      setRewardConfigDirty(false);
+      setRewardConfigStatus("Reward settings applied live.");
+    } catch (error) {
+      console.error("Failed to update reward config:", error);
+      setRewardConfigStatus("Failed to save reward settings.");
+    } finally {
+      setRewardConfigLoading(false);
+    }
+  };
   // This effectively flips the showPopup
   // showPopup = true => showPopup = false, and vice versa
   const togglePopup = () => {
@@ -174,10 +224,8 @@ function RolloutWindow() {
     const newState = ns !== undefined ? ns : !isPaused;
     // console.log("Sending pause state:", newState); // DEBUG:FRONTEND
     await axios.post("/pause_rollout", { session_id: sessionId, paused: newState });
-    setIsPaused((prev) => {
-      isPausedRef.current = !prev;
-      return !prev;
-    });
+    isPausedRef.current = newState;
+    setIsPaused(newState);
   };
 
   useEffect(() => {
@@ -234,6 +282,75 @@ function RolloutWindow() {
       if (retryTimer) clearTimeout(retryTimer);
     }
   }, []);
+
+  useEffect(() => {
+    if (!runId) return;
+
+    let cancelled = false;
+
+    async function fetchRewardConfig() {
+      setRewardConfigLoading(true);
+      try {
+        const response = await axios.get("/reward_config", {
+          params: { run_id: runId, env_name: envName },
+        });
+        if (cancelled) return;
+        setRewardConfig(response.data.terms || []);
+        setSupportsCustomReward(Boolean(response.data.supports_custom_reward));
+        setRewardConfigDirty(false);
+        setRewardConfigStatus(
+          response.data.supports_custom_reward
+            ? "Editing applies to rollout and training live."
+            : "Only native Gym reward is available for this environment right now."
+        );
+      } catch (error) {
+        if (cancelled) return;
+        console.error("Failed to fetch reward config:", error);
+        setRewardConfigStatus("Failed to load reward settings.");
+      } finally {
+        if (!cancelled) {
+          setRewardConfigLoading(false);
+        }
+      }
+    }
+
+    fetchRewardConfig();
+    return () => {
+      cancelled = true;
+    };
+  }, [runId, envName]);
+
+  useEffect(() => {
+    if (!isActive) return;
+
+    onSidebarStateChange({
+      envName,
+      rewardConfig,
+      rewardConfigDirty,
+      rewardConfigLoading,
+      rewardConfigStatus,
+      supportsCustomReward,
+      latestTrainingBreakdown: trainingRewardBreakdown,
+      latestTrainingMeanBreakdown: trainingRewardBreakdownMean,
+      latestRolloutBreakdown: rolloutRewardBreakdown,
+      rewardLogs,
+      onTermChange: updateRewardTerm,
+      onSaveConfig: saveRewardConfig,
+    });
+  }, [
+    isActive,
+    onSidebarStateChange,
+    envName,
+    rewardConfig,
+    rewardConfigDirty,
+    rewardConfigLoading,
+    rewardConfigStatus,
+    supportsCustomReward,
+    trainingRewardBreakdown,
+    trainingRewardBreakdownMean,
+    rolloutRewardBreakdown,
+    rewardLogs,
+  ]);
   /* Here we are adding envName to the dependency array of useEffect, so useEffect will rerun when envName changes*/
   useEffect(() => {
 
@@ -268,11 +385,25 @@ function RolloutWindow() {
             return; 
           } else if (data.type === "tick") {
             // set the training rollouts to the right value
-            rewardData = {reward: data.reward, step: data.step};
+            console.log("Received tick data: ", data);
+            const rewardData = {
+              reward: data.reward ?? data.reward_breakdown?.total ?? 0,
+              step: data.step,
+            };
             setTrainingRollouts((prev) => [rewardData, ...prev.slice(0, 19)]);
+            setTrainingRewardBreakdown(data.reward_breakdown || {});
+            setTrainingRewardBreakdownMean(data.reward_breakdown_mean || {});
+            appendRewardLog({
+              source: 'training',
+              label: `Step ${data.step}`,
+              total: data.reward_breakdown?.total ?? data.reward ?? 0,
+              breakdown: data.reward_breakdown || {},
+              at: data.ts ? new Date(data.ts * 1000).toLocaleTimeString() : 'training update',
+            });
           } else {
             // if data.type is not session
             setEpisodeInfo({ episode: data.episode, reward: data.reward });
+            setRolloutRewardBreakdown(data.reward_breakdown || {});
             if(data.ep_frames.length > 0){
               setFrames(data.ep_frames);        // store all frames
               setCurrentFrame(0);            // start at first frame
@@ -285,8 +416,20 @@ function RolloutWindow() {
             }
             //setIsPlaying(true); <- playback controlled by isPlaying var           // start playback automatically
             // don't need all the other information
-            const newData = {reward: data.reward, episode: data.episode};
+            const newData = {
+              reward: data.reward,
+              episode: data.episode,
+              reward_breakdown: data.reward_breakdown || {},
+              reward_raw_terms: data.reward_raw_terms || {},
+            };
             setRollouts((prev) => [newData, ...prev.slice(0, 19)]);
+            appendRewardLog({
+              source: 'rollout',
+              label: `Episode ${data.episode}`,
+              total: data.reward,
+              breakdown: data.reward_breakdown || {},
+              at: new Date().toLocaleTimeString(),
+            });
           };
         };
         ws.onerror = (err) => console.error("WebSocket Error: ", err);
@@ -301,6 +444,11 @@ function RolloutWindow() {
       }
       
       setRollouts([]); // restart the graph simulation from the beginning, upon new simulation
+      setTrainingRollouts([]);
+      setTrainingRewardBreakdown({});
+      setTrainingRewardBreakdownMean({});
+      setRolloutRewardBreakdown({});
+      setRewardLogs([]);
       // initial attempt
       togglePause(false);
       connect();
@@ -460,8 +608,9 @@ function RolloutWindow() {
     style={{
       padding: '2rem',
       fontFamily: 'Segoe UI, sans-serif',
+      width: '100%',
       maxWidth: '900px',
-      margin: 'auto',
+      margin: '0 auto',
       background: 'linear-gradient(145deg, #f0f9ff, #e0e7ff)',
       borderRadius: '12px',
       boxShadow: '0 8px 20px rgba(0,0,0,0.1)'

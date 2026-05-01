@@ -43,9 +43,30 @@ class TrainingProgressCallback(BaseCallback):
         status.setdefault("steps_done", 0)
         status.setdefault("reward_last", None)
         status.setdefault("reward_mean", None)
+        status.setdefault("reward_breakdown_last", {})
+        status.setdefault("reward_breakdown_mean", {})
         status.setdefault("fps", None)
+
+    @staticmethod
+    def _extract_reward_breakdown(ep_info: dict | None) -> dict[str, float]:
+        if not ep_info:
+            return {}
+
+        breakdown = {}
+        for key, value in ep_info.items():
+            if not key.startswith("reward_"):
+                continue
+            if key.startswith("reward_raw_"):
+                continue
+            if isinstance(value, (int, float, np.integer, np.floating)):
+                breakdown[key.removeprefix("reward_")] = float(value)
+
+        if "total" not in breakdown and "r" in ep_info:
+            breakdown["total"] = float(ep_info["r"])
+        return breakdown
     
     def _on_step(self) -> bool:
+        print("Executing On STEP from training_progress_callback")
         steps_done = int(self.model.num_timesteps) # type: ignore
         status = self.status_dict[self.run_id] # this should be some sort of dictionary
 
@@ -56,16 +77,28 @@ class TrainingProgressCallback(BaseCallback):
         # Pull Reward stats if available
         reward_last = None
         reward_mean = None
+        reward_breakdown_last = {}
+        reward_breakdown_mean = {}
         if getattr(self.model, "ep_info_buffer", None):
-            ep_rewards = [ep_info["r"] for ep_info in self.model.ep_info_buffer]
+            buffer_entries = list(self.model.ep_info_buffer)
+            ep_rewards = [ep_info["r"] for ep_info in buffer_entries]
             reward_last = ep_rewards[-1] if ep_rewards else None
             reward_mean = np.mean(ep_rewards) if ep_rewards else None
+            breakdown_buffer = [self._extract_reward_breakdown(ep_info) for ep_info in buffer_entries]
+            reward_breakdown_last = breakdown_buffer[-1] if breakdown_buffer else {}
+            breakdown_keys = {key for breakdown in breakdown_buffer for key in breakdown}
+            reward_breakdown_mean = {
+                key: float(np.mean([breakdown[key] for breakdown in breakdown_buffer if key in breakdown]))
+                for key in breakdown_keys
+            }
         
         # Update shared status (frontend can poll this)
         status.update({
             "steps_done": steps_done,
             "reward_last": reward_last,
             "reward_mean": reward_mean,
+            "reward_breakdown_last": reward_breakdown_last,
+            "reward_breakdown_mean": reward_breakdown_mean,
             "fps": fps,
         })
         
@@ -75,17 +108,21 @@ class TrainingProgressCallback(BaseCallback):
             self._last_emit = steps_done
             if self.send_tick:
                 try:
-                    # print(f"Sending tick from training_progress_callback with reward of {reward_last} and reward_mean of {reward_mean}")
+                    print(f"Sending tick from training_progress_callback with reward of {reward_last} and reward_mean of {reward_mean}")
                     self.send_tick({
                         "type": "tick",
                         "run_id": self.run_id,
                         "step": steps_done,
                         "reward": reward_last,
                         "reward_mean": reward_mean,
+                        "reward_breakdown": reward_breakdown_last,
+                        "reward_breakdown_mean": reward_breakdown_mean,
                         "fps": fps,
                         "ts": time.time(),
                     }, self.run_id)
-                except Exception:
+
+                except Exception as e:
+                    print(f"Error sending tick from training_progress_callback: {e}")
                     pass
             
             # Send a frame if it is requested
@@ -95,7 +132,8 @@ class TrainingProgressCallback(BaseCallback):
                     if frame is not None:
                         print("Sending frame from training_progress_callback")
                         self.send_frame(frame, self.run_id) # Can encode this inside of the sender
-                except Exception:
+                except Exception as e:
+                    print(f"Error sending frame from training_progress_callback {e}")
                     pass
         
         if status.get("stop", False):

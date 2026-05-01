@@ -10,21 +10,25 @@ import numpy as np
 import cv2
 import base64
 from stable_baselines3.common.vec_env import DummyVecEnv
-from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.vec_env import VecMonitor
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 #import constants
 
 from urllib.parse import parse_qs
 
-from train_backend_reward_tuning.cartpole_dance_left_right import CartPoleDanceWrapper
 from training_progress_callback import TrainingProgressCallback
+from train_backend_reward_tuning.reward_shaping import (
+    RewardShapingWrapper,
+    normalize_reward_terms,
+    reward_monitor_keys,
+    reward_template_for_env,
+)
 
 
 trained_model_paths = {} # run_id to most recent saved model paths
 training_model_devices = {} # run_id to device to use
 RUNS_TRAINING_STATUS = {}  # run_id -> {"status": "running|done|error", "model_path": str|None, ...}
+reward_configs_by_run = {}  # run_id -> {"env_name": str, "terms": list[dict]}
 
 
 app = FastAPI()
@@ -83,10 +87,72 @@ def encode_jpeg(frame_np, quality=80):
     return buf.getvalue()
 
 
+class RewardTermPayload(BaseModel):
+    key: str
+    weight: float
+    enabled: bool = True
+
+
+class RewardConfigUpdateRequest(BaseModel):
+    run_id: str
+    env_name: str
+    terms: list[RewardTermPayload]
+
+
+def get_reward_terms_for_run(run_id: str | None, env_name: str) -> list[dict]:
+    if not run_id:
+        return reward_template_for_env(env_name)
+
+    current = reward_configs_by_run.get(run_id)
+    if current is None or current.get("env_name") != env_name:
+        reward_configs_by_run[run_id] = {
+            "env_name": env_name,
+            "terms": reward_template_for_env(env_name),
+        }
+
+    stored_terms = reward_configs_by_run[run_id]["terms"]
+    normalized = normalize_reward_terms(env_name, stored_terms)
+    reward_configs_by_run[run_id]["terms"] = normalized
+    return normalized
+
+
+def set_reward_terms_for_run(run_id: str, env_name: str, terms: list[dict]) -> list[dict]:
+    normalized = normalize_reward_terms(env_name, terms)
+    reward_configs_by_run[run_id] = {"env_name": env_name, "terms": normalized}
+    return normalized
+
+
+def reward_weights_for_run(run_id: str | None, env_name: str) -> dict[str, float]:
+    return {
+        term["key"]: float(term["weight"]) if term["enabled"] else 0.0
+        for term in get_reward_terms_for_run(run_id, env_name)
+    }
+
+
+def make_reward_wrapped_env(env_name: str, run_id: str | None, render_mode: str | None = None):
+    env_kwargs = {"render_mode": render_mode} if render_mode else {}
+    env = gym.make(env_name, **env_kwargs)
+    return RewardShapingWrapper(
+        env,
+        env_name=env_name,
+        config_provider=lambda: get_reward_terms_for_run(run_id, env_name),
+    )
+
+
+def make_training_env_factory(env_name: str, run_id: str | None):
+    info_keywords = reward_monitor_keys(env_name)
+
+    def _factory():
+        env = make_reward_wrapped_env(env_name, run_id=run_id, render_mode=None)
+        return Monitor(env, info_keywords=info_keywords)
+
+    return _factory
+
+
 from stable_baselines3.common.callbacks import CallbackList
 #@app.post("/start")
 def start_training(model: PPO = None, run_id: str = None, train_steps:int = 1000, reset_num_timesteps = False,callback: BaseCallback = None,
-                   ws_manager=None, frame_fn=None, every_n_steps:int = 20):
+                   ws_manager=None, frame_fn=None, every_n_steps:int = 100):
     RUNS_TRAINING_STATUS.setdefault(run_id, {"status": "running", "model_path": None, "error": None})
 
     # Build a progress callback
@@ -97,7 +163,7 @@ def start_training(model: PPO = None, run_id: str = None, train_steps:int = 1000
         every_n_steps=every_n_steps,
         frame_fn=frame_fn,                                  # None if you don't want frames
         send_tick=make_tick_sender(ws_manager) if ws_manager else None,
-        send_frame=make_frame_sender(ws_manager, encoder=encode_jpeg) if (ws_manager and frame_fn) else None,
+        send_frame=None#make_frame_sender(ws_manager, encoder=encode_jpeg) if (ws_manager and frame_fn) else None,
     )
 
     callbacks_list = CallbackList([progress_data_cb, callback])
@@ -119,6 +185,10 @@ def start_training(model: PPO = None, run_id: str = None, train_steps:int = 1000
         except Exception as e:
             RUNS_TRAINING_STATUS[run_id]["status"] = "error"
             RUNS_TRAINING_STATUS[run_id]["error"] = str(e)
+        finally:
+            model_env = model.get_env()
+            if model_env is not None:
+                model_env.close()
     Thread(target=train).start()
     # status option
     return {"status": "training started"}
@@ -151,6 +221,32 @@ def change_rollout_speed(rollReq:RolloutSpeedRequest):
 @app.get("/training_runs/{run_id}")
 def get_run(run_id: str):
     return RUNS_TRAINING_STATUS.get(run_id, {"status": "unknown"})
+
+
+@app.get("/reward_config")
+def get_reward_config(run_id: str, env_name: str):
+    terms = get_reward_terms_for_run(run_id, env_name)
+    return {
+        "run_id": run_id,
+        "env_name": env_name,
+        "terms": terms,
+        "supports_custom_reward": len(terms) > 1,
+    }
+
+
+@app.post("/reward_config")
+def update_reward_config(req: RewardConfigUpdateRequest):
+    terms = set_reward_terms_for_run(
+        run_id=req.run_id,
+        env_name=req.env_name,
+        terms=[term.model_dump() for term in req.terms],
+    )
+    return {
+        "status": "updated",
+        "run_id": req.run_id,
+        "env_name": req.env_name,
+        "terms": terms,
+    }
 
 
 
@@ -297,7 +393,9 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
     
     from ws_manager import WSManager 
     router = APIRouter()
-    ws_manager = WSManager()
+    loop = asyncio.get_running_loop()
+    ws_manager = WSManager(loop=loop)
+    ws_manager.mark_loop_thread()
 
     # register some basic variables in relation to ws_manager and the websocket
     query = parse_qs(websocket.url.query)
@@ -337,16 +435,15 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
 
     try:
         
-        env = gym.make(env_name, render_mode="rgb_array")
+        env = make_reward_wrapped_env(env_name, run_id=run_id, render_mode="rgb_array")
         #env = Monitor(env)
         model = None
         print("Model loaded: ", model)
         if train_mode:
             # Vectorized env (many copies simiultaneously) improves sample efficiency and speed
-            vec_env = None
-            #vec_env = DummyVecEnv([lambda: gym.make(env_name)]) 
-            vec_env = make_vec_env("CartPole-v1", n_envs=8, env_kwargs={"render_mode": "rgb_array"})
-            vec_env = VecMonitor(vec_env)
+            vec_env = DummyVecEnv(
+                [make_training_env_factory(env_name, run_id=run_id) for _ in range(8)]
+            )
 
 
             # Check for GPU availability and use it
@@ -369,19 +466,14 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
             train_run_progress= 0
 
             start_training(model, run_id=run_id, train_steps=train_steps, reset_num_timesteps=False, callback=callback, 
-                           ws_manager=ws_manager, frame_fn=render_env, every_n_steps=5)
-            #model.learn(total_timesteps=train_steps, reset_num_timesteps=False, callback=callback)
-
-            # Save
-            model.save("ppo_model")
-
-            # Optional: delete vec_env to free RAM/GPU
-            vec_env.close()
+                           ws_manager=ws_manager, frame_fn=render_env, every_n_steps=100)
         obs, _ = env.reset()
         step = 0
         episodes_seen = 0
 
         ep_reward = 0
+        ep_reward_breakdown = {}
+        ep_reward_raw_terms = {}
         send_frame_interval = 5 if run_id not in number_of_steps_dictionary else number_of_steps_dictionary[run_id]
         ep_frames = []
 
@@ -419,10 +511,17 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                             action = int(np.asarray(action).reshape(-1)[0])
                         else:
                             action = action.squeeze(0)
-            next_obs, reward, terminated, truncated, _ = env.step(action)
+            next_obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
+            step_reward_breakdown = info.get("reward_breakdown", {"total": float(reward)})
+            step_reward_raw_terms = info.get("reward_raw_terms", {"native": float(reward)})
             
             send_frame_interval = 5 if run_id not in number_of_steps_dictionary else number_of_steps_dictionary[run_id]
+            ep_reward += reward
+            for key, value in step_reward_breakdown.items():
+                ep_reward_breakdown[key] = ep_reward_breakdown.get(key, 0.0) + float(value)
+            for key, value in step_reward_raw_terms.items():
+                ep_reward_raw_terms[key] = ep_reward_raw_terms.get(key, 0.0) + float(value)
 
             # Prepare for next step
             if done:
@@ -438,6 +537,9 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                     "sim_frame_episode_number": sim_frame_episode_number,
                     "ep_frames": frames,
                     "reward": float(ep_reward),
+                    "reward_breakdown": {key: float(value) for key, value in ep_reward_breakdown.items()},
+                    "reward_raw_terms": {key: float(value) for key, value in ep_reward_raw_terms.items()},
+                    "reward_weights": reward_weights_for_run(run_id, env_name),
                     #"done": done
                 }
                 #print("Rollout data sent with reward: ", float(ep_reward));
@@ -448,6 +550,8 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                 obs, _ = env.reset()
                 step = 0
                 ep_reward = 0
+                ep_reward_breakdown = {}
+                ep_reward_raw_terms = {}
                 episodes_seen += 1
                 ep_frames = []
             else:
@@ -455,7 +559,6 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                     ep_frames.append(render_env(env))
                 obs = next_obs
                 step += 1
-                ep_reward += reward
 
             await asyncio.sleep(time_intervals[run_id] if (run_id in time_intervals) else 0.05)  # throttle to ~20 FPS
     except WebSocketDisconnect:

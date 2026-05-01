@@ -1,21 +1,43 @@
 import { useState } from 'react';
 import RolloutWindow from './RolloutWindow';
+import RewardSidebar from './RewardSidebar';
 import './App.css';
+
+const emptySidebarState = {
+  envName: 'No rollout selected',
+  rewardConfig: [],
+  rewardConfigDirty: false,
+  rewardConfigLoading: false,
+  rewardConfigStatus: 'Create or select a rollout to inspect reward terms.',
+  supportsCustomReward: false,
+  latestTrainingBreakdown: {},
+  latestTrainingMeanBreakdown: {},
+  latestRolloutBreakdown: {},
+  rewardLogs: [],
+  onTermChange: () => {},
+  onSaveConfig: () => {},
+};
 
 function App() {
   const [windows, setWindows] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [sidebarState, setSidebarState] = useState(emptySidebarState);
 
   const addRollout = () => {
-    const newWindow = <RolloutWindow key={windows.length} />;
+    const newWindow = { id: crypto.randomUUID() };
     setWindows((prev) => [...prev, newWindow]);
-    setCurrentIndex(windows.length); // slide to the new one
+    setCurrentIndex(windows.length);
   };
+
   const removeRollout = () => {
-    setWindows(prev => {
-      if (prev.length === 0) return prev;           // nothing to remove
-      const next = prev.slice(0, -1);               // drop the last window
-      setCurrentIndex(next.length ? next.length - 1 : 0); // clamp index
+    setWindows((prev) => {
+      if (prev.length === 0) return prev;
+      const next = prev.slice(0, -1);
+      const nextIndex = next.length ? next.length - 1 : 0;
+      setCurrentIndex(nextIndex);
+      if (next.length === 0) {
+        setSidebarState(emptySidebarState);
+      }
       return next;
     });
   };
@@ -29,17 +51,17 @@ function App() {
   };
 
   return (
-    <div style={{ padding: '1rem', textAlign: 'center',
-      padding: '2rem',
-      fontFamily: 'Segoe UI, sans-serif',
-      maxWidth: '900px',
-      margin: 'auto',
-      borderRadius: '12px',
-      boxShadow: '0 8px 20px rgba(0,0,0,0.1)',
-    }}>
-      <div style={{ marginBottom: '1rem',
-      }}>
-        <button onClick={prev} disabled={currentIndex === 0}>⬅️</button>
+    <div
+      style={{
+        padding: '2rem',
+        fontFamily: 'Segoe UI, sans-serif',
+        maxWidth: '1500px',
+        margin: '0 auto',
+        textAlign: 'center',
+      }}
+    >
+      <div style={{ marginBottom: '1rem' }}>
+        <button onClick={prev} disabled={currentIndex === 0}> <span>&#8592;</span> </button>
 
         <button
           onClick={addRollout}
@@ -54,7 +76,7 @@ function App() {
             fontWeight: 'bold',
           }}
         >
-          ➕ Add Rollout
+          Add Rollout
         </button>
 
         <button
@@ -70,44 +92,52 @@ function App() {
             fontWeight: 'bold',
           }}
         >
-          ➖ Remove Rollout
+          Remove Rollout
         </button>
 
         <button
           onClick={next}
           disabled={currentIndex >= windows.length - 1}
-        >➡️</button>
+        > <span>&#8594;</span> </button>
       </div>
+
       {windows.length > 0 ? (
         <div
-            style={{
-              width: '100%',
-              display: 'flex',
-              justifyContent: 'center',
-              paddingTop: '1rem',
-              paddingBottom: 16,
-              overflowY: 'auto',
-              height:'90vh'
-            }}
-          >
+          style={{
+            width: '100%',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'flex-start',
+            gap: '1.5rem',
+            paddingTop: '1rem',
+            paddingBottom: 16,
+            flexWrap: 'nowrap',
+          }}
+        >
+          <div style={{ flex: '1 1 920px', minWidth: '320px' }}>
             {windows.map((win, i) => (
               <div
-                key={i}
+                key={win.id}
                 style={{
                   display: i === currentIndex ? 'block' : 'none',
                   padding: '1rem',
-                  borderBottom: '1px solid #ccc'
                 }}
               >
-                {win}
+                <RolloutWindow
+                  isActive={i === currentIndex}
+                  onSidebarStateChange={setSidebarState}
+                />
               </div>
             ))}
-        
+          </div>
+
+          <div style={{ width: '340px', minWidth: '300px', padding: '1rem 1rem 1rem 0' }}>
+            <RewardSidebar {...sidebarState} />
+          </div>
         </div>
       ) : (
         <p>No rollouts yet. Click "Add Rollout" to begin.</p>
       )}
-
     </div>
   );
 }
