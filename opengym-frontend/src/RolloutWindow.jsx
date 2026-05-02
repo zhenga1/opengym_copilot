@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import {Line} from 'react-chartjs-2'
 import SetPathPopup from './SetPathPopup'
 import SaveRolloutPopup from './RolloutPopup'
@@ -67,9 +67,9 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
   const timestamp = formatDate(Date.now());
   const rewardLogLimit = 30;
 
-  const appendRewardLog = (entry) => {
+  const appendRewardLog = useCallback((entry) => {
     setRewardLogs((prev) => [entry, ...prev.slice(0, rewardLogLimit - 1)]);
-  };
+  }, []);
 
   // Upload the files logistics:
   const [serverModels, setServerModels] = useState([]);
@@ -89,7 +89,7 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
     setEnvName(e.target.value)
   }
 
-  const updateRewardTerm = (termKey, field, value, fallbackTerm = null) => {
+  const updateRewardTerm = useCallback((termKey, field, value, fallbackTerm = null) => {
     setRewardConfig((prev) => {
       const nextValue = field === 'weight' ? Number(value) : value;
       const existingIndex = prev.findIndex((term) => term.key === termKey);
@@ -112,9 +112,9 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
     });
     setRewardConfigDirty(true);
     setRewardConfigStatus("Unsaved reward changes.");
-  };
+  }, []);
 
-  const computeBreakdownFromRawTerms = (terms, rawTerms) => {
+  const computeBreakdownFromRawTerms = useCallback((terms, rawTerms) => {
     const raw = rawTerms && Object.keys(rawTerms).length > 0 ? rawTerms : null;
     if (!raw) return null;
 
@@ -127,9 +127,9 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
       total += contribution;
     }
     return { total, ...breakdown };
-  };
+  }, []);
 
-  const saveRewardConfig = async () => {
+  const saveRewardConfig = useCallback(async () => {
     if (!runId) {
       console.warn("Run ID not set yet, cannot save reward config");
       return;
@@ -162,11 +162,16 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
       setRewardConfigStatus("Reward settings applied live.");
     } catch (error) {
       console.error("Failed to update reward config:", error);
-      setRewardConfigStatus("Failed to save reward settings.");
+      const backendMessage =
+        error?.response?.data?.detail ||
+        error?.response?.data?.error ||
+        error?.message ||
+        "Failed to save reward settings.";
+      setRewardConfigStatus(String(backendMessage));
     } finally {
       setRewardConfigLoading(false);
     }
-  };
+  }, [computeBreakdownFromRawTerms, envName, latestRolloutRawTerms, rewardConfig, runId]);
   // This effectively flips the showPopup
   // showPopup = true => showPopup = false, and vice versa
   const togglePopup = () => {
@@ -392,6 +397,8 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
     trainingRewardBreakdownMean,
     rolloutRewardBreakdown,
     rewardLogs,
+    updateRewardTerm,
+    saveRewardConfig,
   ]);
   /* Here we are adding envName to the dependency array of useEffect, so useEffect will rerun when envName changes*/
   useEffect(() => {

@@ -19,9 +19,11 @@ export default defineConfig({
     '/get_model_path': 'http://localhost:8000',
     '/set_training_dir': 'http://localhost:8000',
     '/unique_run_id': 'http://localhost:8000',
+    '/reward_config': 'http://localhost:8000',
     "/training_runs": {
         target: "http://localhost:8000", // FastAPI backend
         changeOrigin: true,
+        // Used for disabling SSL verification in development
         secure: false,
       },
     "/rollout_speed": 'http://localhost:8000',
