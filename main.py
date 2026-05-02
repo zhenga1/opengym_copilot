@@ -4,25 +4,38 @@ import gymnasium as gym
 from pydantic import BaseModel
 from pyparsing import Optional
 import torch
-from stable_baselines3 import PPO
 import json
 import numpy as np
 import cv2
 import base64
-from stable_baselines3.common.vec_env import DummyVecEnv
-from stable_baselines3.common.callbacks import BaseCallback
-from stable_baselines3.common.monitor import Monitor
+from typing import Any
+import importlib.util
 #import constants
 
 from urllib.parse import parse_qs
 
-from training_progress_callback import TrainingProgressCallback
 from train_backend_reward_tuning.reward_shaping import (
     RewardShapingWrapper,
     normalize_reward_terms,
     reward_monitor_keys,
     reward_template_for_env,
 )
+
+try:
+    from stable_baselines3 import PPO
+    from stable_baselines3.common.vec_env import DummyVecEnv
+    from stable_baselines3.common.callbacks import BaseCallback, CallbackList
+    from stable_baselines3.common.monitor import Monitor
+    from training_progress_callback import TrainingProgressCallback
+    SB3_IMPORT_ERROR = None
+except ModuleNotFoundError as exc:
+    PPO = None
+    DummyVecEnv = None
+    BaseCallback = object
+    CallbackList = None
+    Monitor = None
+    TrainingProgressCallback = None
+    SB3_IMPORT_ERROR = exc
 
 
 trained_model_paths = {} # run_id to most recent saved model paths
@@ -40,6 +53,16 @@ rollout_fps = {}
 
 progress_bar_log_file = open("progress_bar.log", "w")
 train_run_progresses = {}
+HAS_MULTIPART = importlib.util.find_spec("multipart") is not None
+
+
+def ensure_sb3_available():
+    if SB3_IMPORT_ERROR is not None:
+        raise RuntimeError(
+            "stable_baselines3 is required for training and model loading, "
+            f"but is not installed in this Python environment: {SB3_IMPORT_ERROR}"
+        )
+
 class ProgressBarCallback(BaseCallback):
     def __init__(self, total_timesteps, runId, verbose=0):
         super().__init__(verbose)
@@ -140,6 +163,7 @@ def make_reward_wrapped_env(env_name: str, run_id: str | None, render_mode: str 
 
 
 def make_training_env_factory(env_name: str, run_id: str | None):
+    ensure_sb3_available()
     info_keywords = reward_monitor_keys(env_name)
 
     def _factory():
@@ -149,10 +173,10 @@ def make_training_env_factory(env_name: str, run_id: str | None):
     return _factory
 
 
-from stable_baselines3.common.callbacks import CallbackList
 #@app.post("/start")
-def start_training(model: PPO = None, run_id: str = None, train_steps:int = 1000, reset_num_timesteps = False,callback: BaseCallback = None,
+def start_training(model: Any = None, run_id: str = None, train_steps:int = 1000, reset_num_timesteps = False,callback: Any = None,
                    ws_manager=None, frame_fn=None, every_n_steps:int = 100):
+    ensure_sb3_available()
     RUNS_TRAINING_STATUS.setdefault(run_id, {"status": "running", "model_path": None, "error": None})
 
     # Build a progress callback
@@ -326,16 +350,21 @@ class SessionState:
         self.resume_event = asyncio.Event()
         self.resume_event.set()  # start un-paused
         self.paused = False
-        self.model:Optional[PPO] = None
+        self.model: Any = None
 
-@app.post("/upload_model")
-async def upload_model(file: UploadFile = File(...)):
-  if not file.filename.endswith(".zip"):
-      return {"ok": False, "error": "must be a .zip"}
-  dest = os.path.join(MODELS_DIR, file.filename)
-  with open(dest, "wb") as f:
-      f.write(await file.read())
-  return {"ok": True, "model_name": file.filename}
+if HAS_MULTIPART:
+    @app.post("/upload_model")
+    async def upload_model(file: UploadFile = File(...)):
+      if not file.filename.endswith(".zip"):
+          return {"ok": False, "error": "must be a .zip"}
+      dest = os.path.join(MODELS_DIR, file.filename)
+      with open(dest, "wb") as f:
+          f.write(await file.read())
+      return {"ok": True, "model_name": file.filename}
+else:
+    @app.post("/upload_model")
+    async def upload_model():
+      return {"ok": False, "error": "python-multipart is not installed in this backend environment"}
 
 # sessions: dict[str, SessionState] = {}  # session_id -> state
 
@@ -363,6 +392,7 @@ def change_number_of_steps(req: ChangeNumberOfStepsRequest):
 
 @app.post("/load_model")
 def load_model(req: LoadRequest):
+    ensure_sb3_available()
     from os.path import join, exists
     print("model loading began: ")
     if req.model_name == "":
@@ -440,6 +470,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
         model = None
         print("Model loaded: ", model)
         if train_mode:
+            ensure_sb3_available()
             # Vectorized env (many copies simiultaneously) improves sample efficiency and speed
             vec_env = DummyVecEnv(
                 [make_training_env_factory(env_name, run_id=run_id) for _ in range(8)]

@@ -33,6 +33,7 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
   const [trainingRewardBreakdown, setTrainingRewardBreakdown] = useState({});
   const [trainingRewardBreakdownMean, setTrainingRewardBreakdownMean] = useState({});
   const [rolloutRewardBreakdown, setRolloutRewardBreakdown] = useState({});
+  const [latestRolloutRawTerms, setLatestRolloutRawTerms] = useState({});
   const [rewardLogs, setRewardLogs] = useState([]);
 
   const [envName, setEnvName] = useState("CartPole-v1");
@@ -88,14 +89,44 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
     setEnvName(e.target.value)
   }
 
-  const updateRewardTerm = (termKey, field, value) => {
-    setRewardConfig((prev) =>
-      prev.map((term) =>
-        term.key === termKey ? { ...term, [field]: field === 'weight' ? Number(value) : value } : term
-      )
-    );
+  const updateRewardTerm = (termKey, field, value, fallbackTerm = null) => {
+    setRewardConfig((prev) => {
+      const nextValue = field === 'weight' ? Number(value) : value;
+      const existingIndex = prev.findIndex((term) => term.key === termKey);
+
+      if (existingIndex >= 0) {
+        return prev.map((term) =>
+          term.key === termKey ? { ...term, [field]: nextValue } : term
+        );
+      }
+
+      const seededTerm = fallbackTerm ?? {
+        key: termKey,
+        label: termKey.replaceAll('_', ' ').replace(/\b\w/g, (char) => char.toUpperCase()),
+        description: 'Recovered from rollout reward breakdown.',
+        enabled: true,
+        weight: 1,
+      };
+
+      return [...prev, { ...seededTerm, [field]: nextValue }];
+    });
     setRewardConfigDirty(true);
     setRewardConfigStatus("Unsaved reward changes.");
+  };
+
+  const computeBreakdownFromRawTerms = (terms, rawTerms) => {
+    const raw = rawTerms && Object.keys(rawTerms).length > 0 ? rawTerms : null;
+    if (!raw) return null;
+
+    const breakdown = {};
+    let total = 0;
+    for (const term of terms) {
+      const rawValue = Number(raw[term.key] ?? 0);
+      const contribution = term.enabled ? Number(term.weight) * rawValue : 0;
+      breakdown[term.key] = contribution;
+      total += contribution;
+    }
+    return { total, ...breakdown };
   };
 
   const saveRewardConfig = async () => {
@@ -115,7 +146,18 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
           enabled: Boolean(term.enabled),
         })),
       });
-      setRewardConfig(response.data.terms || []);
+      const nextTerms = response.data.terms || [];
+      setRewardConfig(nextTerms);
+      const nextBreakdown = computeBreakdownFromRawTerms(nextTerms, latestRolloutRawTerms);
+      if (nextBreakdown) {
+        setRolloutRewardBreakdown(nextBreakdown);
+        setEpisodeInfo((prev) => ({ ...prev, reward: nextBreakdown.total }));
+        setRollouts((prev) =>
+          prev.length === 0
+            ? prev
+            : [{ ...prev[0], reward: nextBreakdown.total, reward_breakdown: nextBreakdown }, ...prev.slice(1)]
+        );
+      }
       setRewardConfigDirty(false);
       setRewardConfigStatus("Reward settings applied live.");
     } catch (error) {
@@ -404,6 +446,7 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
             // if data.type is not session
             setEpisodeInfo({ episode: data.episode, reward: data.reward });
             setRolloutRewardBreakdown(data.reward_breakdown || {});
+            setLatestRolloutRawTerms(data.reward_raw_terms || {});
             if(data.ep_frames.length > 0){
               setFrames(data.ep_frames);        // store all frames
               setCurrentFrame(0);            // start at first frame

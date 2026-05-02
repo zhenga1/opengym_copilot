@@ -12,6 +12,29 @@ function RewardSidebar({
   onTermChange,
   onSaveConfig,
 }) {
+  const safeRewardConfig = Array.isArray(rewardConfig) ? rewardConfig : [];
+  const safeRewardLogs = Array.isArray(rewardLogs) ? rewardLogs : [];
+  const rolloutEntries = Object.entries(latestRolloutBreakdown || {}).filter(([key, value]) => key !== 'total' && Number.isFinite(value));
+  const trainingEntries = Object.entries(latestTrainingBreakdown || {}).filter(([key, value]) => key !== 'total' && Number.isFinite(value));
+  const fallbackEntries = rolloutEntries.length > 0 ? rolloutEntries : trainingEntries;
+  const hasOnlyNativeConfig =
+    safeRewardConfig.length === 0 ||
+    (safeRewardConfig.length === 1 && safeRewardConfig[0]?.key === 'native');
+  const editableTerms = hasOnlyNativeConfig
+    ? fallbackEntries.map(([key]) => {
+        const existing = safeRewardConfig.find((term) => term.key === key);
+        return existing ?? {
+          key,
+          label: key.replaceAll('_', ' ').replace(/\b\w/g, (char) => char.toUpperCase()),
+          description: 'Recovered from live reward breakdown. Change the weight and apply to persist it.',
+          enabled: true,
+          weight: key === 'native' ? 1 : 0,
+        };
+      })
+    : safeRewardConfig;
+  const canTuneFromBreakdown = editableTerms.length > 0;
+  const sidebarSupportsCustomReward = supportsCustomReward || editableTerms.length > 1;
+
   const panelStyle = {
     width: '340px',
     minWidth: '300px',
@@ -69,12 +92,17 @@ function RewardSidebar({
 
       <div style={cardStyle}>
         <div style={{ fontSize: '0.95rem', fontWeight: 700, marginBottom: '0.6rem' }}>Reward Terms</div>
-        {!supportsCustomReward && (
+        {!sidebarSupportsCustomReward && (
           <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
             This environment currently exposes only the native Gym reward. The shaping API is in place for more env-specific terms.
           </div>
         )}
-        {rewardConfig.map((term) => (
+        {!canTuneFromBreakdown && (
+          <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+            Reward terms will appear here once a rollout publishes its breakdown.
+          </div>
+        )}
+        {editableTerms.map((term) => (
           <div
             key={term.key}
             style={{
@@ -87,7 +115,7 @@ function RewardSidebar({
               <input
                 type="checkbox"
                 checked={term.enabled}
-                onChange={(event) => onTermChange(term.key, 'enabled', event.target.checked)}
+                onChange={(event) => onTermChange(term.key, 'enabled', event.target.checked, term)}
               />
               <span>{term.label}</span>
             </label>
@@ -101,7 +129,7 @@ function RewardSidebar({
                 step="0.01"
                 value={term.weight}
                 disabled={!term.enabled}
-                onChange={(event) => onTermChange(term.key, 'weight', Number(event.target.value))}
+                onChange={(event) => onTermChange(term.key, 'weight', Number(event.target.value), term)}
                 style={{
                   width: '96px',
                   padding: '0.35rem 0.45rem',
@@ -141,10 +169,10 @@ function RewardSidebar({
 
       <div style={cardStyle}>
         <div style={{ fontSize: '0.95rem', fontWeight: 700, marginBottom: '0.6rem' }}>Recent Reward Logs</div>
-        {rewardLogs.length === 0 ? (
+        {safeRewardLogs.length === 0 ? (
           <div style={{ color: '#94a3b8', fontSize: '0.85rem' }}>No reward logs yet.</div>
         ) : (
-          rewardLogs.slice(0, 10).map((entry, index) => (
+          safeRewardLogs.slice(0, 10).map((entry, index) => (
             <div
               key={`${entry.source}-${entry.label}-${index}`}
               style={{

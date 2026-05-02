@@ -9,7 +9,7 @@ const emptySidebarState = {
   rewardConfigDirty: false,
   rewardConfigLoading: false,
   rewardConfigStatus: 'Create or select a rollout to inspect reward terms.',
-  supportsCustomReward: false,
+  supportsCustomReward: true,
   latestTrainingBreakdown: {},
   latestTrainingMeanBreakdown: {},
   latestRolloutBreakdown: {},
