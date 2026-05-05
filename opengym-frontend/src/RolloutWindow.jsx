@@ -269,6 +269,7 @@ function RolloutWindow({
       }
   }, [showPathPopup, envName, frozenPath]);
 
+  // toggle train and pause at the same time
   const toggleTrainPauseTogether = () => {
     const newValue = !trainMode;
     const newPauseValue = trainMode;
@@ -645,13 +646,9 @@ function RolloutWindow({
   };
 
   const toggleTrainMode = async () => {
-    if(!trainMode) {
-      openPathPopup();
-      // process the trainMode variable WITHIN the popup (i.e. after popup closes)
-    } else {
-      closePathPopup();
-      toggleTrainPauseTogether();
-    }
+    if (trainMode) return;
+    openPathPopup();
+    // process the trainMode variable WITHIN the popup (i.e. after popup closes)
   }
   const buttonStyle = (bg) => ({
     padding: '0.4rem 1rem',
@@ -919,23 +916,25 @@ function RolloutWindow({
     >
       <button
         onClick={toggleTrainMode}
-        disabled={isSavedViewer}
+        disabled={isSavedViewer || trainMode}
         style={{
-          padding: '0.5rem 1.2rem',
+          padding: '0.7rem 1.25rem',
           fontSize: '1rem',
-          backgroundColor: isSavedViewer ? '#cbd5e1' : trainMode ? '#3b82f6' : '#9ca3af', // blue if on, gray if off
+          backgroundColor: isSavedViewer ? '#cbd5e1' : trainMode ? '#2563eb' : '#0f766e',
           color: 'white',
           border: 'none',
           borderRadius: '999px', // pill shape
-          cursor: isSavedViewer ? 'not-allowed' : 'pointer',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+          cursor: isSavedViewer || trainMode ? 'not-allowed' : 'pointer',
+          boxShadow: trainMode ? '0 8px 18px rgba(37, 99, 235, 0.22)' : '0 8px 18px rgba(15, 118, 110, 0.18)',
           transition: 'all 0.3s ease-in-out',
           display: 'inline-flex',
           alignItems: 'center',
           gap: '0.5rem',
+          fontWeight: 700,
+          opacity: isSavedViewer ? 0.7 : 1,
         }}
       >
-        {trainMode ? '🧠 Training Active' : '🚫 Training Disabled'}
+        {trainMode ? '🧠 Training In Progress' : '▶ Start Training'}
       </button>
       <SetPathPopup
         isOpen={showPathPopup}
