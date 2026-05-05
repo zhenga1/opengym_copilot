@@ -24,9 +24,27 @@ function App() {
   const [sidebarState, setSidebarState] = useState(emptySidebarState);
 
   const addRollout = () => {
-    const newWindow = { id: crypto.randomUUID() };
-    setWindows((prev) => [...prev, newWindow]);
-    setCurrentIndex(windows.length);
+    const newWindow = { id: crypto.randomUUID(), mode: 'live' };
+    setWindows((prev) => {
+      const next = [...prev, newWindow];
+      setCurrentIndex(next.length - 1);
+      return next;
+    });
+  };
+
+  const addLoadedRollout = ({ rollouts, envName, fileName }) => {
+    const newWindow = {
+      id: crypto.randomUUID(),
+      mode: 'saved',
+      initialRollouts: rollouts,
+      initialEnvName: envName,
+      viewerLabel: fileName,
+    };
+    setWindows((prev) => {
+      const next = [...prev, newWindow];
+      setCurrentIndex(next.length - 1);
+      return next;
+    });
   };
 
   const removeRollout = () => {
@@ -105,35 +123,31 @@ function App() {
         <div
           style={{
             width: '100%',
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'flex-start',
-            gap: '1.5rem',
             paddingTop: '1rem',
             paddingBottom: 16,
-            flexWrap: 'nowrap',
           }}
         >
-          <div style={{ flex: '1 1 920px', minWidth: '320px' }}>
-            {windows.map((win, i) => (
-              <div
-                key={win.id}
-                style={{
-                  display: i === currentIndex ? 'block' : 'none',
-                  padding: '1rem',
-                }}
-              >
-                <RolloutWindow
-                  isActive={i === currentIndex}
-                  onSidebarStateChange={setSidebarState}
-                />
-              </div>
-            ))}
-          </div>
+          {windows.map((win, i) => (
+            <div
+              key={win.id}
+              style={{
+                display: i === currentIndex ? 'block' : 'none',
+                padding: '1rem',
+              }}
+            >
+              <RolloutWindow
+                viewerMode={win.mode || 'live'}
+                initialRollouts={win.initialRollouts || []}
+                initialEnvName={win.initialEnvName || 'CartPole-v1'}
+                viewerLabel={win.viewerLabel || ''}
+                isActive={i === currentIndex}
+                onSidebarStateChange={setSidebarState}
+                onOpenLoadedRollout={addLoadedRollout}
+              />
+            </div>
+          ))}
 
-          <div style={{ width: '340px', minWidth: '300px', padding: '1rem 1rem 1rem 0' }}>
-            <RewardSidebar {...sidebarState} />
-          </div>
+          <RewardSidebar {...sidebarState} />
         </div>
       ) : (
         <p>No rollouts yet. Click "Add Rollout" to begin.</p>

@@ -8,7 +8,17 @@ import {Chart as ChartJS, LineElement, CategoryScale, LinearScale, PointElement}
 
 ChartJS.register(LineElement, CategoryScale, LinearScale, PointElement);
 
-function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
+function RolloutWindow({
+  isActive = false,
+  onSidebarStateChange = () => {},
+  // special argument called by the parent component 
+  onOpenLoadedRollout = () => {},
+  viewerMode = 'live',
+  initialRollouts = [],
+  initialEnvName = 'CartPole-v1',
+  viewerLabel = '',
+}) {
+  const isSavedViewer = viewerMode === 'saved';
   const [rollouts, setRollouts] = useState([]);
   const [trainingRollouts, setTrainingRollouts] = useState([]);
   const [frames, setFrames] = useState([]);
@@ -36,7 +46,7 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
   const [latestRolloutRawTerms, setLatestRolloutRawTerms] = useState({});
   const [rewardLogs, setRewardLogs] = useState([]);
 
-  const [envName, setEnvName] = useState("CartPole-v1");
+  const [envName, setEnvName] = useState(initialEnvName);
   const [isPaused, setIsPaused] = useState(false);
 
   // the FPS of rollout, default is 20FPS (delay = 1/20 = 0.05 seconds)
@@ -66,6 +76,9 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
   }
   const timestamp = formatDate(Date.now());
   const rewardLogLimit = 30;
+  const rolloutChartMinWidth = 600;
+  const rolloutChartPointWidth = 36;
+  const rolloutChartBucketSize = 25;
 
   const appendRewardLog = useCallback((entry) => {
     setRewardLogs((prev) => [entry, ...prev.slice(0, rewardLogLimit - 1)]);
@@ -74,11 +87,14 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
   // Upload the files logistics:
   const [serverModels, setServerModels] = useState([]);
   const [selectedServerModel, setSelectedServerModel] = useState(""); // "" = None
+  const [rolloutFiles, setRolloutFiles] = useState([]);
+  const [selectedRolloutFile, setSelectedRolloutFile] = useState("");
   const [showPopup, setShowPopup] = useState(false);
   const [file, setFile] = useState(null);
   // whether is using default policy or not
   const [isUsingNone, setIsUsingNone] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [loadingSavedRollouts, setLoadingSavedRollouts] = useState(false);
 
   //set whether model parent directory file path is copied
   const [filePathCopied, setFilePathCopied] = useState(false);
@@ -86,8 +102,38 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
   const [hoverOnDeleteAllTemp, setHoverOnDeleteAllTempButton] = useState(false);
 
   const handleEnvChange = (e) => {
+    if (isSavedViewer) return;
     setEnvName(e.target.value)
   }
+
+  const hydrateLoadedRollouts = useCallback((loadedRollouts) => {
+    const safeRollouts = Array.isArray(loadedRollouts) ? loadedRollouts : [];
+    setRollouts(safeRollouts);
+    setTrainingRollouts([]);
+    setFrames([]);
+    setCurrentFrame(0);
+    setIsPlaying(false);
+    setTrainingRewardBreakdown({});
+    setTrainingRewardBreakdownMean({});
+
+    const latest = safeRollouts[0] || {};
+    setEpisodeInfo({
+      episode: latest.episode ?? 0,
+      reward: latest.reward ?? 0,
+    });
+    setEpisodeNumForSimulation(latest.episode ?? 0);
+    setRolloutRewardBreakdown(latest.reward_breakdown || {});
+    setLatestRolloutRawTerms(latest.reward_raw_terms || {});
+    setRewardLogs(
+      safeRollouts.slice(0, rewardLogLimit).map((rollout) => ({
+        source: 'loaded',
+        label: `Episode ${rollout.episode ?? 0}`,
+        total: rollout.reward ?? 0,
+        breakdown: rollout.reward_breakdown || {},
+        at: viewerLabel || 'saved rollout',
+      }))
+    );
+  }, [rewardLogLimit, viewerLabel]);
 
   const updateRewardTerm = useCallback((termKey, field, value, fallbackTerm = null) => {
     setRewardConfig((prev) => {
@@ -129,7 +175,25 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
     return { total, ...breakdown };
   }, []);
 
+  const applyRewardConfigToRollouts = useCallback((entries, terms) => {
+    return entries.map((entry) => {
+      const nextBreakdown = computeBreakdownFromRawTerms(terms, entry.reward_raw_terms || {});
+      if (!nextBreakdown) {
+        return entry;
+      }
+      return {
+        ...entry,
+        reward: nextBreakdown.total,
+        reward_breakdown: nextBreakdown,
+      };
+    });
+  }, [computeBreakdownFromRawTerms]);
+
   const saveRewardConfig = useCallback(async () => {
+    if (isSavedViewer) {
+      setRewardConfigStatus("Saved rollout viewers are read-only. Apply reward changes from a live rollout.");
+      return;
+    }
     if (!runId) {
       console.warn("Run ID not set yet, cannot save reward config");
       return;
@@ -148,15 +212,18 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
       });
       const nextTerms = response.data.terms || [];
       setRewardConfig(nextTerms);
+      const nextRollouts = applyRewardConfigToRollouts(rollouts, nextTerms);
+      setRollouts(nextRollouts);
       const nextBreakdown = computeBreakdownFromRawTerms(nextTerms, latestRolloutRawTerms);
-      if (nextBreakdown) {
-        setRolloutRewardBreakdown(nextBreakdown);
+      if (nextRollouts.length > 0) {
+        setEpisodeInfo((prev) => ({ ...prev, reward: nextRollouts[0].reward ?? prev.reward }));
+      } else if (nextBreakdown) {
         setEpisodeInfo((prev) => ({ ...prev, reward: nextBreakdown.total }));
-        setRollouts((prev) =>
-          prev.length === 0
-            ? prev
-            : [{ ...prev[0], reward: nextBreakdown.total, reward_breakdown: nextBreakdown }, ...prev.slice(1)]
-        );
+      }
+      if (nextRollouts.length > 0) {
+        setRolloutRewardBreakdown(nextRollouts[0].reward_breakdown || {});
+      } else if (nextBreakdown) {
+        setRolloutRewardBreakdown(nextBreakdown);
       }
       setRewardConfigDirty(false);
       setRewardConfigStatus("Reward settings applied live.");
@@ -171,7 +238,7 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
     } finally {
       setRewardConfigLoading(false);
     }
-  }, [computeBreakdownFromRawTerms, envName, latestRolloutRawTerms, rewardConfig, runId]);
+  }, [applyRewardConfigToRollouts, computeBreakdownFromRawTerms, envName, isSavedViewer, latestRolloutRawTerms, rewardConfig, rollouts, runId]);
   // This effectively flips the showPopup
   // showPopup = true => showPopup = false, and vice versa
   const togglePopup = () => {
@@ -248,6 +315,9 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
   };
   const deleteAllTempModels = () => {
     // delete all the models in the temporary directory
+    axios.post("/delete_all_temp_models", { "run_id": runId });
+    // force reload of the temp model directory
+    setReloadAllTempModelsSwitcher(prev => !prev);
     
   };
   const changeNumberOfSteps = async (steps) => {
@@ -276,6 +346,17 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
   };
 
   useEffect(() => {
+    if (isSavedViewer) {
+      setRewardConfig([]);
+      setSupportsCustomReward(false);
+      setRewardConfigDirty(false);
+      setRewardConfigLoading(false);
+      setRewardConfigStatus("Saved rollout viewer. Reward terms shown below come from the loaded JSON.");
+      hydrateLoadedRollouts(initialRollouts);
+    }
+  }, [hydrateLoadedRollouts, initialRollouts, isSavedViewer]);
+
+  useEffect(() => {
     let retryTimeout;
     // console.log("Fetching models from server..."); // DEBUG:FRONTEND
     const fetchModels = async () => {
@@ -290,12 +371,24 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
         retryTimeout = setTimeout(fetchModels, 5000);
       }
     };
+    const fetchRolloutFiles = async () => {
+      try {
+        const res = await axios.get("/rollouts_files");
+        const files = res.data.rollouts || [];
+        setRolloutFiles(files);
+        setSelectedRolloutFile((prev) => (prev && files.includes(prev) ? prev : files[0] || ""));
+      } catch (e) {
+        console.error("Failed to list saved rollouts:", e);
+      }
+    };
     fetchModels();
+    fetchRolloutFiles();
     return () => {
       if (retryTimeout) clearTimeout(retryTimeout);
     }
   }, [reloadAllTempModelsSwitcher]);
   useEffect(() => {
+    if (isSavedViewer) return;
     let cancelled = false;
     let retryTimer = null;
     let attempt = 0;
@@ -331,7 +424,7 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
   }, []);
 
   useEffect(() => {
-    if (!runId) return;
+    if (isSavedViewer || !runId) return;
 
     let cancelled = false;
 
@@ -365,7 +458,7 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
     return () => {
       cancelled = true;
     };
-  }, [runId, envName]);
+  }, [envName, isSavedViewer, runId]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -402,6 +495,7 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
   ]);
   /* Here we are adding envName to the dependency array of useEffect, so useEffect will rerun when envName changes*/
   useEffect(() => {
+    if (isSavedViewer) return;
 
     let isActive = true;
     if (!runId) {
@@ -472,7 +566,7 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
               reward_breakdown: data.reward_breakdown || {},
               reward_raw_terms: data.reward_raw_terms || {},
             };
-            setRollouts((prev) => [newData, ...prev.slice(0, 19)]);
+            setRollouts((prev) => [newData, ...prev]);
             appendRewardLog({
               source: 'rollout',
               label: `Episode ${data.episode}`,
@@ -514,7 +608,7 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
         if (retryRef.current) clearTimeout(retryRef.current);
       };
     }
-  }, [envName,trainMode, runId]);
+  }, [envName, isSavedViewer, trainMode, runId]);
 
   // This is the useEffect for the frame Data from the video
   useEffect(() => {
@@ -614,6 +708,10 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
     setSavingRollouts(true);
     try {
       const res = await axios.post("/save_rollouts_data", { run_id: runId, rollout_filename: filename, rollouts: rollouts});
+      const filesRes = await axios.get("/rollouts_files");
+      const files = filesRes.data.rollouts || [];
+      setRolloutFiles(files);
+      setSelectedRolloutFile(filename && files.includes(filename) ? filename : files[0] || "");
       // console.log("Saved rollout data with status:  ", res.status); // DEBUG:FRONTEND
     } catch (err) {
       console.error("Failed to save: ", err);
@@ -621,6 +719,30 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
     } finally {
       setSavingRollouts(false);
       setShowSavePopup(false);
+    }
+  };
+
+  const loadSavedRollouts = async () => {
+    if (!selectedRolloutFile) {
+      alert("No rollout file selected.");
+      return;
+    }
+    setLoadingSavedRollouts(true);
+    try {
+      const res = await axios.post("/load_rollouts_data", {
+        rollout_filename: selectedRolloutFile,
+      });
+      const loadedRollouts = Array.isArray(res.data?.rollouts) ? res.data.rollouts : [];
+      onOpenLoadedRollout({
+        rollouts: loadedRollouts,
+        envName,
+        fileName: selectedRolloutFile,
+      });
+    } catch (err) {
+      console.error("Failed to load rollouts:", err);
+      alert("Failed to load rollout data: " + err);
+    } finally {
+      setLoadingSavedRollouts(false);
     }
   };
 
@@ -666,6 +788,22 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
       boxShadow: '0 8px 20px rgba(0,0,0,0.1)'
     }}
   >
+    {isSavedViewer && (
+      <div
+        style={{
+          marginBottom: '1rem',
+          padding: '0.75rem 1rem',
+          background: 'rgba(71, 85, 105, 0.12)',
+          border: '1px solid rgba(71, 85, 105, 0.25)',
+          borderRadius: '10px',
+          color: '#334155',
+          fontWeight: 600,
+          textAlign: 'center',
+        }}
+      >
+        Saved Rollout Viewer{viewerLabel ? `: ${viewerLabel}` : ''}
+      </div>
+    )}
     <h1 style={{ fontSize: '2.2rem', fontWeight: 700, textAlign: 'center', color: '#4f46e5' }}>
       ⚡ OpenGym Copilot
     </h1>
@@ -715,14 +853,15 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
     >
       <button
         onClick={toggleTrainMode}
+        disabled={isSavedViewer}
         style={{
           padding: '0.5rem 1.2rem',
           fontSize: '1rem',
-          backgroundColor: trainMode ? '#3b82f6' : '#9ca3af', // blue if on, gray if off
+          backgroundColor: isSavedViewer ? '#cbd5e1' : trainMode ? '#3b82f6' : '#9ca3af', // blue if on, gray if off
           color: 'white',
           border: 'none',
           borderRadius: '999px', // pill shape
-          cursor: 'pointer',
+          cursor: isSavedViewer ? 'not-allowed' : 'pointer',
           boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
           transition: 'all 0.3s ease-in-out',
           display: 'inline-flex',
@@ -750,6 +889,7 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
         id="envSelect"
         value={envName}
         onChange={handleEnvChange}
+        disabled={isSavedViewer}
         style={{
           padding: '6px 10px',
           borderRadius: '6px',
@@ -827,18 +967,19 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
           <label htmlFor='loadModel' style={{ fontWeight: 1000 }}>Rollout Status:</label>
           <button
             onClick={() => togglePause()}
+            disabled={isSavedViewer}
             style={{
               padding: '0.5rem 1.2rem',
               fontSize: '1rem',
-              backgroundColor: isPaused ? '#10b981' : '#ef4444',
+              backgroundColor: isSavedViewer ? '#94a3b8' : isPaused ? '#10b981' : '#ef4444',
               color: 'white',
               border: 'none',
               borderRadius: '8px',
-              cursor: 'pointer',
+              cursor: isSavedViewer ? 'not-allowed' : 'pointer',
               boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
             }}
           >
-            {isPaused ? '▶ Continue' : '⏸ Pause'}
+            {isSavedViewer ? 'Saved Viewer' : isPaused ? '▶ Continue' : '⏸ Pause'}
           </button>
           <button
             onClick={setShowSavePopupToTrue}
@@ -857,124 +998,162 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
             {saving_rollouts ? "Saving..." : "💾 Save Rollouts"}
           </button>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', justifyContent: 'center' }}>
-          <label htmlFor='loadModel' style={{ fontWeight: 600 }}>Load Model:</label>
-          <input
-            id='loadModel'
-            type="file"
-            accept=".zip"
-            onChange={handleModelUpload}
-            style={{ maxWidth: 260 }}
-          />
+        <div style={{display: 'flex', alignItems: 'center', gap: '0.75rem', justifyContent:'center'}}>
+          <select
+            value={selectedRolloutFile}
+            onChange={(e) => setSelectedRolloutFile(e.target.value)}
+            style={{ padding: '.35rem .5rem', minWidth: 180 }}
+            title="Saved rollout JSON files from the rollouts folder"
+          >
+            <option value="">(Saved rollouts)</option>
+            {rolloutFiles.map((fileName) => (
+              <option key={fileName} value={fileName}>{fileName}</option>
+            ))}
+          </select>
+          <button
+            onClick={loadSavedRollouts}
+            disabled={loadingSavedRollouts || !selectedRolloutFile}
+            style={{
+              backgroundColor: "#475569",
+              color: "white",
+              fontWeight: 600,
+              padding: "8px 12px",
+              border: "none",
+              borderRadius: "6px",
+              cursor: loadingSavedRollouts || !selectedRolloutFile ? "not-allowed" : "pointer",
+              boxShadow: "0 1px 2px rgba(0,0,0,0.1)",
+            }}
+            title="Load a saved rollout JSON from the rollouts folder"
+          >
+            {loadingSavedRollouts ? "Loading..." : "Load Rollouts"}
+          </button>
+        </div>
+        
+        <div style={{ marginTop: '1rem', textAlign: 'center' }}>
+          <h3 style={{ fontSize: '1.6rem', marginBottom: '1rem', color: '#3b82f6' }}>🎮 Model Controls 🎮</h3>
+          {/* Row: “Load Model” label + file picker */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', justifyContent: 'center' }}>
+            <label htmlFor='loadModel' style={{ fontWeight: 600 }}>Load Model:</label>
+            <input
+              id='loadModel'
+              type="file"
+              accept=".zip"
+              onChange={handleModelUpload}
+              style={{ maxWidth: 260 }}
+            />
           <button
             onClick={uploadAndLoad}
-            disabled={!file || loading}
+            disabled={isSavedViewer || !file || loading}
             style={{ padding: '.4rem .75rem' }}
             title="Upload selected .zip and load into this rollout session"
           >
-            {loading ? "Uploading..." : "Upload & Load"}
-          </button>
-        </div>
-
-        {/* Row: server model dropdown */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', justifyContent: 'center' }}>
-          <label htmlFor="serverModel" style={{ fontWeight: 600 }}>From Server:</label>
-          <button
-          onClick={getRootSavedModelsLink}
-          onMouseEnter={() => setHoverOnFilePathButton(true)}
-          onMouseLeave={() => setHoverOnFilePathButton(false)}
-          style={{
-            border: "none",
-            background: "transparent",
-            cursor: "pointer",
-            fontSize: "1rem", // small text-sized
-            padding: "0.2rem",
-          }}
-          title={filePathCopied ? "Copied!" : "Copy folder link"}
-        >
-          {hoverOnFilePathButton ? "🔗" : "📁"}
-        </button>
-        {/* Short notification */}
-        {filePathCopied && (
-          <div
-            style={{
-              position: "absolute",
-              top: "-1.5rem",
-              left: "50%",
-              transform: "translateX(-50%)",
-              background: "#333",
-              color: "#fff",
-              fontSize: "0.75rem",
-              padding: "2px 6px",
-              borderRadius: "4px",
-              whiteSpace: "nowrap",
-            }}
-          >
-            Copied!
+              {loading ? "Uploading..." : "Upload & Load"}
+            </button>
           </div>
-        )}
+
+          {/* Row: server model dropdown */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', justifyContent: 'center' }}>
+            <label htmlFor="serverModel" style={{ fontWeight: 600 }}>From Server:</label>
+            <button
+            onClick={getRootSavedModelsLink}
+            onMouseEnter={() => setHoverOnFilePathButton(true)}
+            onMouseLeave={() => setHoverOnFilePathButton(false)}
+            style={{
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              fontSize: "1rem", // small text-sized
+              padding: "0.2rem",
+            }}
+            title={filePathCopied ? "Copied!" : "Copy folder link"}
+          >
+            {hoverOnFilePathButton ? "🔗" : "📁"}
+          </button>
+          {/* Short notification */}
+          {filePathCopied && (
+            <div
+              style={{
+                position: "absolute",
+                top: "-1.5rem",
+                left: "50%",
+                transform: "translateX(-50%)",
+                background: "#333",
+                color: "#fff",
+                fontSize: "0.75rem",
+                padding: "2px 6px",
+                borderRadius: "4px",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Copied!
+            </div>
+          )}
           <select
             id="serverModel"
             value={selectedServerModel}
             onChange={(e) => setSelectedServerModel(e.target.value)}
+            disabled={isSavedViewer}
             style={{ padding: '.35rem .5rem', minWidth: 260 }}
           >
-            <option value="">(None — random rollout)</option>
-            {serverModels.map(m => (
-              <option key={m} value={m}>{m}</option>
-            ))}
-          </select>
+              <option value="">(None — random policy)</option>
+              {serverModels.map(m => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
           <button
             onClick={deleteAllTempModels}
+            disabled={isSavedViewer}
             onMouseEnter={() => setHoverOnDeleteAllTempButton(true)}
-            onMouseLeave={() => setHoverOnDeleteAllTempButton(false)}
-            style={{
-              border: "none",
-              background: "transparent",
-              cursor: "pointer",
-              fontSize: "1rem", // small text-sized
-              padding: "0.2rem",
-            }}
-            title={"Delete ALl models in the temporary directory"}
-          >
-            {hoverOnDeleteAllTemp ? "🗑 Delete All" : "🗑"}
-          </button>
+              onMouseLeave={() => setHoverOnDeleteAllTempButton(false)}
+              style={{
+                border: "none",
+                background: "transparent",
+                cursor: "pointer",
+                fontSize: "1rem", // small text-sized
+                padding: "0.2rem",
+              }}
+              title={"Delete ALl models in the temporary directory"}
+            >
+              {hoverOnDeleteAllTemp ? "🗑 Delete All" : "🗑"}
+            </button>
           <button
             onClick={reloadTempModels}
+            disabled={isSavedViewer}
             onMouseEnter={() => setHoveronReloadTempModels(true)}
-            onMouseLeave={() => setHoveronReloadTempModels(false)}
-            style={{
-              border: "none",
-              background: "transparent",
-              cursor: "pointer",
-              fontSize: "1rem", // small text-sized
-              padding: "0.2rem",
-            }}
-            title="Reload all models in the temporary directory"
-          >
-            {hoveronReloadTempModels ? "↻ Reload" : "↻"}
-          </button>
+              onMouseLeave={() => setHoveronReloadTempModels(false)}
+              style={{
+                border: "none",
+                background: "transparent",
+                cursor: "pointer",
+                fontSize: "1rem", // small text-sized
+                padding: "0.2rem",
+              }}
+              title="Reload all models in the temporary directory"
+            >
+              {hoveronReloadTempModels ? "↻ Reload" : "↻"}
+            </button>
           <button
             onClick={loadServerModel}
-            disabled={loading}
-            style={{ padding: '.4rem .75rem',
-              backgroundColor: !isUsingNone ? '#d1d5db' : '#10b981'
-            }}
+            disabled={isSavedViewer || loading}
+              style={{ padding: '.4rem .75rem',
+                backgroundColor: !isUsingNone ? '#d1d5db' : '#10b981'
+              }}
 
-            title="Load the selected server model (or None)"
-          >
-            {loading ? "Loading..." : "Use Selection"}
-          </button>
+              title="Load the selected server model (or None)"
+            >
+              {loading ? "Loading..." : "Use Selection"}
+            </button>
           <button
             onClick={useNone}
-            disabled={loading}
-            style={{ padding: '.4rem .75rem', 
-              backgroundColor: isUsingNone ? '#d1d5db' : '#10b981'
-            }}
-            title="Clear model for this session (random rollout)"
-          >
-            Use None
-          </button>
+            disabled={isSavedViewer || loading}
+              style={{ padding: '.4rem .75rem', 
+                backgroundColor: isUsingNone ? '#d1d5db' : '#10b981'
+              }}
+              title="Clear model for this session (random rollout)"
+            >
+              Use None
+            </button>
+          </div>
         </div>
       </div>
       
@@ -984,6 +1163,7 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
         <select 
           value={stepInterval}
           onChange={(e) => changeNumberOfSteps(e.target.value)}
+          disabled={isSavedViewer}
           style={{
             padding: "4px",
             borderRadius: "4px",
@@ -1099,30 +1279,49 @@ function RolloutWindow({ isActive = false, onSidebarStateChange = () => {} }) {
         }}
       />
     </div>
-      <div style={{ width: '100%', maxWidth: '600px', height: '300px', margin: '0 auto'}}>
-        <Line
-          data={{
-            labels: rollouts.map((r) => r.episode).reverse(),
-            datasets: [
-              {
-                label: "Reward",
-                data: rollouts.map((r) => r.reward).reverse(),
-                fill: false,
-                borderColor: 'rgb(56, 189, 248)',
-                backgroundColor: 'rgba(56, 189, 248, 0.2)',
-                tension: 0.25,
+      <div style={{ width: '100%', maxWidth: '1000px', margin: '0 auto', overflowX: 'auto', paddingBottom: '0.5rem' }}>
+        <div
+          style={{
+            width: `${Math.max(
+              rolloutChartMinWidth,
+              Math.ceil(Math.max(1, rollouts.length) / rolloutChartBucketSize) * rolloutChartBucketSize * rolloutChartPointWidth
+            )}px`,
+            height: '300px',
+          }}
+        >
+          <Line
+            data={{
+              labels: rollouts.map((r) => r.episode).reverse(),
+              datasets: [
+                {
+                  label: "Reward",
+                  data: rollouts.map((r) => r.reward).reverse(),
+                  fill: false,
+                  borderColor: 'rgb(56, 189, 248)',
+                  backgroundColor: 'rgba(56, 189, 248, 0.2)',
+                  tension: 0.2,
+                  pointRadius: 0,
+                  pointHoverRadius: 3,
+                  borderWidth: 2,
+                },
+              ],
+            }}
+            options={{
+              responsive: true,
+              maintainAspectRatio: false,
+              animation: false,
+              normalized: true,
+              interaction: {
+                intersect: false,
+                mode: 'index',
               },
-            ],
-          }}
-          options={{
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-              x: { title: { display: true, text: "Episode" } },
-              y: { title: { display: true, text: "Reward" } },
-            },
-          }}
-        />
+              scales: {
+                x: { title: { display: true, text: "Episode" } },
+                y: { title: { display: true, text: "Reward" } },
+              },
+            }}
+          />
+        </div>
       </div>
     </div>
   </div>

@@ -28,7 +28,10 @@ export default defineConfig({
       },
     "/rollout_speed": 'http://localhost:8000',
     "/save_rollouts_data": 'http://localhost:8000',
+    "/load_rollouts_data": 'http://localhost:8000',
+    "/rollouts_files": 'http://localhost:8000',
     '/change_number_of_steps': 'http://localhost:8000',
+    '/delete_all_temp_models': 'http://localhost:8000',
     }
   }
 }

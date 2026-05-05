@@ -332,6 +332,9 @@ class SaveRolloutRequest(BaseModel):
     rollout_filename: str
     rollouts: list
 
+class LoadRolloutRequest(BaseModel):
+    rollout_filename: str
+
 rollouts_dir = os.path.join(os.getcwd(), "rollouts")
 os.makedirs(rollouts_dir, exist_ok=True)
 @app.post("/save_rollouts_data")
@@ -345,6 +348,21 @@ def save_rollouts_data(saveRolloutRequest: SaveRolloutRequest):
     with open(os.path.join(rollouts_dir, rollout_filename), "w") as f:
         json.dump(rollouts, f)
     return {"status": "success", "run_id": run_id, "rollouts": rollouts}
+
+@app.get("/rollouts_files")
+def list_rollouts_files():
+    files = [f for f in os.listdir(rollouts_dir) if f.endswith(".json")]
+    return {"rollouts": sorted(files)}
+
+@app.post("/load_rollouts_data")
+def load_rollouts_data(loadRolloutRequest: LoadRolloutRequest):
+    rollout_filename = os.path.basename(loadRolloutRequest.rollout_filename)
+    rollout_path = os.path.join(rollouts_dir, rollout_filename)
+    if not os.path.exists(rollout_path):
+        raise HTTPException(status_code=404, detail="Rollout file not found.")
+    with open(rollout_path, "r") as f:
+        rollouts = json.load(f)
+    return {"status": "success", "rollout_filename": rollout_filename, "rollouts": rollouts}
 class SessionState:
     def __init__(self):
         self.resume_event = asyncio.Event()
@@ -373,6 +391,9 @@ current_model = collections.defaultdict(None)
 class LoadRequest(BaseModel):
     run_id:str
     model_name:str
+
+class DeleteAllTempModelsRequest(BaseModel):
+    run_id:str
 
 @app.get("/get_model_path")
 def get_model_path():
@@ -414,6 +435,16 @@ def load_model(req: LoadRequest):
         return {"ok": True, "run_id": req.run_id, "model": req.model_name}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+@app.post("/delete_all_temp_models")
+def delete_all_temp_models(req: DeleteAllTempModelsRequest):
+    run_id = req.run_id
+    for filename in os.listdir(MODELS_DIR):
+        if filename.startswith(f"temp_{run_id}_") and filename.endswith(".zip"):
+            os.remove(os.path.join(MODELS_DIR, filename))
+    return {"ok": True, "run_id": run_id, "status": "all temp models deleted"}
+
+
 
 @app.websocket("/ws/rollout")
 async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
