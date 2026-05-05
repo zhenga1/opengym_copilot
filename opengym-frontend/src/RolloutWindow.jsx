@@ -216,17 +216,6 @@ function RolloutWindow({
     });
 
     return [
-      {
-        title: 'Training Overview',
-        labels,
-        datasets: [
-          { label: 'Eval Reward', data: orderedTicks.map((entry) => entry.evalReward ?? null), borderColor: 'rgb(16, 185, 129)', backgroundColor: 'rgb(16, 185, 129)' },
-          { label: 'Reward Mean', data: orderedTicks.map((entry) => entry.rewardMean ?? null), borderColor: 'rgb(59, 130, 246)', backgroundColor: 'rgb(59, 130, 246)' },
-          { label: 'Reward (Latest Episode)', data: orderedTicks.map((entry) => entry.reward ?? null), borderColor: 'rgb(249, 115, 22)', backgroundColor: 'rgb(249, 115, 22)' },
-          { label: 'Breakdown Total (Mean)', data: orderedTicks.map((entry) => entry.breakdownMean?.total ?? null), borderColor: 'rgb(139, 92, 246)', backgroundColor: 'rgb(139, 92, 246)' },
-          { label: 'Breakdown Total (Latest)', data: orderedTicks.map((entry) => entry.breakdown?.total ?? null), borderColor: 'rgb(236, 72, 153)', backgroundColor: 'rgb(236, 72, 153)' },
-        ],
-      },
       makeSeries('Training Eval Reward', (entry) => entry.evalReward ?? null, 'rgb(16, 185, 129)'),
       makeSeries('Training Reward Mean', (entry) => entry.rewardMean ?? null, 'rgb(59, 130, 246)'),
       makeSeries('Training Reward (Latest Episode)', (entry) => entry.reward ?? null, 'rgb(249, 115, 22)'),
@@ -278,15 +267,6 @@ function RolloutWindow({
     });
 
     return [
-      {
-        title: 'Rollout Overview',
-        labels,
-        datasets: [
-          { label: 'Total Reward', data: orderedRollouts.map((entry) => entry.reward ?? null), borderColor: 'rgb(56, 189, 248)', backgroundColor: 'rgb(56, 189, 248)' },
-          { label: 'Breakdown Total', data: orderedRollouts.map((entry) => entry.reward_breakdown?.total ?? null), borderColor: 'rgb(139, 92, 246)', backgroundColor: 'rgb(139, 92, 246)' },
-          { label: 'Native Reward', data: orderedRollouts.map((entry) => entry.reward_breakdown?.native ?? entry.reward_raw_terms?.native ?? null), borderColor: 'rgb(16, 185, 129)', backgroundColor: 'rgb(16, 185, 129)' },
-        ],
-      },
       makeSeries('Rollout Total Reward', (entry) => entry.reward ?? null, 'rgb(56, 189, 248)'),
       makeSeries('Rollout Breakdown Total', (entry) => entry.reward_breakdown?.total ?? null, 'rgb(139, 92, 246)'),
       makeSeries('Rollout Native Reward', (entry) => entry.reward_breakdown?.native ?? entry.reward_raw_terms?.native ?? null, 'rgb(16, 185, 129)'),
@@ -1155,6 +1135,7 @@ function RolloutWindow({
             justifyContent: 'space-between',
             gap: '0.75rem',
             marginBottom: '0.85rem',
+            flexWrap: 'wrap',
           }}
         >
           <button
@@ -1174,12 +1155,32 @@ function RolloutWindow({
           >
             {'<'}
           </button>
-          <div style={{ textAlign: 'center', flex: 1 }}>
+          <div style={{ textAlign: 'center', flex: '1 1 240px' }}>
             <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#334155' }}>{currentTrainingGraph.title}</div>
             <div style={{ fontSize: '0.82rem', color: '#64748b' }}>
               {trainingGraphDefinitions.length > 0 ? `${trainingGraphIndex + 1} / ${trainingGraphDefinitions.length}` : 'No training data yet'}
             </div>
           </div>
+          <select
+            value={String(trainingGraphIndex)}
+            onChange={(e) => setTrainingGraphIndex(Number(e.target.value))}
+            style={{
+              minWidth: '240px',
+              padding: '0.45rem 0.6rem',
+              borderRadius: '8px',
+              border: '1px solid #cbd5e1',
+              backgroundColor: 'white',
+              color: '#334155',
+              fontSize: '0.92rem',
+            }}
+            aria-label="Choose training reward term graph"
+          >
+            {trainingGraphDefinitions.map((graph, index) => (
+              <option key={graph.title} value={index}>
+                {graph.title}
+              </option>
+            ))}
+          </select>
           <button
             onClick={() => setTrainingGraphIndex((prev) => (prev + 1) % trainingGraphDefinitions.length)}
             disabled={trainingGraphDefinitions.length <= 1}
@@ -1589,6 +1590,7 @@ function RolloutWindow({
           justifyContent: 'space-between',
           gap: '0.75rem',
           marginBottom: '0.85rem',
+          flexWrap: 'wrap',
         }}
       >
         <button
@@ -1608,12 +1610,32 @@ function RolloutWindow({
         >
           {'<'}
         </button>
-        <div style={{ textAlign: 'center', flex: 1 }}>
+        <div style={{ textAlign: 'center', flex: '1 1 240px' }}>
           <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#334155' }}>{currentRolloutGraph.title}</div>
           <div style={{ fontSize: '0.82rem', color: '#64748b' }}>
             {rolloutGraphDefinitions.length > 0 ? `${rolloutGraphIndex + 1} / ${rolloutGraphDefinitions.length}` : 'No rollout data yet'}
           </div>
         </div>
+        <select
+          value={String(rolloutGraphIndex)}
+          onChange={(e) => setRolloutGraphIndex(Number(e.target.value))}
+          style={{
+            minWidth: '240px',
+            padding: '0.45rem 0.6rem',
+            borderRadius: '8px',
+            border: '1px solid #cbd5e1',
+            backgroundColor: 'white',
+            color: '#334155',
+            fontSize: '0.92rem',
+          }}
+          aria-label="Choose rollout reward term graph"
+        >
+          {rolloutGraphDefinitions.map((graph, index) => (
+            <option key={graph.title} value={index}>
+              {graph.title}
+            </option>
+          ))}
+        </select>
         <button
           onClick={() => setRolloutGraphIndex((prev) => (prev + 1) % rolloutGraphDefinitions.length)}
           disabled={rolloutGraphDefinitions.length <= 1}
