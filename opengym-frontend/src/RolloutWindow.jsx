@@ -44,6 +44,7 @@ function RolloutWindow({
   const [trainingRewardBreakdown, setTrainingRewardBreakdown] = useState({});
   const [trainingRewardBreakdownMean, setTrainingRewardBreakdownMean] = useState({});
   const [trainingGraphIndex, setTrainingGraphIndex] = useState(0);
+  const [rolloutGraphIndex, setRolloutGraphIndex] = useState(0);
   const [rolloutRewardBreakdown, setRolloutRewardBreakdown] = useState({});
   const [latestRolloutRawTerms, setLatestRolloutRawTerms] = useState({});
   const [rewardLogs, setRewardLogs] = useState([]);
@@ -204,11 +205,28 @@ function RolloutWindow({
     const makeSeries = (title, accessor, color) => ({
       title,
       labels,
-      values: orderedTicks.map((entry) => accessor(entry)),
-      color,
+      datasets: [
+        {
+          label: title,
+          data: orderedTicks.map((entry) => accessor(entry)),
+          borderColor: color,
+          backgroundColor: color,
+        },
+      ],
     });
 
     return [
+      {
+        title: 'Training Overview',
+        labels,
+        datasets: [
+          { label: 'Eval Reward', data: orderedTicks.map((entry) => entry.evalReward ?? null), borderColor: 'rgb(16, 185, 129)', backgroundColor: 'rgb(16, 185, 129)' },
+          { label: 'Reward Mean', data: orderedTicks.map((entry) => entry.rewardMean ?? null), borderColor: 'rgb(59, 130, 246)', backgroundColor: 'rgb(59, 130, 246)' },
+          { label: 'Reward (Latest Episode)', data: orderedTicks.map((entry) => entry.reward ?? null), borderColor: 'rgb(249, 115, 22)', backgroundColor: 'rgb(249, 115, 22)' },
+          { label: 'Breakdown Total (Mean)', data: orderedTicks.map((entry) => entry.breakdownMean?.total ?? null), borderColor: 'rgb(139, 92, 246)', backgroundColor: 'rgb(139, 92, 246)' },
+          { label: 'Breakdown Total (Latest)', data: orderedTicks.map((entry) => entry.breakdown?.total ?? null), borderColor: 'rgb(236, 72, 153)', backgroundColor: 'rgb(236, 72, 153)' },
+        ],
+      },
       makeSeries('Training Eval Reward', (entry) => entry.evalReward ?? null, 'rgb(16, 185, 129)'),
       makeSeries('Training Reward Mean', (entry) => entry.rewardMean ?? null, 'rgb(59, 130, 246)'),
       makeSeries('Training Reward (Latest Episode)', (entry) => entry.reward ?? null, 'rgb(249, 115, 22)'),
@@ -232,8 +250,67 @@ function RolloutWindow({
   const currentTrainingGraph = trainingGraphDefinitions[trainingGraphIndex] || {
     title: 'Training Reward',
     labels: [],
-    values: [],
-    color: 'rgb(56, 189, 248)',
+    datasets: [],
+  };
+
+  const rolloutGraphDefinitions = useMemo(() => {
+    const orderedRollouts = [...rollouts].reverse();
+    const labels = orderedRollouts.map((entry) => entry.episode);
+    const breakdownKeys = Array.from(
+      new Set(
+        orderedRollouts.flatMap((entry) =>
+          Object.keys(entry.reward_breakdown || {}).filter((key) => key !== 'total')
+        )
+      )
+    );
+
+    const makeSeries = (title, accessor, color) => ({
+      title,
+      labels,
+      datasets: [
+        {
+          label: title,
+          data: orderedRollouts.map((entry) => accessor(entry)),
+          borderColor: color,
+          backgroundColor: color,
+        },
+      ],
+    });
+
+    return [
+      {
+        title: 'Rollout Overview',
+        labels,
+        datasets: [
+          { label: 'Total Reward', data: orderedRollouts.map((entry) => entry.reward ?? null), borderColor: 'rgb(56, 189, 248)', backgroundColor: 'rgb(56, 189, 248)' },
+          { label: 'Breakdown Total', data: orderedRollouts.map((entry) => entry.reward_breakdown?.total ?? null), borderColor: 'rgb(139, 92, 246)', backgroundColor: 'rgb(139, 92, 246)' },
+          { label: 'Native Reward', data: orderedRollouts.map((entry) => entry.reward_breakdown?.native ?? entry.reward_raw_terms?.native ?? null), borderColor: 'rgb(16, 185, 129)', backgroundColor: 'rgb(16, 185, 129)' },
+        ],
+      },
+      makeSeries('Rollout Total Reward', (entry) => entry.reward ?? null, 'rgb(56, 189, 248)'),
+      makeSeries('Rollout Breakdown Total', (entry) => entry.reward_breakdown?.total ?? null, 'rgb(139, 92, 246)'),
+      makeSeries('Rollout Native Reward', (entry) => entry.reward_breakdown?.native ?? entry.reward_raw_terms?.native ?? null, 'rgb(16, 185, 129)'),
+      ...breakdownKeys.map((key, index) =>
+        makeSeries(
+          `Rollout Breakdown: ${key}`,
+          (entry) => entry.reward_breakdown?.[key] ?? null,
+          `hsl(${(index * 53 + 25) % 360} 74% 52%)`
+        )
+      ),
+      ...breakdownKeys.map((key, index) =>
+        makeSeries(
+          `Rollout Raw Term: ${key}`,
+          (entry) => entry.reward_raw_terms?.[key] ?? null,
+          `hsl(${(index * 53 + 205) % 360} 70% 45%)`
+        )
+      ),
+    ];
+  }, [rollouts]);
+
+  const currentRolloutGraph = rolloutGraphDefinitions[rolloutGraphIndex] || {
+    title: 'Rollout Reward',
+    labels: [],
+    datasets: [],
   };
 
   const saveRewardConfig = useCallback(async () => {
@@ -411,6 +488,14 @@ function RolloutWindow({
     }
     setTrainingGraphIndex((prev) => prev % trainingGraphDefinitions.length);
   }, [trainingGraphDefinitions.length]);
+
+  useEffect(() => {
+    if (rolloutGraphDefinitions.length === 0) {
+      setRolloutGraphIndex(0);
+      return;
+    }
+    setRolloutGraphIndex((prev) => prev % rolloutGraphDefinitions.length);
+  }, [rolloutGraphDefinitions.length]);
 
   useEffect(() => {
     let retryTimeout;
@@ -1125,20 +1210,24 @@ function RolloutWindow({
           <Line
             data={{
               labels: currentTrainingGraph.labels,
-              datasets: [
-                {
-                  label: currentTrainingGraph.title,
-                  data: currentTrainingGraph.values,
-                  fill: false,
-                  borderColor: currentTrainingGraph.color,
-                  backgroundColor: currentTrainingGraph.color,
-                  tension: 0.25,
-                },
-              ],
+              datasets: currentTrainingGraph.datasets.map((dataset) => ({
+                ...dataset,
+                fill: false,
+                tension: 0.25,
+                pointRadius: 0,
+                pointHoverRadius: 3,
+                borderWidth: 2,
+              })),
             }}
             options={{
               responsive: true,
               maintainAspectRatio: false,
+              animation: false,
+              normalized: true,
+              interaction: {
+                intersect: false,
+                mode: 'index',
+              },
               scales: {
                 x: { title: { display: true, text: "Training Steps" } },
                 y: { title: { display: true, text: "Reward" } },
@@ -1493,6 +1582,56 @@ function RolloutWindow({
           }}
         />
       </div>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '0.75rem',
+          marginBottom: '0.85rem',
+        }}
+      >
+        <button
+          onClick={() => setRolloutGraphIndex((prev) => (prev - 1 + rolloutGraphDefinitions.length) % rolloutGraphDefinitions.length)}
+          disabled={rolloutGraphDefinitions.length <= 1}
+          style={{
+            width: '32px',
+            height: '32px',
+            borderRadius: '999px',
+            border: '1px solid #cbd5e1',
+            backgroundColor: 'white',
+            cursor: rolloutGraphDefinitions.length <= 1 ? 'not-allowed' : 'pointer',
+            fontWeight: 700,
+            color: '#334155',
+          }}
+          aria-label="Show previous rollout graph"
+        >
+          {'<'}
+        </button>
+        <div style={{ textAlign: 'center', flex: 1 }}>
+          <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#334155' }}>{currentRolloutGraph.title}</div>
+          <div style={{ fontSize: '0.82rem', color: '#64748b' }}>
+            {rolloutGraphDefinitions.length > 0 ? `${rolloutGraphIndex + 1} / ${rolloutGraphDefinitions.length}` : 'No rollout data yet'}
+          </div>
+        </div>
+        <button
+          onClick={() => setRolloutGraphIndex((prev) => (prev + 1) % rolloutGraphDefinitions.length)}
+          disabled={rolloutGraphDefinitions.length <= 1}
+          style={{
+            width: '32px',
+            height: '32px',
+            borderRadius: '999px',
+            border: '1px solid #cbd5e1',
+            backgroundColor: 'white',
+            cursor: rolloutGraphDefinitions.length <= 1 ? 'not-allowed' : 'pointer',
+            fontWeight: 700,
+            color: '#334155',
+          }}
+          aria-label="Show next rollout graph"
+        >
+          {'>'}
+        </button>
+      </div>
       <div style={{ width: '100%', maxWidth: '1000px', margin: '0 auto', overflowX: 'auto', paddingBottom: '0.5rem' }}>
         <div
           style={{
@@ -1505,20 +1644,15 @@ function RolloutWindow({
         >
           <Line
             data={{
-              labels: rollouts.map((r) => r.episode).reverse(),
-              datasets: [
-                {
-                  label: "Reward",
-                  data: rollouts.map((r) => r.reward).reverse(),
-                  fill: false,
-                  borderColor: 'rgb(56, 189, 248)',
-                  backgroundColor: 'rgba(56, 189, 248, 0.2)',
-                  tension: 0.2,
-                  pointRadius: 0,
-                  pointHoverRadius: 3,
-                  borderWidth: 2,
-                },
-              ],
+              labels: currentRolloutGraph.labels,
+              datasets: currentRolloutGraph.datasets.map((dataset) => ({
+                ...dataset,
+                fill: false,
+                tension: 0.2,
+                pointRadius: 0,
+                pointHoverRadius: 3,
+                borderWidth: 2,
+              })),
             }}
             options={{
               responsive: true,
