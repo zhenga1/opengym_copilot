@@ -209,10 +209,8 @@ def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_step
             device="cpu",
         )
         preview_model.policy.load_state_dict(model.policy.state_dict())
-        current_model[run_id] = preview_model
+        training_preview_model[run_id] = preview_model
         eval_env = make_reward_wrapped_env(env_name, run_id=run_id, render_mode=None)
-    else:
-        current_model[run_id] = model
 
     class ModelSyncCallback(BaseCallback):
         def __init__(self, run_id: str, source_model: Any, target_model: Any, every_n_steps: int = 100, eval_env=None, status_dict=None):
@@ -230,7 +228,7 @@ def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_step
         def _sync_once(self):
             if self.target_model is None:
                 return
-            with current_model_locks[self.run_id]:
+            with training_preview_model_locks[self.run_id]:
                 self.target_model.policy.load_state_dict(self.source_model.policy.state_dict())
 
         def _evaluate_once(self):
@@ -239,7 +237,7 @@ def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_step
             obs, _ = self.eval_env.reset()
             total_reward = 0.0
             for _ in range(1000):
-                with current_model_locks[self.run_id]:
+                with training_preview_model_locks[self.run_id]:
                     action, _ = self.target_model.predict(obs, deterministic=True)
                 obs, reward, terminated, truncated, _ = self.eval_env.step(action)
                 total_reward += float(reward)
@@ -312,6 +310,9 @@ def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_step
                 model_env.close()
             if eval_env is not None:
                 eval_env.close()
+            if run_id in training_preview_model:
+                with training_preview_model_locks[run_id]:
+                    training_preview_model[run_id] = preview_model
     Thread(target=train).start()
     # status option
     return model
@@ -501,6 +502,8 @@ else:
 import collections
 current_model = collections.defaultdict(None)
 current_model_locks = collections.defaultdict(Lock)
+training_preview_model = collections.defaultdict(None)
+training_preview_model_locks = collections.defaultdict(Lock)
 class LoadRequest(BaseModel):
     run_id:str
     model_name:str
@@ -648,8 +651,8 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                 await asyncio.sleep(0.1)
             if train_mode:
                 with torch.no_grad():
-                    active_model = current_model.get(run_id) or model
-                    with current_model_locks[run_id]:
+                    active_model = training_preview_model.get(run_id) or model
+                    with training_preview_model_locks[run_id]:
                         action, _ = active_model.predict(obs, deterministic=True)
                     #print("example action output: ", action)
                     if isinstance(env.action_space, gym.spaces.Discrete):

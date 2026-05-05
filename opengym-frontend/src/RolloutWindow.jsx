@@ -76,6 +76,9 @@ function RolloutWindow({
   }
   const timestamp = formatDate(Date.now());
   const rewardLogLimit = 30;
+  const trainingChartMinWidth = 600;
+  const trainingChartPointWidth = 36;
+  const trainingChartBucketSize = 25;
   const rolloutChartMinWidth = 600;
   const rolloutChartPointWidth = 36;
   const rolloutChartBucketSize = 25;
@@ -544,6 +547,7 @@ function RolloutWindow({
               at: data.ts ? new Date(data.ts * 1000).toLocaleTimeString() : 'training update',
             });
           } else {
+            console.log("Received Episode data: ", data.type, data);
             // if data.type is not session
             if(data.ep_frames.length > 0){
               setFrames(data.ep_frames);        // store all frames
@@ -989,31 +993,43 @@ function RolloutWindow({
         <option value="InvertedDoublePendulum-v4">InvertedDoublePendulum-v4</option>
       </select>
     </div>
-    {trainMode && (<div style={{ ...sectionPanelStyle, width: '100%', maxWidth: '100%', height: '300px', margin: '0 auto'}}>
-        <Line
-          data={{
-            labels: trainingRollouts.map((r) => r.step).reverse(),
-            datasets: [
-              {
-                label: "Reward",
-                data: trainingRollouts.map((r) => r.reward).reverse(),
-                fill: false,
-                borderColor: 'rgb(56, 189, 248)',
-                backgroundColor: 'rgba(56, 189, 248, 0.2)',
-                tension: 0.25,
+    {trainMode && (
+      <div style={{ ...sectionPanelStyle, width: '100%', maxWidth: '100%', margin: '0 auto', overflowX: 'auto', paddingBottom: '0.5rem' }}>
+        <div
+          style={{
+            width: `${Math.max(
+              trainingChartMinWidth,
+              Math.ceil(Math.max(1, trainingRollouts.length) / trainingChartBucketSize) * trainingChartBucketSize * trainingChartPointWidth
+            )}px`,
+            height: '300px',
+          }}
+        >
+          <Line
+            data={{
+              labels: trainingRollouts.map((r) => r.step).reverse(),
+              datasets: [
+                {
+                  label: "Reward",
+                  data: trainingRollouts.map((r) => r.reward).reverse(),
+                  fill: false,
+                  borderColor: 'rgb(56, 189, 248)',
+                  backgroundColor: 'rgba(56, 189, 248, 0.2)',
+                  tension: 0.25,
+                },
+              ],
+            }}
+            options={{
+              responsive: true,
+              maintainAspectRatio: false,
+              scales: {
+                x: { title: { display: true, text: "Training Steps" } },
+                y: { title: { display: true, text: "Reward" } },
               },
-            ],
-          }}
-          options={{
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-              x: { title: { display: true, text: "Training Steps" } },
-              y: { title: { display: true, text: "Reward" } },
-            },
-          }}
-        />
-      </div>)}
+            }}
+          />
+        </div>
+      </div>
+    )}
     {trainMode && (
       <ProgressBar isTraining={trainMode} runId={runId} />
   )}
@@ -1331,34 +1347,34 @@ function RolloutWindow({
         <strong style={{ color: '#10b981' }}>{episodeInfo.reward}</strong>
       </p>
       <div style={{ marginTop: "2rem", textAlign: "center" }}>
-      <label htmlFor="rolloutSpeed" style={{ fontWeight: 600 }}>
-        ⚡ Rollout Speed (FPS):
-      </label>
-      <br />
-      <input
-        id="rolloutSpeed"
-        type="range"
-        min="1"
-        max="500"
-        step="10"
-        value={rolloutSpeed}
-        onChange={(e) => updateRolloutSpeed(Number(e.target.value))}
-        style={{ width: "200px", margin: "0.5rem" }}
-      />
-      <input
-        type="number"
-        min="1"
-        step="10"
-        value={rolloutSpeed}
-        onChange={(e) => updateRolloutSpeed(Number(e.target.value))}
-        style={{
-          width: "70px",
-          padding: "4px",
-          border: "1px solid #d1d5db",
-          borderRadius: "4px",
-        }}
-      />
-    </div>
+        <label htmlFor="rolloutSpeed" style={{ fontWeight: 600 }}>
+          ⚡ Rollout Speed (FPS):
+        </label>
+        <br />
+        <input
+          id="rolloutSpeed"
+          type="range"
+          min="1"
+          max="500"
+          step="10"
+          value={rolloutSpeed}
+          onChange={(e) => updateRolloutSpeed(Number(e.target.value))}
+          style={{ width: "200px", margin: "0.5rem" }}
+        />
+        <input
+          type="number"
+          min="1"
+          step="10"
+          value={rolloutSpeed}
+          onChange={(e) => updateRolloutSpeed(Number(e.target.value))}
+          style={{
+            width: "70px",
+            padding: "4px",
+            border: "1px solid #d1d5db",
+            borderRadius: "4px",
+          }}
+        />
+      </div>
       <div style={{ width: '100%', maxWidth: '1000px', margin: '0 auto', overflowX: 'auto', paddingBottom: '0.5rem' }}>
         <div
           style={{
