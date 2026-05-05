@@ -6,10 +6,13 @@ import axios from "axios";
 export default function ProgressBar({ isTraining, runId }) {
   const [progress, setProgress] = useState(0);
   const [processComplete, setProcessComplete] = useState(false);
+  const [statusText, setStatusText] = useState("Training in progress...");
 
   useEffect(() => {
     if (!isTraining) {
       setProgress(0);
+      setProcessComplete(false);
+      setStatusText("Training in progress...");
       return;
     }
     if (!runId) {
@@ -26,19 +29,30 @@ export default function ProgressBar({ isTraining, runId }) {
         console.log("RESPONSE data:", res.data.progress);
         const value = res.data.progress;
         setProgress(value);
+        if (res.data.status === "error") {
+          setStatusText(`Training error: ${res.data.error || "unknown error"}`);
+          clearInterval(interval);
+          return;
+        }
 
-        if (value >= 100) {
+        if (res.data.status === "done" || value >= 100) {
           clearInterval(interval);
           setProcessComplete(true);
+          setStatusText("Training complete!");
+        } else {
+          const total = Number(res.data.total_steps || 0);
+          const done = Number(res.data.steps_done || 0);
+          setStatusText(total > 0 ? `Training ${done} / ${total} steps` : "Training in progress...");
         }
       } catch (err) {
         console.error("Error fetching progress:", err);
+        setStatusText("Training status unavailable.");
         clearInterval(interval);
       }
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [isTraining]);
+  }, [isTraining, runId]);
 
   if (!isTraining) return null;
 
@@ -57,11 +71,11 @@ export default function ProgressBar({ isTraining, runId }) {
           height: '100%',
           width: `${progress}%`,
           backgroundColor: '#3b82f6',
-          animation: 'progress-slide 1.5s infinite ease-in-out'
+          transition: 'width 0.45s ease-out'
         }} />
       </div>
       <p style={{ marginTop: '0.5rem', color: '#4b5563', fontWeight: 500 }}>
-        {processComplete ? "Training complete!" : "Training in progress..."}
+        {processComplete ? "Training complete!" : statusText}
       </p>
     </div>
   );

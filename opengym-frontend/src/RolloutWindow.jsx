@@ -530,7 +530,7 @@ function RolloutWindow({
             // set the training rollouts to the right value
             console.log("Received tick data: ", data);
             const rewardData = {
-              reward: data.reward ?? data.reward_breakdown?.total ?? 0,
+              reward: data.eval_reward ?? data.reward_mean ?? data.reward ?? data.reward_breakdown_mean?.total ?? data.reward_breakdown?.total ?? 0,
               step: data.step,
             };
             setTrainingRollouts((prev) => [rewardData, ...prev.slice(0, 19)]);
@@ -545,9 +545,6 @@ function RolloutWindow({
             });
           } else {
             // if data.type is not session
-            setEpisodeInfo({ episode: data.episode, reward: data.reward });
-            setRolloutRewardBreakdown(data.reward_breakdown || {});
-            setLatestRolloutRawTerms(data.reward_raw_terms || {});
             if(data.ep_frames.length > 0){
               setFrames(data.ep_frames);        // store all frames
               setCurrentFrame(0);            // start at first frame
@@ -566,14 +563,19 @@ function RolloutWindow({
               reward_breakdown: data.reward_breakdown || {},
               reward_raw_terms: data.reward_raw_terms || {},
             };
-            setRollouts((prev) => [newData, ...prev]);
-            appendRewardLog({
-              source: 'rollout',
-              label: `Episode ${data.episode}`,
-              total: data.reward,
-              breakdown: data.reward_breakdown || {},
-              at: new Date().toLocaleTimeString(),
-            });
+            if (!trainMode) {
+              setEpisodeInfo({ episode: data.episode, reward: data.reward });
+              setRolloutRewardBreakdown(data.reward_breakdown || {});
+              setLatestRolloutRawTerms(data.reward_raw_terms || {});
+              setRollouts((prev) => [newData, ...prev]);
+              appendRewardLog({
+                source: 'rollout',
+                label: `Episode ${data.episode}`,
+                total: data.reward,
+                breakdown: data.reward_breakdown || {},
+                at: new Date().toLocaleTimeString(),
+              });
+            }
           };
         };
         ws.onerror = (err) => console.error("WebSocket Error: ", err);
@@ -946,7 +948,7 @@ function RolloutWindow({
             responsive: true,
             maintainAspectRatio: false,
             scales: {
-              x: { title: { display: true, text: "Episode" } },
+              x: { title: { display: true, text: "Training Steps" } },
               y: { title: { display: true, text: "Reward" } },
             },
           }}
@@ -1245,7 +1247,7 @@ function RolloutWindow({
     )}
 
     <div style={{ marginTop: '3rem' }}>
-      <h3 style={{ fontSize: '1.25rem', color: '#6366f1' }}>📈 Reward Chart</h3>
+      <h3 style={{ fontSize: '1.6rem', color: '#6366f1' }}>📈 Reward Chart</h3>
       <p>
         Episode <strong>{episodeInfo.episode}</strong>, Reward:{' '}
         <strong style={{ color: '#10b981' }}>{episodeInfo.reward}</strong>

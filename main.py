@@ -71,8 +71,9 @@ class ProgressBarCallback(BaseCallback):
     
     def _on_step(self) -> bool:
         global train_run_progress
-        # bound the progress bar percentage by the minimum of n_calls and total_timesteps, so self.n_calls never exceeds self.total_timesteps
-        pct = 100 * min(self.n_calls, self.total_timesteps) / self.total_timesteps
+        # For vectorized envs, num_timesteps reflects true progress; n_calls undercounts by n_envs.
+        steps_done = int(getattr(self.model, "num_timesteps", 0)) # type: ignore[attr-defined]
+        pct = 100 * min(steps_done, self.total_timesteps) / self.total_timesteps
         # file.write(f"Progress: {pct:.2f}%\n")
         # file.write(f"n_calls: {self.n_calls}\n total_timesteps: {self.total_timesteps}\n")
         # file.flush()
@@ -97,7 +98,7 @@ def make_frame_sender(ws_manager, encoder):
     return _send_frame
     
 from fastapi import WebSocket, APIRouter, WebSocketDisconnect
-from threading import Thread
+from threading import Thread, Lock
 from datetime import datetime
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 default_model_path = f"models/ppo_model_{env_name}_{timestamp}.zip"
@@ -174,10 +175,93 @@ def make_training_env_factory(env_name: str, run_id: str | None):
 
 
 #@app.post("/start")
-def start_training(model: Any = None, run_id: str = None, train_steps:int = 1000, reset_num_timesteps = False,callback: Any = None,
-                   ws_manager=None, frame_fn=None, every_n_steps:int = 100):
+def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_steps:int = 1000, reset_num_timesteps = False, callback: Any = None,
+                   ws_manager=None, frame_fn=None, every_n_steps:int = 100, model: Any = None):
     ensure_sb3_available()
     RUNS_TRAINING_STATUS.setdefault(run_id, {"status": "running", "model_path": None, "error": None})
+    preview_model = None
+    eval_env = None
+
+    if model is None:
+        vec_env = DummyVecEnv(
+            [make_training_env_factory(env_name, run_id=run_id) for _ in range(8)]
+        )
+
+        device = "cpu"
+        if run_id in training_model_devices:
+            device = training_model_devices[run_id]
+
+        model = PPO(
+            "MlpPolicy",
+            vec_env,
+            verbose=1,
+            device=device,
+            tensorboard_log="./tensorboard_logs"
+        )
+
+        preview_env = DummyVecEnv(
+            [make_training_env_factory(env_name, run_id=run_id)]
+        )
+        preview_model = PPO(
+            "MlpPolicy",
+            preview_env,
+            verbose=0,
+            device="cpu",
+        )
+        preview_model.policy.load_state_dict(model.policy.state_dict())
+        current_model[run_id] = preview_model
+        eval_env = make_reward_wrapped_env(env_name, run_id=run_id, render_mode=None)
+    else:
+        current_model[run_id] = model
+
+    class ModelSyncCallback(BaseCallback):
+        def __init__(self, run_id: str, source_model: Any, target_model: Any, every_n_steps: int = 100, eval_env=None, status_dict=None):
+            super().__init__()
+            self.run_id = run_id
+            self.source_model = source_model
+            self.target_model = target_model
+            self.every_n_steps = max(1, every_n_steps)
+            self.eval_every_n_steps = max(1000, every_n_steps * 5)
+            self.eval_env = eval_env
+            self.status_dict = status_dict
+            self._last_sync = 0
+            self._last_eval = 0
+
+        def _sync_once(self):
+            if self.target_model is None:
+                return
+            with current_model_locks[self.run_id]:
+                self.target_model.policy.load_state_dict(self.source_model.policy.state_dict())
+
+        def _evaluate_once(self):
+            if self.target_model is None or self.eval_env is None or self.status_dict is None:
+                return
+            obs, _ = self.eval_env.reset()
+            total_reward = 0.0
+            for _ in range(1000):
+                with current_model_locks[self.run_id]:
+                    action, _ = self.target_model.predict(obs, deterministic=True)
+                obs, reward, terminated, truncated, _ = self.eval_env.step(action)
+                total_reward += float(reward)
+                if terminated or truncated:
+                    break
+            self.status_dict[self.run_id]["eval_reward"] = float(total_reward)
+
+        def _on_step(self) -> bool:
+            if self.target_model is None:
+                return True
+            steps_done = int(getattr(self.model, "num_timesteps", 0)) # type: ignore[attr-defined]
+            if (steps_done - self._last_sync) >= self.every_n_steps:
+                self._last_sync = steps_done
+                self._sync_once()
+            if (steps_done - self._last_eval) >= self.eval_every_n_steps:
+                self._last_eval = steps_done
+                self._evaluate_once()
+            return True
+
+        def _on_training_end(self) -> None:
+            self._sync_once()
+            self._evaluate_once()
 
     # Build a progress callback
     progress_data_cb = TrainingProgressCallback(
@@ -190,13 +274,26 @@ def start_training(model: Any = None, run_id: str = None, train_steps:int = 1000
         send_frame=None#make_frame_sender(ws_manager, encoder=encode_jpeg) if (ws_manager and frame_fn) else None,
     )
 
-    callbacks_list = CallbackList([progress_data_cb, callback])
+    sync_model_cb = ModelSyncCallback(
+        run_id,
+        model,
+        preview_model,
+        every_n_steps=every_n_steps,
+        eval_env=eval_env,
+        status_dict=RUNS_TRAINING_STATUS,
+    )
+    callback_items = [progress_data_cb, sync_model_cb]
+    if callback is not None:
+        callback_items.append(callback)
+    callbacks_list = CallbackList(callback_items)
 
     def train():
         global train_run_progress, RUNS_TRAINING_STATUS
         train_run_progress = 0
         try:
-            model.learn(total_timesteps=train_steps, reset_num_timesteps=False, callback=callbacks_list)
+            RUNS_TRAINING_STATUS[run_id]["status"] = "running"
+            RUNS_TRAINING_STATUS[run_id]["error"] = None
+            model.learn(total_timesteps=train_steps, reset_num_timesteps=reset_num_timesteps, callback=callbacks_list)
             train_model_actual_path = ""
             if run_id not in trained_model_paths:
                 train_model_actual_path = default_model_path
@@ -213,9 +310,11 @@ def start_training(model: Any = None, run_id: str = None, train_steps:int = 1000
             model_env = model.get_env()
             if model_env is not None:
                 model_env.close()
+            if eval_env is not None:
+                eval_env.close()
     Thread(target=train).start()
     # status option
-    return {"status": "training started"}
+    return model
 
 import os
 from fastapi import UploadFile, File
@@ -278,11 +377,24 @@ class PauseRequest(BaseModel):
     paused: bool
 @app.get("/progress/{run_id}")
 def get_progress(run_id: str):
-    #return {"progress": train_run_progresses.get(run_id, 0)}
-    #     await asyncio.sleep(0.1)
-    # await websocket.close()
-    progress_bar_log_file.write(f"Put variable by name progress {train_run_progresses} for run_id {run_id}\n")
-    return {"progress": train_run_progresses.get(run_id, 0)}
+    status = RUNS_TRAINING_STATUS.get(run_id, {})
+    steps_done = int(status.get("steps_done", 0) or 0)
+    total_steps = int(status.get("total_steps", 0) or 0)
+    if total_steps > 0:
+        progress = 100 * min(steps_done, total_steps) / total_steps
+    else:
+        progress = train_run_progresses.get(run_id, 0)
+    if status.get("status") == "done":
+        progress = 100
+    progress_bar_log_file.write(f"Put variable by name progress {progress} for run_id {run_id}\n")
+    progress_bar_log_file.flush()
+    return {
+        "progress": progress,
+        "status": status.get("status", "unknown"),
+        "steps_done": steps_done,
+        "total_steps": total_steps,
+        "error": status.get("error"),
+    }
 
 import uuid
 def generate_run_id():
@@ -388,6 +500,7 @@ else:
 
 import collections
 current_model = collections.defaultdict(None)
+current_model_locks = collections.defaultdict(Lock)
 class LoadRequest(BaseModel):
     run_id:str
     model_name:str
@@ -417,7 +530,8 @@ def load_model(req: LoadRequest):
     from os.path import join, exists
     print("model loading began: ")
     if req.model_name == "":
-        current_model[req.run_id]  = None
+        with current_model_locks[req.run_id]:
+            current_model[req.run_id]  = None
         print("load model is None")
         return {"ok": True, "run_id": req.run_id, "model":""}
     path = join(MODELS_DIR, req.model_name)
@@ -430,7 +544,8 @@ def load_model(req: LoadRequest):
     # if state is None:
     #     return {"ok": False, "error": "session_not_found"}
     try:
-        current_model[req.run_id] = PPO.load(path)
+        with current_model_locks[req.run_id]:
+            current_model[req.run_id] = PPO.load(path)
         print("load model is", current_model)
         return {"ok": True, "run_id": req.run_id, "model": req.model_name}
     except Exception as e:
@@ -502,32 +617,12 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
         print("Model loaded: ", model)
         if train_mode:
             ensure_sb3_available()
-            # Vectorized env (many copies simiultaneously) improves sample efficiency and speed
-            vec_env = DummyVecEnv(
-                [make_training_env_factory(env_name, run_id=run_id) for _ in range(8)]
-            )
-
-
-            # Check for GPU availability and use it
-            device = "cpu"#"cuda" if torch.cuda.is_available() else "cpu"
-
-            if run_id in training_model_devices:
-                device = training_model_devices[run_id]
-
-            model = PPO(
-                "MlpPolicy",
-                vec_env,
-                verbose=1,
-                device=device,
-                tensorboard_log="./tensorboard_logs"  # optional: for better training monitoring
-            )
-            
             # Train
             callback = ProgressBarCallback(total_timesteps=train_steps, runId=run_id)
             global train_run_progress
             train_run_progress= 0
 
-            start_training(model, run_id=run_id, train_steps=train_steps, reset_num_timesteps=False, callback=callback, 
+            model = start_training(run_id=run_id, env_name=env_name, train_steps=train_steps, reset_num_timesteps=False, callback=callback, 
                            ws_manager=ws_manager, frame_fn=render_env, every_n_steps=100)
         obs, _ = env.reset()
         step = 0
@@ -552,9 +647,10 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                 print("Rollout paused for 0.1 seconds")
                 await asyncio.sleep(0.1)
             if train_mode:
-                obs_tensor = torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0).to("cpu")
                 with torch.no_grad():
-                    action, _ = model.predict(obs_tensor)
+                    active_model = current_model.get(run_id) or model
+                    with current_model_locks[run_id]:
+                        action, _ = active_model.predict(obs, deterministic=True)
                     #print("example action output: ", action)
                     if isinstance(env.action_space, gym.spaces.Discrete):
                         action = int(np.asarray(action).reshape(-1)[0])
@@ -565,10 +661,10 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                 if run_id not in current_model or current_model[run_id] is None:
                     action = env.action_space.sample()
                 else:
-                    obs_tensor = torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0).to("cpu")
                     #print("--- Using custom model right now ---")
                     with torch.no_grad():
-                        action, _ = current_model[run_id].predict(obs_tensor)
+                        with current_model_locks[run_id]:
+                            action, _ = current_model[run_id].predict(obs, deterministic=True)
                         if isinstance(env.action_space, gym.spaces.Discrete):
                             action = int(np.asarray(action).reshape(-1)[0])
                         else:

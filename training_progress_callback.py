@@ -43,6 +43,7 @@ class TrainingProgressCallback(BaseCallback):
         status.setdefault("steps_done", 0)
         status.setdefault("reward_last", None)
         status.setdefault("reward_mean", None)
+        status.setdefault("eval_reward", None)
         status.setdefault("reward_breakdown_last", {})
         status.setdefault("reward_breakdown_mean", {})
         status.setdefault("fps", None)
@@ -115,6 +116,7 @@ class TrainingProgressCallback(BaseCallback):
                         "step": steps_done,
                         "reward": reward_last,
                         "reward_mean": reward_mean,
+                        "eval_reward": status.get("eval_reward"),
                         "reward_breakdown": reward_breakdown_last,
                         "reward_breakdown_mean": reward_breakdown_mean,
                         "fps": fps,
