@@ -533,7 +533,7 @@ function RolloutWindow({
             // set the training rollouts to the right value
             console.log("Received tick data: ", data);
             const rewardData = {
-              reward: data.eval_reward ?? data.reward_mean ?? data.reward ?? data.reward_breakdown_mean?.total ?? data.reward_breakdown?.total ?? 0,
+              reward: data.reward_breakdown_mean?.total ?? data.reward_mean ?? data.reward_breakdown?.total ?? data.reward ?? 0,
               step: data.step,
             };
             setTrainingRollouts((prev) => [rewardData, ...prev.slice(0, 19)]);
