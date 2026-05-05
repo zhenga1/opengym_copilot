@@ -40,6 +40,7 @@ except ModuleNotFoundError as exc:
 
 trained_model_paths = {} # run_id to most recent saved model paths
 training_model_devices = {} # run_id to device to use
+training_hyperparams_by_run = {} # run_id to ppo/training config
 RUNS_TRAINING_STATUS = {}  # run_id -> {"status": "running|done|error", "model_path": str|None, ...}
 reward_configs_by_run = {}  # run_id -> {"env_name": str, "terms": list[dict]}
 
@@ -123,6 +124,70 @@ class RewardConfigUpdateRequest(BaseModel):
     terms: list[RewardTermPayload]
 
 
+DEFAULT_TRAINING_HYPERPARAMS = {
+    "learning_rate": 3e-4,
+    "lr_schedule": "constant",
+    "n_steps": 2048,
+    "batch_size": 64,
+    "n_epochs": 10,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip_range": 0.2,
+    "ent_coef": 0.0,
+    "vf_coef": 0.5,
+    "max_grad_norm": 0.5,
+    "model_size": "medium",
+}
+
+MODEL_SIZE_TO_NET_ARCH = {
+    "small": [64, 64],
+    "medium": [128, 128],
+    "large": [256, 256],
+}
+
+
+def normalize_training_hyperparams(params: dict | None) -> dict:
+    current = dict(DEFAULT_TRAINING_HYPERPARAMS)
+    if params:
+        current.update(params)
+
+    current["learning_rate"] = float(current["learning_rate"])
+    current["lr_schedule"] = str(current["lr_schedule"]).lower()
+    if current["lr_schedule"] not in {"constant", "linear", "cosine"}:
+        current["lr_schedule"] = "constant"
+
+    current["n_steps"] = max(32, int(current["n_steps"]))
+    current["batch_size"] = max(8, int(current["batch_size"]))
+    current["n_epochs"] = max(1, int(current["n_epochs"]))
+    current["gamma"] = float(current["gamma"])
+    current["gae_lambda"] = float(current["gae_lambda"])
+    current["clip_range"] = float(current["clip_range"])
+    current["ent_coef"] = float(current["ent_coef"])
+    current["vf_coef"] = float(current["vf_coef"])
+    current["max_grad_norm"] = float(current["max_grad_norm"])
+    model_size = str(current["model_size"]).lower()
+    current["model_size"] = model_size if model_size in MODEL_SIZE_TO_NET_ARCH else "medium"
+    return current
+
+
+def get_training_hyperparams_for_run(run_id: str | None) -> dict:
+    if not run_id:
+        return dict(DEFAULT_TRAINING_HYPERPARAMS)
+    if run_id not in training_hyperparams_by_run:
+        training_hyperparams_by_run[run_id] = dict(DEFAULT_TRAINING_HYPERPARAMS)
+    training_hyperparams_by_run[run_id] = normalize_training_hyperparams(training_hyperparams_by_run[run_id])
+    return training_hyperparams_by_run[run_id]
+
+
+def build_learning_rate_schedule(initial_lr: float, strategy: str):
+    strategy = strategy.lower()
+    if strategy == "linear":
+        return lambda progress_remaining: float(initial_lr) * max(float(progress_remaining), 0.0)
+    if strategy == "cosine":
+        return lambda progress_remaining: float(initial_lr) * 0.5 * (1.0 + np.cos(np.pi * (1.0 - max(float(progress_remaining), 0.0))))
+    return float(initial_lr)
+
+
 def get_reward_terms_for_run(run_id: str | None, env_name: str) -> list[dict]:
     if not run_id:
         return reward_template_for_env(env_name)
@@ -181,6 +246,7 @@ def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_step
     RUNS_TRAINING_STATUS.setdefault(run_id, {"status": "running", "model_path": None, "error": None})
     preview_model = None
     eval_env = None
+    training_hyperparams = get_training_hyperparams_for_run(run_id)
 
     if model is None:
         vec_env = DummyVecEnv(
@@ -191,12 +257,35 @@ def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_step
         if run_id in training_model_devices:
             device = training_model_devices[run_id]
 
+        policy_kwargs = {
+            "net_arch": dict(
+                pi=MODEL_SIZE_TO_NET_ARCH[training_hyperparams["model_size"]],
+                vf=MODEL_SIZE_TO_NET_ARCH[training_hyperparams["model_size"]],
+            )
+        }
+
+        learning_rate = build_learning_rate_schedule(
+            training_hyperparams["learning_rate"],
+            training_hyperparams["lr_schedule"],
+        )
+
         model = PPO(
             "MlpPolicy",
             vec_env,
             verbose=1,
             device=device,
-            tensorboard_log="./tensorboard_logs"
+            tensorboard_log="./tensorboard_logs",
+            learning_rate=learning_rate,
+            n_steps=training_hyperparams["n_steps"],
+            batch_size=training_hyperparams["batch_size"],
+            n_epochs=training_hyperparams["n_epochs"],
+            gamma=training_hyperparams["gamma"],
+            gae_lambda=training_hyperparams["gae_lambda"],
+            clip_range=training_hyperparams["clip_range"],
+            ent_coef=training_hyperparams["ent_coef"],
+            vf_coef=training_hyperparams["vf_coef"],
+            max_grad_norm=training_hyperparams["max_grad_norm"],
+            policy_kwargs=policy_kwargs,
         )
 
         preview_env = DummyVecEnv(
@@ -207,6 +296,17 @@ def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_step
             preview_env,
             verbose=0,
             device="cpu",
+            learning_rate=learning_rate,
+            n_steps=training_hyperparams["n_steps"],
+            batch_size=training_hyperparams["batch_size"],
+            n_epochs=training_hyperparams["n_epochs"],
+            gamma=training_hyperparams["gamma"],
+            gae_lambda=training_hyperparams["gae_lambda"],
+            clip_range=training_hyperparams["clip_range"],
+            ent_coef=training_hyperparams["ent_coef"],
+            vf_coef=training_hyperparams["vf_coef"],
+            max_grad_norm=training_hyperparams["max_grad_norm"],
+            policy_kwargs=policy_kwargs,
         )
         preview_model.policy.load_state_dict(model.policy.state_dict())
         training_preview_model[run_id] = preview_model
@@ -291,6 +391,7 @@ def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_step
         try:
             RUNS_TRAINING_STATUS[run_id]["status"] = "running"
             RUNS_TRAINING_STATUS[run_id]["error"] = None
+            RUNS_TRAINING_STATUS[run_id]["hyperparams"] = training_hyperparams
             model.learn(total_timesteps=train_steps, reset_num_timesteps=reset_num_timesteps, callback=callbacks_list)
             stop_requested = bool(RUNS_TRAINING_STATUS[run_id].get("stop", False))
             train_model_actual_path = ""
@@ -439,6 +540,7 @@ class SetTrainingDirRequest(BaseModel):
     run_id: str
     train_dir_path: str
     device:str
+    training_hyperparams: dict | None = None
 
 @app.post("/set_training_dir")
 def set_training_dir(req: SetTrainingDirRequest):
@@ -450,8 +552,14 @@ def set_training_dir(req: SetTrainingDirRequest):
     print("Device obtainied ", device)
     trained_model_paths[run_id] = where_to_save_trained_model
     training_model_devices[run_id] = device
+    training_hyperparams_by_run[run_id] = normalize_training_hyperparams(req.training_hyperparams)
     # Here you would typically set the training directory for the session
-    return {"status": "training directory set", "run_id": run_id, "path": where_to_save_trained_model}
+    return {
+        "status": "training directory set",
+        "run_id": run_id,
+        "path": where_to_save_trained_model,
+        "training_hyperparams": training_hyperparams_by_run[run_id],
+    }
 
 class SaveRolloutRequest(BaseModel):
     run_id: str

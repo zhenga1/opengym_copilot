@@ -79,9 +79,6 @@ function RolloutWindow({
   }
   const timestamp = formatDate(Date.now());
   const rewardLogLimit = 30;
-  const trainingChartMinWidth = 600;
-  const trainingChartPointWidth = 36;
-  const trainingChartBucketSize = 25;
   const rolloutChartMinWidth = 600;
   const rolloutChartPointWidth = 36;
   const rolloutChartBucketSize = 25;
@@ -351,6 +348,20 @@ function RolloutWindow({
 
   const [showPathPopup, setShowPathPopup] = useState(false);
   const [trainingPath, setTrainingPath] = useState("models/basic_model.zip");
+  const [trainingHyperparams, setTrainingHyperparams] = useState({
+    learning_rate: 0.0003,
+    lr_schedule: "constant",
+    n_steps: 2048,
+    batch_size: 64,
+    n_epochs: 10,
+    gamma: 0.99,
+    gae_lambda: 0.95,
+    clip_range: 0.2,
+    ent_coef: 0.0,
+    vf_coef: 0.5,
+    max_grad_norm: 0.5,
+    model_size: "medium",
+  });
 
   // basically triggers the /models POST request again so the models can be read again
   const [reloadAllTempModelsSwitcher, setReloadAllTempModelsSwitcher] = useState(false);
@@ -397,7 +408,7 @@ function RolloutWindow({
       console.error("Failed to set rollout speed:", e);
     }
   };
-  const saveTrainingPath = async (path, device) => {
+  const saveTrainingPath = async (path, device, nextTrainingHyperparams) => {
     if (!runId) {
       console.warn("Run ID not set yet, cannot pause/resume");
       return;
@@ -406,8 +417,14 @@ function RolloutWindow({
       // Set Train path FIRST
       // THEN SET THE TRAIN MODE AND toggle pause
       // persist to backend (example endpoint)
-      await axios.post("/set_training_dir", { "run_id": runId, "train_dir_path": path, "device": device });
+      await axios.post("/set_training_dir", {
+        "run_id": runId,
+        "train_dir_path": path,
+        "device": device,
+        "training_hyperparams": nextTrainingHyperparams,
+      });
       setTrainingPath(path);
+      setTrainingHyperparams(nextTrainingHyperparams);
       closePathPopup();
 
       toggleTrainPauseTogether();
@@ -658,7 +675,7 @@ function RolloutWindow({
               breakdown: data.reward_breakdown || {},
               breakdownMean: data.reward_breakdown_mean || {},
             };
-            setTrainingRollouts((prev) => [rewardData, ...prev.slice(0, 19)]);
+            setTrainingRollouts((prev) => [rewardData, ...prev]);
             setTrainingRewardBreakdown(data.reward_breakdown || {});
             setTrainingRewardBreakdownMean(data.reward_breakdown_mean || {});
             appendRewardLog({
@@ -1073,6 +1090,7 @@ function RolloutWindow({
       <SetPathPopup
         isOpen={showPathPopup}
         defaultPath={frozenPath !== null ? frozenPath : `models/ppo_model_${envName}_${timestamp}.zip`}
+        defaultHyperparams={trainingHyperparams}
         onConfirm={saveTrainingPath}
         onClose={closePathPopup}
       />
@@ -1127,7 +1145,18 @@ function RolloutWindow({
       </select>
     </div>
     {trainMode && (
-      <div style={{ ...sectionPanelStyle, width: '100%', maxWidth: '100%', margin: '0 auto', overflowX: 'auto', paddingBottom: '0.5rem' }}>
+      <div
+        style={{
+          ...sectionPanelStyle,
+          width: '100%',
+          maxWidth: '100%',
+          minWidth: 0,
+          margin: '0 auto',
+          paddingBottom: '0.5rem',
+          overflow: 'hidden',
+          boxSizing: 'border-box',
+        }}
+      >
         <div
           style={{
             display: 'flex',
@@ -1201,11 +1230,12 @@ function RolloutWindow({
         </div>
         <div
           style={{
-            width: `${Math.max(
-              trainingChartMinWidth,
-              Math.ceil(Math.max(1, trainingRollouts.length) / trainingChartBucketSize) * trainingChartBucketSize * trainingChartPointWidth
-            )}px`,
+            position: 'relative',
+            width: '100%',
+            maxWidth: '100%',
+            minWidth: 0,
             height: '300px',
+            overflow: 'hidden',
           }}
         >
           <Line
@@ -1230,7 +1260,13 @@ function RolloutWindow({
                 mode: 'index',
               },
               scales: {
-                x: { title: { display: true, text: "Training Steps" } },
+                x: {
+                  title: { display: true, text: "Training Steps" },
+                  ticks: {
+                    autoSkip: true,
+                    maxTicksLimit: 10,
+                  },
+                },
                 y: { title: { display: true, text: "Reward" } },
               },
             }}
