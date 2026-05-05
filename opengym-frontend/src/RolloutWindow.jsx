@@ -777,17 +777,59 @@ function RolloutWindow({
       console.error("Failed to copy: ", err);
     }
   };
+  const workspaceShellStyle = {
+    background: 'linear-gradient(145deg, #f0f9ff, #e0e7ff)',
+    borderRadius: '18px',
+    border: '1px solid rgba(148, 163, 184, 0.18)',
+    boxShadow: '0 8px 20px rgba(0,0,0,0.1)',
+    padding: '1.35rem',
+  };
+
+  const workspaceHeaderStyle = {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: '1rem',
+    flexWrap: 'wrap',
+    marginBottom: '1rem',
+  };
+
+  const workspaceMetaStyle = {
+    color: '#64748b',
+    fontSize: '0.9rem',
+    maxWidth: '52rem',
+    lineHeight: 1.5,
+  };
+
+  const sectionPanelStyle = {
+    background: 'rgba(255,255,255,0.55)',
+    borderRadius: '14px',
+    border: '1px solid rgba(148, 163, 184, 0.18)',
+    padding: '1rem',
+    marginTop: '1rem',
+  };
+
+  const statusBadgeStyle = (backgroundColor) => ({
+    padding: '0.55rem 0.95rem',
+    borderRadius: '999px',
+    backgroundColor,
+    color: '#fff',
+    fontWeight: 700,
+    boxShadow: '0 8px 20px rgba(15, 23, 42, 0.12)',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '0.45rem',
+  });
   return (
   <div
     style={{
-      padding: '2rem',
+      padding: '1.25rem',
       fontFamily: 'Segoe UI, sans-serif',
       width: '100%',
-      maxWidth: '900px',
+      maxWidth: '1040px',
       margin: '0 auto',
-      background: 'linear-gradient(145deg, #f0f9ff, #e0e7ff)',
-      borderRadius: '12px',
-      boxShadow: '0 8px 20px rgba(0,0,0,0.1)'
+      display: 'grid',
+      gap: '1.25rem',
     }}
   >
     {isSavedViewer && (
@@ -806,12 +848,29 @@ function RolloutWindow({
         Saved Rollout Viewer{viewerLabel ? `: ${viewerLabel}` : ''}
       </div>
     )}
-    <h1 style={{ fontSize: '2.2rem', fontWeight: 700, textAlign: 'center', color: '#4f46e5' }}>
+    <div style={{ ...workspaceShellStyle, textAlign: 'center', padding: '1.25rem 1.5rem' }}>
+    <h1 style={{ fontSize: '2.2rem', fontWeight: 700, textAlign: 'center', color: '#4f46e5', margin: 0 }}>
       ⚡ OpenGym Copilot
     </h1>
-    <h3 style={{ fontSize: '1.6rem', marginBottom: '1rem', color: '#3b82f6' }}>🎮 Training Controls 🎮</h3>
+    <div style={{ marginTop: '0.35rem', color: '#64748b', fontSize: '0.95rem' }}>
+      Training and rollout playback now live in separate workspaces so they read as two different jobs.
+    </div>
+    </div>
+
+    <div style={workspaceShellStyle}>
+    <div style={workspaceHeaderStyle}>
+      <div style={{ textAlign: 'left' }}>
+        <h3 style={{ fontSize: '1.6rem', margin: 0, color: '#3b82f6' }}>🧠 Training Workspace</h3>
+        <div style={workspaceMetaStyle}>
+          Configure the environment, total steps, and training session here. This area is only about background learning and policy progress.
+        </div>
+      </div>
+      <div style={statusBadgeStyle(isSavedViewer ? '#94a3b8' : trainMode ? '#3b82f6' : '#94a3b8')}>
+        <span>{trainMode ? 'Training Active' : 'Training Idle'}</span>
+      </div>
+    </div>
       
-    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+    <div style={{ ...sectionPanelStyle, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
       <label htmlFor="trainSteps" style={{ fontWeight: 600 }}>
         🧠 Train Steps:
       </label>
@@ -846,11 +905,12 @@ function RolloutWindow({
     {/* Top Control Row */}
     <div
       style={{
+        ...sectionPanelStyle,
         display: 'flex',
         gap: '1rem',
         alignItems: 'center',
-        margin: '2rem 0 1rem 0',
         justifyContent: 'center',
+        flexWrap: 'wrap',
       }}
     >
       <button
@@ -929,7 +989,7 @@ function RolloutWindow({
         <option value="InvertedDoublePendulum-v4">InvertedDoublePendulum-v4</option>
       </select>
     </div>
-    {trainMode && (<div style={{ width: '100%', maxWidth: '600px', height: '300px', margin: '0 auto'}}>
+    {trainMode && (<div style={{ ...sectionPanelStyle, width: '100%', maxWidth: '100%', height: '300px', margin: '0 auto'}}>
         <Line
           data={{
             labels: trainingRollouts.map((r) => r.step).reverse(),
@@ -957,13 +1017,24 @@ function RolloutWindow({
     {trainMode && (
       <ProgressBar isTraining={trainMode} runId={runId} />
   )}
+    </div>
 
 
       {/* Playback Controls */}
-      <div style={{ marginTop: '2rem', textAlign: 'center' }}>
-        <h3 style={{ fontSize: '1.6rem', marginBottom: '1rem', color: '#3b82f6' }}>🎮 Simulation Controls 🎮</h3>
+      <div style={workspaceShellStyle}>
+        <div style={workspaceHeaderStyle}>
+          <div style={{ textAlign: 'left' }}>
+            <h3 style={{ fontSize: '1.6rem', margin: 0, color: '#3b82f6' }}>🎮 Rollout Workspace</h3>
+            <div style={workspaceMetaStyle}>
+              This workspace handles playback, model swapping, saved rollout loading, frame inspection, and the rollout-only reward chart.
+            </div>
+          </div>
+          <div style={statusBadgeStyle(isSavedViewer ? '#64748b' : isPaused ? '#10b981' : '#ef4444')}>
+            <span>{isSavedViewer ? 'Saved Viewer' : isPaused ? 'Rollout Paused' : 'Rollout Live'}</span>
+          </div>
+        </div>
         
-        <div style={{ display: 'grid', gap: '0.75rem', margin: '1rem 0' }}>
+        <div style={{ ...sectionPanelStyle, display: 'grid', gap: '0.75rem', margin: '1rem 0' }}>
         {/* Row: “Load Model” label + file picker */}
         <div style={{display: 'flex', alignItems: 'center', gap: '0.75rem', justifyContent:'center'}}>
           <label htmlFor='loadModel' style={{ fontWeight: 1000 }}>Rollout Status:</label>
@@ -1031,8 +1102,11 @@ function RolloutWindow({
           </button>
         </div>
         
-        <div style={{ marginTop: '1rem', textAlign: 'center' }}>
-          <h3 style={{ fontSize: '1.6rem', marginBottom: '1rem', color: '#3b82f6' }}>🎮 Model Controls 🎮</h3>
+        <div style={{ ...sectionPanelStyle, marginTop: '1rem', textAlign: 'center' }}>
+          <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem', color: '#334155' }}>Model Controls</h3>
+          <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '1rem' }}>
+            Swap preview policies here without touching the training setup above.
+          </div>
           {/* Row: “Load Model” label + file picker */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', justifyContent: 'center' }}>
             <label htmlFor='loadModel' style={{ fontWeight: 600 }}>Load Model:</label>
@@ -1160,7 +1234,8 @@ function RolloutWindow({
       </div>
       
       {/* Playback Controls */}
-      <p style={{ fontSize: '1rem'}}>
+      <div style={sectionPanelStyle}>
+      <p style={{ fontSize: '1rem', marginTop: 0 }}>
         Simulating per every {" "}
         <select 
           value={stepInterval}
@@ -1196,10 +1271,10 @@ function RolloutWindow({
         <button style={buttonStyle('#8b5cf6')} onClick={handlePause}>⏸ Pause</button>
         <button style={buttonStyle('#f97316')} onClick={handleRestart}>⏮ Restart</button>
       </div>
-    </div>
+      </div>
 
     {/* Playback Speed Slider */}
-    <div style={{ marginTop: '2rem', textAlign: 'center' }}>
+    <div style={{ ...sectionPanelStyle, marginTop: '1rem', textAlign: 'center' }}>
       <label htmlFor="replaySpeed" style={{ fontWeight: 600 }}>
         🎞 Frame Playback Speed:
       </label>
@@ -1231,7 +1306,7 @@ function RolloutWindow({
     </div>
     {/*<RolloutSlideshow/>*/}
     {frames && frames.length > 0 && (
-      <div style={{ marginTop: '2rem', textAlign: 'center' }}>
+      <div style={{ ...sectionPanelStyle, marginTop: '1rem', textAlign: 'center' }}>
         <img
           src={`data:image/jpeg;base64,${frames[currentFrame]}`}
           alt={`frame ${currentFrame}`}
@@ -1246,8 +1321,11 @@ function RolloutWindow({
       </div>
     )}
 
-    <div style={{ marginTop: '3rem' }}>
-      <h3 style={{ fontSize: '1.6rem', color: '#6366f1' }}>📈 Reward Chart</h3>
+    <div style={{ ...sectionPanelStyle, marginTop: '1rem' }}>
+      <h3 style={{ fontSize: '1.6rem', color: '#6366f1', marginTop: 0 }}>📈 Rollout Reward Chart</h3>
+      <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
+        This chart is reserved for rollout episodes only. Training rewards stay in the workspace above.
+      </div>
       <p>
         Episode <strong>{episodeInfo.episode}</strong>, Reward:{' '}
         <strong style={{ color: '#10b981' }}>{episodeInfo.reward}</strong>
@@ -1325,6 +1403,7 @@ function RolloutWindow({
           />
         </div>
       </div>
+    </div>
     </div>
   </div>
 );
