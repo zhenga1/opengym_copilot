@@ -18,6 +18,7 @@ export default defineConfig({
     '/models' : 'http://localhost:8000',
     '/get_model_path': 'http://localhost:8000',
     '/set_training_dir': 'http://localhost:8000',
+    '/stop_training': 'http://localhost:8000',
     '/unique_run_id': 'http://localhost:8000',
     '/reward_config': 'http://localhost:8000',
     "/training_runs": {

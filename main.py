@@ -292,19 +292,21 @@ def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_step
             RUNS_TRAINING_STATUS[run_id]["status"] = "running"
             RUNS_TRAINING_STATUS[run_id]["error"] = None
             model.learn(total_timesteps=train_steps, reset_num_timesteps=reset_num_timesteps, callback=callbacks_list)
+            stop_requested = bool(RUNS_TRAINING_STATUS[run_id].get("stop", False))
             train_model_actual_path = ""
             if run_id not in trained_model_paths:
                 train_model_actual_path = default_model_path
             else:
                 train_model_actual_path = trained_model_paths[run_id]
             model.save(train_model_actual_path)
-            RUNS_TRAINING_STATUS[run_id]["status"] = "done"
             RUNS_TRAINING_STATUS[run_id]["model_path"] = train_model_actual_path
-            print("Training complete")
+            RUNS_TRAINING_STATUS[run_id]["status"] = "stopped" if stop_requested else "done"
+            print("Training stopped early" if stop_requested else "Training complete")
         except Exception as e:
             RUNS_TRAINING_STATUS[run_id]["status"] = "error"
             RUNS_TRAINING_STATUS[run_id]["error"] = str(e)
         finally:
+            RUNS_TRAINING_STATUS[run_id]["stop"] = False
             model_env = model.get_env()
             if model_env is not None:
                 model_env.close()
@@ -376,6 +378,8 @@ def update_reward_config(req: RewardConfigUpdateRequest):
 
 class PauseRequest(BaseModel):
     paused: bool
+class StopTrainingRequest(BaseModel):
+    run_id: str
 @app.get("/progress/{run_id}")
 def get_progress(run_id: str):
     status = RUNS_TRAINING_STATUS.get(run_id, {})
@@ -396,6 +400,15 @@ def get_progress(run_id: str):
         "total_steps": total_steps,
         "error": status.get("error"),
     }
+
+@app.post("/stop_training")
+def stop_training(req: StopTrainingRequest):
+    run_id = req.run_id
+    status = RUNS_TRAINING_STATUS.setdefault(run_id, {"status": "unknown"})
+    status["stop"] = True
+    if status.get("status") == "running":
+        status["status"] = "stopping"
+    return {"status": status.get("status", "stopping"), "run_id": run_id}
 
 import uuid
 def generate_run_id():

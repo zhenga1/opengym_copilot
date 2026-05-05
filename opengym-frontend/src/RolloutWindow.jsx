@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import {Line} from 'react-chartjs-2'
 import SetPathPopup from './SetPathPopup'
 import SaveRolloutPopup from './RolloutPopup'
@@ -33,6 +33,7 @@ function RolloutWindow({
   // whether to train in the backend
   const [trainSteps, setTrainSteps] = useState(1000);
   const [trainMode, setTrainMode] = useState(false);
+  const [stoppingTraining, setStoppingTraining] = useState(false);
   // Stores info on the CURRENT episode
   const [episodeInfo, setEpisodeInfo] = useState({episode: 0, reward: 0});
   const [rewardConfig, setRewardConfig] = useState([]);
@@ -42,6 +43,7 @@ function RolloutWindow({
   const [supportsCustomReward, setSupportsCustomReward] = useState(false);
   const [trainingRewardBreakdown, setTrainingRewardBreakdown] = useState({});
   const [trainingRewardBreakdownMean, setTrainingRewardBreakdownMean] = useState({});
+  const [trainingGraphIndex, setTrainingGraphIndex] = useState(0);
   const [rolloutRewardBreakdown, setRolloutRewardBreakdown] = useState({});
   const [latestRolloutRawTerms, setLatestRolloutRawTerms] = useState({});
   const [rewardLogs, setRewardLogs] = useState([]);
@@ -191,6 +193,48 @@ function RolloutWindow({
       };
     });
   }, [computeBreakdownFromRawTerms]);
+
+  const trainingGraphDefinitions = useMemo(() => {
+    const orderedTicks = [...trainingRollouts].reverse();
+    const labels = orderedTicks.map((entry) => entry.step);
+    const latestBreakdownKeys = Object.keys(trainingRewardBreakdown || {}).filter((key) => key !== 'total');
+    const meanBreakdownKeys = Object.keys(trainingRewardBreakdownMean || {}).filter((key) => key !== 'total');
+    const breakdownKeys = Array.from(new Set([...latestBreakdownKeys, ...meanBreakdownKeys]));
+
+    const makeSeries = (title, accessor, color) => ({
+      title,
+      labels,
+      values: orderedTicks.map((entry) => accessor(entry)),
+      color,
+    });
+
+    return [
+      makeSeries('Training Eval Reward', (entry) => entry.evalReward ?? null, 'rgb(16, 185, 129)'),
+      makeSeries('Training Reward Mean', (entry) => entry.rewardMean ?? null, 'rgb(59, 130, 246)'),
+      makeSeries('Training Reward (Latest Episode)', (entry) => entry.reward ?? null, 'rgb(249, 115, 22)'),
+      makeSeries('Training Breakdown Total (Mean)', (entry) => entry.breakdownMean?.total ?? null, 'rgb(139, 92, 246)'),
+      makeSeries('Training Breakdown Total (Latest)', (entry) => entry.breakdown?.total ?? null, 'rgb(236, 72, 153)'),
+      ...breakdownKeys.flatMap((key, index) => ([
+        makeSeries(
+          `Training Breakdown Mean: ${key}`,
+          (entry) => entry.breakdownMean?.[key] ?? null,
+          `hsl(${(index * 47 + 190) % 360} 72% 48%)`
+        ),
+        makeSeries(
+          `Training Breakdown Latest: ${key}`,
+          (entry) => entry.breakdown?.[key] ?? null,
+          `hsl(${(index * 47 + 20) % 360} 78% 56%)`
+        ),
+      ])),
+    ];
+  }, [trainingRewardBreakdown, trainingRewardBreakdownMean, trainingRollouts]);
+
+  const currentTrainingGraph = trainingGraphDefinitions[trainingGraphIndex] || {
+    title: 'Training Reward',
+    labels: [],
+    values: [],
+    color: 'rgb(56, 189, 248)',
+  };
 
   const saveRewardConfig = useCallback(async () => {
     if (isSavedViewer) {
@@ -359,6 +403,14 @@ function RolloutWindow({
       hydrateLoadedRollouts(initialRollouts);
     }
   }, [hydrateLoadedRollouts, initialRollouts, isSavedViewer]);
+
+  useEffect(() => {
+    if (trainingGraphDefinitions.length === 0) {
+      setTrainingGraphIndex(0);
+      return;
+    }
+    setTrainingGraphIndex((prev) => prev % trainingGraphDefinitions.length);
+  }, [trainingGraphDefinitions.length]);
 
   useEffect(() => {
     let retryTimeout;
@@ -534,8 +586,12 @@ function RolloutWindow({
             // set the training rollouts to the right value
             console.log("Received tick data: ", data);
             const rewardData = {
-              reward: data.reward_breakdown_mean?.total ?? data.reward_mean ?? data.reward_breakdown?.total ?? data.reward ?? 0,
               step: data.step,
+              evalReward: data.eval_reward ?? null,
+              rewardMean: data.reward_mean ?? null,
+              reward: data.reward ?? null,
+              breakdown: data.reward_breakdown || {},
+              breakdownMean: data.reward_breakdown_mean || {},
             };
             setTrainingRollouts((prev) => [rewardData, ...prev.slice(0, 19)]);
             setTrainingRewardBreakdown(data.reward_breakdown || {});
@@ -650,6 +706,19 @@ function RolloutWindow({
     openPathPopup();
     // process the trainMode variable WITHIN the popup (i.e. after popup closes)
   }
+
+  const stopTraining = async () => {
+    if (!runId || stoppingTraining) return;
+    setStoppingTraining(true);
+    try {
+      await axios.post("/stop_training", { run_id: runId });
+      setTrainMode(false);
+    } catch (e) {
+      console.error("Failed to stop training:", e);
+    } finally {
+      setStoppingTraining(false);
+    }
+  };
   const buttonStyle = (bg) => ({
     padding: '0.4rem 1rem',
     backgroundColor: bg,
@@ -915,17 +984,17 @@ function RolloutWindow({
       }}
     >
       <button
-        onClick={toggleTrainMode}
-        disabled={isSavedViewer || trainMode}
+        onClick={trainMode ? stopTraining : toggleTrainMode}
+        disabled={isSavedViewer || stoppingTraining}
         style={{
           padding: '0.7rem 1.25rem',
           fontSize: '1rem',
-          backgroundColor: isSavedViewer ? '#cbd5e1' : trainMode ? '#2563eb' : '#0f766e',
+          backgroundColor: isSavedViewer ? '#cbd5e1' : stoppingTraining ? '#94a3b8' : trainMode ? '#dc2626' : '#0f766e',
           color: 'white',
           border: 'none',
           borderRadius: '999px', // pill shape
-          cursor: isSavedViewer || trainMode ? 'not-allowed' : 'pointer',
-          boxShadow: trainMode ? '0 8px 18px rgba(37, 99, 235, 0.22)' : '0 8px 18px rgba(15, 118, 110, 0.18)',
+          cursor: isSavedViewer || stoppingTraining ? 'not-allowed' : 'pointer',
+          boxShadow: trainMode ? '0 8px 18px rgba(220, 38, 38, 0.22)' : '0 8px 18px rgba(15, 118, 110, 0.18)',
           transition: 'all 0.3s ease-in-out',
           display: 'inline-flex',
           alignItems: 'center',
@@ -934,7 +1003,7 @@ function RolloutWindow({
           opacity: isSavedViewer ? 0.7 : 1,
         }}
       >
-        {trainMode ? '🧠 Training In Progress' : '▶ Start Training'}
+        {stoppingTraining ? 'Stopping...' : trainMode ? '■ Stop Training' : '▶ Start Training'}
       </button>
       <SetPathPopup
         isOpen={showPathPopup}
@@ -996,6 +1065,56 @@ function RolloutWindow({
       <div style={{ ...sectionPanelStyle, width: '100%', maxWidth: '100%', margin: '0 auto', overflowX: 'auto', paddingBottom: '0.5rem' }}>
         <div
           style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.75rem',
+            marginBottom: '0.85rem',
+          }}
+        >
+          <button
+            onClick={() => setTrainingGraphIndex((prev) => (prev - 1 + trainingGraphDefinitions.length) % trainingGraphDefinitions.length)}
+            disabled={trainingGraphDefinitions.length <= 1}
+            style={{
+              width: '32px',
+              height: '32px',
+              borderRadius: '999px',
+              border: '1px solid #cbd5e1',
+              backgroundColor: 'white',
+              cursor: trainingGraphDefinitions.length <= 1 ? 'not-allowed' : 'pointer',
+              fontWeight: 700,
+              color: '#334155',
+            }}
+            aria-label="Show previous training graph"
+          >
+            {'<'}
+          </button>
+          <div style={{ textAlign: 'center', flex: 1 }}>
+            <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#334155' }}>{currentTrainingGraph.title}</div>
+            <div style={{ fontSize: '0.82rem', color: '#64748b' }}>
+              {trainingGraphDefinitions.length > 0 ? `${trainingGraphIndex + 1} / ${trainingGraphDefinitions.length}` : 'No training data yet'}
+            </div>
+          </div>
+          <button
+            onClick={() => setTrainingGraphIndex((prev) => (prev + 1) % trainingGraphDefinitions.length)}
+            disabled={trainingGraphDefinitions.length <= 1}
+            style={{
+              width: '32px',
+              height: '32px',
+              borderRadius: '999px',
+              border: '1px solid #cbd5e1',
+              backgroundColor: 'white',
+              cursor: trainingGraphDefinitions.length <= 1 ? 'not-allowed' : 'pointer',
+              fontWeight: 700,
+              color: '#334155',
+            }}
+            aria-label="Show next training graph"
+          >
+            {'>'}
+          </button>
+        </div>
+        <div
+          style={{
             width: `${Math.max(
               trainingChartMinWidth,
               Math.ceil(Math.max(1, trainingRollouts.length) / trainingChartBucketSize) * trainingChartBucketSize * trainingChartPointWidth
@@ -1005,14 +1124,14 @@ function RolloutWindow({
         >
           <Line
             data={{
-              labels: trainingRollouts.map((r) => r.step).reverse(),
+              labels: currentTrainingGraph.labels,
               datasets: [
                 {
-                  label: "Reward",
-                  data: trainingRollouts.map((r) => r.reward).reverse(),
+                  label: currentTrainingGraph.title,
+                  data: currentTrainingGraph.values,
                   fill: false,
-                  borderColor: 'rgb(56, 189, 248)',
-                  backgroundColor: 'rgba(56, 189, 248, 0.2)',
+                  borderColor: currentTrainingGraph.color,
+                  backgroundColor: currentTrainingGraph.color,
                   tension: 0.25,
                 },
               ],
