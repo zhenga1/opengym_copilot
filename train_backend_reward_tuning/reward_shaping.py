@@ -64,6 +64,7 @@ class RewardShapingWrapper(gym.Wrapper):
         self._episode_term_sums = {
             term["key"]: 0.0 for term in reward_template_for_env(self.env_name)
         }
+        self._episode_reward_history: list[dict[str, Any]] = []
 
     def reset(self, **kwargs):
         self._previous_action = None
@@ -101,6 +102,14 @@ class RewardShapingWrapper(gym.Wrapper):
         info["reward_weights"] = {
             term["key"]: float(term["weight"]) if term["enabled"] else 0.0 for term in terms
         }
+        self._episode_reward_history.append(
+            {
+                "step": len(self._episode_reward_history) + 1,
+                "reward": float(total_reward),
+                "reward_breakdown": {"total": float(total_reward), **reward_breakdown},
+                "reward_raw_terms": {key: float(value) for key, value in raw_terms.items()},
+            }
+        )
 
         if terminated or truncated:
             episode_total = float(sum(self._episode_term_sums.values()))
@@ -111,6 +120,7 @@ class RewardShapingWrapper(gym.Wrapper):
                 "total": episode_total,
                 **{key: float(value) for key, value in self._episode_term_sums.items()},
             }
+            info["reward_history_episode"] = list(self._episode_reward_history)
 
         self._previous_action = action
         return obs, float(total_reward), terminated, truncated, info

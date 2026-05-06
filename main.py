@@ -755,6 +755,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
         ep_reward = 0
         ep_reward_breakdown = {}
         ep_reward_raw_terms = {}
+        ep_reward_history = []
         send_frame_interval = 5 if run_id not in number_of_steps_dictionary else number_of_steps_dictionary[run_id]
         ep_frames = []
 
@@ -797,6 +798,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
             done = terminated or truncated
             step_reward_breakdown = info.get("reward_breakdown", {"total": float(reward)})
             step_reward_raw_terms = info.get("reward_raw_terms", {"native": float(reward)})
+            current_step = step + 1
             
             send_frame_interval = 5 if run_id not in number_of_steps_dictionary else number_of_steps_dictionary[run_id]
             ep_reward += reward
@@ -804,6 +806,12 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                 ep_reward_breakdown[key] = ep_reward_breakdown.get(key, 0.0) + float(value)
             for key, value in step_reward_raw_terms.items():
                 ep_reward_raw_terms[key] = ep_reward_raw_terms.get(key, 0.0) + float(value)
+            ep_reward_history.append({
+                "step": current_step,
+                "reward": float(reward),
+                "reward_breakdown": {key: float(value) for key, value in step_reward_breakdown.items()},
+                "reward_raw_terms": {key: float(value) for key, value in step_reward_raw_terms.items()},
+            })
 
             # Prepare for next step
             if done:
@@ -821,6 +829,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                     "reward": float(ep_reward),
                     "reward_breakdown": {key: float(value) for key, value in ep_reward_breakdown.items()},
                     "reward_raw_terms": {key: float(value) for key, value in ep_reward_raw_terms.items()},
+                    "reward_history": ep_reward_history,
                     "reward_weights": reward_weights_for_run(run_id, env_name),
                     #"done": done
                 }
@@ -834,6 +843,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                 ep_reward = 0
                 ep_reward_breakdown = {}
                 ep_reward_raw_terms = {}
+                ep_reward_history = []
                 episodes_seen += 1
                 ep_frames = []
             else:

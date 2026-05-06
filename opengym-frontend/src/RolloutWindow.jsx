@@ -21,6 +21,7 @@ function RolloutWindow({
   const isSavedViewer = viewerMode === 'saved';
   const [rollouts, setRollouts] = useState([]);
   const [trainingRollouts, setTrainingRollouts] = useState([]);
+  const [trainingEpisodes, setTrainingEpisodes] = useState([]);
   const [frames, setFrames] = useState([]);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -44,7 +45,11 @@ function RolloutWindow({
   const [trainingRewardBreakdown, setTrainingRewardBreakdown] = useState({});
   const [trainingRewardBreakdownMean, setTrainingRewardBreakdownMean] = useState({});
   const [trainingGraphIndex, setTrainingGraphIndex] = useState(0);
+  const [trainingTimelineGraphIndex, setTrainingTimelineGraphIndex] = useState(0);
+  const [selectedTrainingTimelineEpisode, setSelectedTrainingTimelineEpisode] = useState(null);
   const [rolloutGraphIndex, setRolloutGraphIndex] = useState(0);
+  const [timelineGraphIndex, setTimelineGraphIndex] = useState(0);
+  const [selectedTimelineEpisode, setSelectedTimelineEpisode] = useState(null);
   const [rolloutRewardBreakdown, setRolloutRewardBreakdown] = useState({});
   const [latestRolloutRawTerms, setLatestRolloutRawTerms] = useState({});
   const [rewardLogs, setRewardLogs] = useState([]);
@@ -113,6 +118,7 @@ function RolloutWindow({
     const safeRollouts = Array.isArray(loadedRollouts) ? loadedRollouts : [];
     setRollouts(safeRollouts);
     setTrainingRollouts([]);
+    setTrainingEpisodes([]);
     setFrames([]);
     setCurrentFrame(0);
     setIsPlaying(false);
@@ -127,6 +133,7 @@ function RolloutWindow({
     setEpisodeNumForSimulation(latest.episode ?? 0);
     setRolloutRewardBreakdown(latest.reward_breakdown || {});
     setLatestRolloutRawTerms(latest.reward_raw_terms || {});
+    setSelectedTimelineEpisode(latest.episode ?? null);
     setRewardLogs(
       safeRollouts.slice(0, rewardLogLimit).map((rollout) => ({
         source: 'loaded',
@@ -180,14 +187,57 @@ function RolloutWindow({
 
   const applyRewardConfigToRollouts = useCallback((entries, terms) => {
     return entries.map((entry) => {
+      const nextRewardHistory = Array.isArray(entry.reward_history)
+        ? entry.reward_history.map((stepEntry) => {
+            const nextStepBreakdown = computeBreakdownFromRawTerms(terms, stepEntry.reward_raw_terms || {});
+            if (!nextStepBreakdown) {
+              return stepEntry;
+            }
+            return {
+              ...stepEntry,
+              reward: nextStepBreakdown.total,
+              reward_breakdown: nextStepBreakdown,
+            };
+          })
+        : [];
       const nextBreakdown = computeBreakdownFromRawTerms(terms, entry.reward_raw_terms || {});
       if (!nextBreakdown) {
-        return entry;
+        return {
+          ...entry,
+          reward_history: nextRewardHistory.length > 0 ? nextRewardHistory : entry.reward_history,
+        };
       }
       return {
         ...entry,
         reward: nextBreakdown.total,
         reward_breakdown: nextBreakdown,
+        reward_history: nextRewardHistory,
+      };
+    });
+  }, [computeBreakdownFromRawTerms]);
+
+  const applyRewardConfigToTrainingEpisodes = useCallback((entries, terms) => {
+    return entries.map((entry) => {
+      const nextRewardHistory = Array.isArray(entry.reward_history)
+        ? entry.reward_history.map((stepEntry) => {
+            const nextStepBreakdown = computeBreakdownFromRawTerms(terms, stepEntry.reward_raw_terms || {});
+            if (!nextStepBreakdown) {
+              return stepEntry;
+            }
+            return {
+              ...stepEntry,
+              reward: nextStepBreakdown.total,
+              reward_breakdown: nextStepBreakdown,
+            };
+          })
+        : [];
+      const latestStepBreakdown = nextRewardHistory.length > 0 ? nextRewardHistory[nextRewardHistory.length - 1].reward_breakdown : null;
+      const totalReward = nextRewardHistory.reduce((sum, stepEntry) => sum + Number(stepEntry.reward ?? 0), 0);
+      return {
+        ...entry,
+        reward: nextRewardHistory.length > 0 ? totalReward : entry.reward,
+        reward_breakdown: latestStepBreakdown ? { ...(entry.reward_breakdown || {}), ...latestStepBreakdown, total: totalReward } : entry.reward_breakdown,
+        reward_history: nextRewardHistory.length > 0 ? nextRewardHistory : entry.reward_history,
       };
     });
   }, [computeBreakdownFromRawTerms]);
@@ -235,6 +285,88 @@ function RolloutWindow({
 
   const currentTrainingGraph = trainingGraphDefinitions[trainingGraphIndex] || {
     title: 'Training Reward',
+    labels: [],
+    datasets: [],
+  };
+
+  const selectedTrainingTimelineRollout = useMemo(() => {
+    if (trainingEpisodes.length === 0) return null;
+    if (selectedTrainingTimelineEpisode === null || selectedTrainingTimelineEpisode === undefined) {
+      return trainingEpisodes[0];
+    }
+    return trainingEpisodes.find((entry) => entry.episode === selectedTrainingTimelineEpisode) || trainingEpisodes[0];
+  }, [selectedTrainingTimelineEpisode, trainingEpisodes]);
+
+  const trainingTimelineGraphDefinitions = useMemo(() => {
+    const rewardHistory = Array.isArray(selectedTrainingTimelineRollout?.reward_history)
+      ? selectedTrainingTimelineRollout.reward_history
+      : [];
+    const labels = rewardHistory.map((entry, index) => entry.step ?? index + 1);
+    const breakdownKeys = Array.from(
+      new Set(
+        rewardHistory.flatMap((entry) =>
+          Object.keys(entry.reward_breakdown || {}).filter((key) => key !== 'total')
+        )
+      )
+    );
+    const rawKeys = Array.from(
+      new Set(
+        rewardHistory.flatMap((entry) => Object.keys(entry.reward_raw_terms || {}))
+      )
+    );
+
+    const makeSeries = (title, accessor, color) => ({
+      title,
+      labels,
+      datasets: [
+        {
+          label: title,
+          data: rewardHistory.map((entry) => accessor(entry)),
+          borderColor: color,
+          backgroundColor: color,
+        },
+      ],
+    });
+
+    return [
+      {
+        title: 'All Shaped Terms In Training Episode',
+        labels,
+        datasets: [
+          {
+            label: 'total_reward',
+            data: rewardHistory.map((entry) => entry.reward_breakdown?.total ?? entry.reward ?? null),
+            borderColor: 'rgb(59, 130, 246)',
+            backgroundColor: 'rgb(59, 130, 246)',
+          },
+          ...breakdownKeys.map((key, index) => ({
+            label: key,
+            data: rewardHistory.map((entry) => entry.reward_breakdown?.[key] ?? null),
+            borderColor: `hsl(${(index * 47 + 145) % 360} 72% 48%)`,
+            backgroundColor: `hsl(${(index * 47 + 145) % 360} 72% 48%)`,
+          })),
+        ],
+      },
+      makeSeries('Training Episode Total Reward', (entry) => entry.reward_breakdown?.total ?? entry.reward ?? null, 'rgb(59, 130, 246)'),
+      ...breakdownKeys.map((key, index) =>
+        makeSeries(
+          `Training Episode Term: ${key}`,
+          (entry) => entry.reward_breakdown?.[key] ?? null,
+          `hsl(${(index * 47 + 145) % 360} 72% 48%)`
+        )
+      ),
+      ...rawKeys.map((key, index) =>
+        makeSeries(
+          `Training Episode Raw Term: ${key}`,
+          (entry) => entry.reward_raw_terms?.[key] ?? null,
+          `hsl(${(index * 47 + 305) % 360} 70% 45%)`
+        )
+      ),
+    ];
+  }, [selectedTrainingTimelineRollout]);
+
+  const currentTrainingTimelineGraph = trainingTimelineGraphDefinitions[trainingTimelineGraphIndex] || {
+    title: 'Training Episode Reward Timeline',
     labels: [],
     datasets: [],
   };
@@ -290,6 +422,90 @@ function RolloutWindow({
     datasets: [],
   };
 
+  const selectedTimelineRollout = useMemo(() => {
+    if (rollouts.length === 0) return null;
+    if (selectedTimelineEpisode === null || selectedTimelineEpisode === undefined) {
+      return rollouts[0];
+    }
+    return rollouts.find((entry) => entry.episode === selectedTimelineEpisode) || rollouts[0];
+  }, [rollouts, selectedTimelineEpisode]);
+
+  const timelineGraphDefinitions = useMemo(() => {
+    const rewardHistory = Array.isArray(selectedTimelineRollout?.reward_history)
+      ? selectedTimelineRollout.reward_history
+      : [];
+    const labels = rewardHistory.map((entry, index) => entry.step ?? index + 1);
+    const breakdownKeys = Array.from(
+      new Set(
+        rewardHistory.flatMap((entry) =>
+          Object.keys(entry.reward_breakdown || {}).filter((key) => key !== 'total')
+        )
+      )
+    );
+    const rawKeys = Array.from(
+      new Set(
+        rewardHistory.flatMap((entry) =>
+          Object.keys(entry.reward_raw_terms || {})
+        )
+      )
+    );
+
+    const makeSeries = (title, accessor, color) => ({
+      title,
+      labels,
+      datasets: [
+        {
+          label: title,
+          data: rewardHistory.map((entry) => accessor(entry)),
+          borderColor: color,
+          backgroundColor: color,
+        },
+      ],
+    });
+
+    return [
+      {
+        title: 'All Shaped Terms In Episode',
+        labels,
+        datasets: [
+          {
+            label: 'total_reward',
+            data: rewardHistory.map((entry) => entry.reward_breakdown?.total ?? entry.reward ?? null),
+            borderColor: 'rgb(56, 189, 248)',
+            backgroundColor: 'rgb(56, 189, 248)',
+          },
+          ...breakdownKeys.map((key, index) => ({
+            label: key,
+            data: rewardHistory.map((entry) => entry.reward_breakdown?.[key] ?? null),
+            borderColor: `hsl(${(index * 47 + 25) % 360} 74% 52%)`,
+            backgroundColor: `hsl(${(index * 47 + 25) % 360} 74% 52%)`,
+          })),
+        ],
+      },
+      makeSeries('Episode Total Reward', (entry) => entry.reward_breakdown?.total ?? entry.reward ?? null, 'rgb(56, 189, 248)'),
+      ...breakdownKeys.map((key, index) =>
+        makeSeries(
+          `Episode Term: ${key}`,
+          (entry) => entry.reward_breakdown?.[key] ?? null,
+          `hsl(${(index * 47 + 25) % 360} 74% 52%)`
+        )
+      ),
+      ...rawKeys.map((key, index) =>
+        makeSeries(
+          `Episode Raw Term: ${key}`,
+          (entry) => entry.reward_raw_terms?.[key] ?? null,
+          `hsl(${(index * 47 + 205) % 360} 70% 45%)`
+        )
+      ),
+    ];
+  }, [selectedTimelineRollout]);
+
+  const currentTimelineGraph = timelineGraphDefinitions[timelineGraphIndex] || {
+    title: 'Episode Reward Timeline',
+    labels: [],
+    datasets: [],
+  };
+
   const saveRewardConfig = useCallback(async () => {
     if (isSavedViewer) {
       setRewardConfigStatus("Saved rollout viewers are read-only. Apply reward changes from a live rollout.");
@@ -313,6 +529,7 @@ function RolloutWindow({
       });
       const nextTerms = response.data.terms || [];
       setRewardConfig(nextTerms);
+      setTrainingEpisodes((prev) => applyRewardConfigToTrainingEpisodes(prev, nextTerms));
       const nextRollouts = applyRewardConfigToRollouts(rollouts, nextTerms);
       setRollouts(nextRollouts);
       const nextBreakdown = computeBreakdownFromRawTerms(nextTerms, latestRolloutRawTerms);
@@ -339,7 +556,7 @@ function RolloutWindow({
     } finally {
       setRewardConfigLoading(false);
     }
-  }, [applyRewardConfigToRollouts, computeBreakdownFromRawTerms, envName, isSavedViewer, latestRolloutRawTerms, rewardConfig, rollouts, runId]);
+  }, [applyRewardConfigToRollouts, applyRewardConfigToTrainingEpisodes, computeBreakdownFromRawTerms, envName, isSavedViewer, latestRolloutRawTerms, rewardConfig, rollouts, runId]);
   // This effectively flips the showPopup
   // showPopup = true => showPopup = false, and vice versa
   const togglePopup = () => {
@@ -487,12 +704,50 @@ function RolloutWindow({
   }, [trainingGraphDefinitions.length]);
 
   useEffect(() => {
+    if (trainingTimelineGraphDefinitions.length === 0) {
+      setTrainingTimelineGraphIndex(0);
+      return;
+    }
+    setTrainingTimelineGraphIndex((prev) => prev % trainingTimelineGraphDefinitions.length);
+  }, [trainingTimelineGraphDefinitions.length]);
+
+  useEffect(() => {
+    if (trainingEpisodes.length === 0) {
+      setSelectedTrainingTimelineEpisode(null);
+      return;
+    }
+    const hasSelectedEpisode = trainingEpisodes.some((entry) => entry.episode === selectedTrainingTimelineEpisode);
+    if (!hasSelectedEpisode) {
+      setSelectedTrainingTimelineEpisode(trainingEpisodes[0].episode ?? null);
+    }
+  }, [selectedTrainingTimelineEpisode, trainingEpisodes]);
+
+  useEffect(() => {
     if (rolloutGraphDefinitions.length === 0) {
       setRolloutGraphIndex(0);
       return;
     }
     setRolloutGraphIndex((prev) => prev % rolloutGraphDefinitions.length);
   }, [rolloutGraphDefinitions.length]);
+
+  useEffect(() => {
+    if (timelineGraphDefinitions.length === 0) {
+      setTimelineGraphIndex(0);
+      return;
+    }
+    setTimelineGraphIndex((prev) => prev % timelineGraphDefinitions.length);
+  }, [timelineGraphDefinitions.length]);
+
+  useEffect(() => {
+    if (rollouts.length === 0) {
+      setSelectedTimelineEpisode(null);
+      return;
+    }
+    const hasSelectedEpisode = rollouts.some((entry) => entry.episode === selectedTimelineEpisode);
+    if (!hasSelectedEpisode) {
+      setSelectedTimelineEpisode(rollouts[0].episode ?? null);
+    }
+  }, [rollouts, selectedTimelineEpisode]);
 
   useEffect(() => {
     let retryTimeout;
@@ -678,6 +933,10 @@ function RolloutWindow({
             setTrainingRollouts((prev) => [rewardData, ...prev]);
             setTrainingRewardBreakdown(data.reward_breakdown || {});
             setTrainingRewardBreakdownMean(data.reward_breakdown_mean || {});
+            if (Array.isArray(data.new_training_episodes) && data.new_training_episodes.length > 0) {
+              setTrainingEpisodes((prev) => [...data.new_training_episodes.slice().reverse(), ...prev]);
+              setSelectedTrainingTimelineEpisode(data.new_training_episodes[data.new_training_episodes.length - 1]?.episode ?? null);
+            }
             appendRewardLog({
               source: 'training',
               label: `Step ${data.step}`,
@@ -705,11 +964,13 @@ function RolloutWindow({
               episode: data.episode,
               reward_breakdown: data.reward_breakdown || {},
               reward_raw_terms: data.reward_raw_terms || {},
+              reward_history: data.reward_history || [],
             };
             if (!trainMode) {
               setEpisodeInfo({ episode: data.episode, reward: data.reward });
               setRolloutRewardBreakdown(data.reward_breakdown || {});
               setLatestRolloutRawTerms(data.reward_raw_terms || {});
+              setSelectedTimelineEpisode(data.episode);
               setRollouts((prev) => [newData, ...prev]);
               appendRewardLog({
                 source: 'rollout',
@@ -734,10 +995,12 @@ function RolloutWindow({
       
       setRollouts([]); // restart the graph simulation from the beginning, upon new simulation
       setTrainingRollouts([]);
+      setTrainingEpisodes([]);
       setTrainingRewardBreakdown({});
       setTrainingRewardBreakdownMean({});
       setRolloutRewardBreakdown({});
       setRewardLogs([]);
+      setSelectedTimelineEpisode(null);
       // initial attempt
       togglePause(false);
       connect();
@@ -1275,6 +1538,116 @@ function RolloutWindow({
       </div>
     )}
     {trainMode && (
+      <div style={{ ...sectionPanelStyle, marginTop: '1rem' }}>
+        <h3 style={{ fontSize: '1.2rem', color: '#0f766e', marginTop: 0 }}>Training Episode Temporal Breakdown</h3>
+        <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
+          Inspect one completed training episode timestep-by-timestep to see which reward term pushed the policy toward failure or success.
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            gap: '0.75rem',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexWrap: 'wrap',
+            marginBottom: '0.9rem',
+          }}
+        >
+          <label htmlFor="trainingTimelineEpisode" style={{ fontWeight: 600 }}>Episode</label>
+          <select
+            id="trainingTimelineEpisode"
+            value={selectedTrainingTimelineEpisode ?? ''}
+            onChange={(event) => setSelectedTrainingTimelineEpisode(Number(event.target.value))}
+            style={{ padding: '0.4rem 0.55rem', minWidth: 160 }}
+            disabled={trainingEpisodes.length === 0}
+          >
+            {trainingEpisodes.length === 0 ? (
+              <option value="">No training episodes yet</option>
+            ) : (
+              trainingEpisodes.map((entry) => (
+                <option key={`training-episode-${entry.episode}`} value={entry.episode}>
+                  Episode {entry.episode}
+                </option>
+              ))
+            )}
+          </select>
+          <label htmlFor="trainingTimelineView" style={{ fontWeight: 600 }}>View</label>
+          <select
+            id="trainingTimelineView"
+            value={String(trainingTimelineGraphIndex)}
+            onChange={(event) => setTrainingTimelineGraphIndex(Number(event.target.value))}
+            style={{ padding: '0.4rem 0.55rem', minWidth: 300 }}
+            disabled={trainingTimelineGraphDefinitions.length === 0}
+          >
+            {trainingTimelineGraphDefinitions.length === 0 ? (
+              <option value="0">No training reward history yet</option>
+            ) : (
+              trainingTimelineGraphDefinitions.map((graph, index) => (
+                <option key={graph.title} value={index}>
+                  {graph.title}
+                </option>
+              ))
+            )}
+          </select>
+        </div>
+        <div style={{ textAlign: 'center', marginBottom: '0.75rem' }}>
+          <div style={{ fontSize: '1rem', fontWeight: 700, color: '#334155' }}>{currentTrainingTimelineGraph.title}</div>
+          <div style={{ fontSize: '0.82rem', color: '#64748b' }}>
+            {selectedTrainingTimelineRollout ? `Training episode ${selectedTrainingTimelineRollout.episode} timestep reward view` : 'Select a completed training episode to inspect timestep rewards'}
+          </div>
+        </div>
+        <div
+          style={{
+            width: '100%',
+            maxWidth: '100%',
+            minWidth: 0,
+            height: '320px',
+            overflow: 'hidden',
+          }}
+        >
+          <Line
+            data={{
+              labels: currentTrainingTimelineGraph.labels,
+              datasets: currentTrainingTimelineGraph.datasets.map((dataset) => ({
+                ...dataset,
+                fill: false,
+                tension: 0.18,
+                pointRadius: 0,
+                pointHoverRadius: 3,
+                borderWidth: 2,
+              })),
+            }}
+            options={{
+              responsive: true,
+              maintainAspectRatio: false,
+              animation: false,
+              normalized: true,
+              interaction: {
+                intersect: false,
+                mode: 'index',
+              },
+              plugins: {
+                legend: {
+                  display: currentTrainingTimelineGraph.datasets.length > 1,
+                  position: 'bottom',
+                },
+              },
+              scales: {
+                x: {
+                  title: { display: true, text: 'Timestep' },
+                  ticks: {
+                    autoSkip: true,
+                    maxTicksLimit: 14,
+                  },
+                },
+                y: { title: { display: true, text: 'Reward Contribution' } },
+              },
+            }}
+          />
+        </div>
+      </div>
+    )}
+    {trainMode && (
       <ProgressBar isTraining={trainMode} runId={runId} />
   )}
     </div>
@@ -1728,6 +2101,114 @@ function RolloutWindow({
             }}
           />
         </div>
+      </div>
+    </div>
+    <div style={{ ...sectionPanelStyle, marginTop: '1rem' }}>
+      <h3 style={{ fontSize: '1.35rem', color: '#0f766e', marginTop: 0 }}>Temporal Reward Breakdown</h3>
+      <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
+        Inspect reward contributions inside one episode to see which term spikes right before failure and which term dominates each timestep.
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          gap: '0.75rem',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexWrap: 'wrap',
+          marginBottom: '0.9rem',
+        }}
+      >
+        <label htmlFor="timelineEpisode" style={{ fontWeight: 600 }}>Episode</label>
+        <select
+          id="timelineEpisode"
+          value={selectedTimelineEpisode ?? ''}
+          onChange={(event) => setSelectedTimelineEpisode(Number(event.target.value))}
+          style={{ padding: '0.4rem 0.55rem', minWidth: 160 }}
+          disabled={rollouts.length === 0}
+        >
+          {rollouts.length === 0 ? (
+            <option value="">No episodes yet</option>
+          ) : (
+            rollouts.map((entry) => (
+              <option key={`episode-${entry.episode}`} value={entry.episode}>
+                Episode {entry.episode}
+              </option>
+            ))
+          )}
+        </select>
+        <label htmlFor="timelineView" style={{ fontWeight: 600 }}>View</label>
+        <select
+          id="timelineView"
+          value={String(timelineGraphIndex)}
+          onChange={(event) => setTimelineGraphIndex(Number(event.target.value))}
+          style={{ padding: '0.4rem 0.55rem', minWidth: 280 }}
+          disabled={timelineGraphDefinitions.length === 0}
+        >
+          {timelineGraphDefinitions.length === 0 ? (
+            <option value="0">No reward history yet</option>
+          ) : (
+            timelineGraphDefinitions.map((graph, index) => (
+              <option key={graph.title} value={index}>
+                {graph.title}
+              </option>
+            ))
+          )}
+        </select>
+      </div>
+      <div style={{ textAlign: 'center', marginBottom: '0.75rem' }}>
+        <div style={{ fontSize: '1rem', fontWeight: 700, color: '#334155' }}>{currentTimelineGraph.title}</div>
+        <div style={{ fontSize: '0.82rem', color: '#64748b' }}>
+          {selectedTimelineRollout ? `Episode ${selectedTimelineRollout.episode} timestep reward view` : 'Select an episode to inspect timestep rewards'}
+        </div>
+      </div>
+      <div
+        style={{
+          width: '100%',
+          maxWidth: '100%',
+          minWidth: 0,
+          height: '320px',
+          overflow: 'hidden',
+        }}
+      >
+        <Line
+          data={{
+            labels: currentTimelineGraph.labels,
+            datasets: currentTimelineGraph.datasets.map((dataset) => ({
+              ...dataset,
+              fill: false,
+              tension: 0.18,
+              pointRadius: 0,
+              pointHoverRadius: 3,
+              borderWidth: 2,
+            })),
+          }}
+          options={{
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            normalized: true,
+            interaction: {
+              intersect: false,
+              mode: 'index',
+            },
+            plugins: {
+              legend: {
+                display: currentTimelineGraph.datasets.length > 1,
+                position: 'bottom',
+              },
+            },
+            scales: {
+              x: {
+                title: { display: true, text: 'Timestep' },
+                ticks: {
+                  autoSkip: true,
+                  maxTicksLimit: 14,
+                },
+              },
+              y: { title: { display: true, text: 'Reward Contribution' } },
+            },
+          }}
+        />
       </div>
     </div>
     </div>

@@ -33,6 +33,7 @@ class TrainingProgressCallback(BaseCallback):
         self.stop_flag_key = stop_flag_key
         self._last_emit = 0
         self._t0 = time.time()
+        self._training_episode_counter = 0
         ## Initialize the entry field for the status
         status_dict.setdefault(run_id, {})
         status = status_dict[run_id] # should be empty dic
@@ -46,6 +47,8 @@ class TrainingProgressCallback(BaseCallback):
         status.setdefault("eval_reward", None)
         status.setdefault("reward_breakdown_last", {})
         status.setdefault("reward_breakdown_mean", {})
+        status.setdefault("latest_training_episode_history", [])
+        status.setdefault("recent_training_episodes", [])
         status.setdefault("fps", None)
 
     @staticmethod
@@ -80,6 +83,7 @@ class TrainingProgressCallback(BaseCallback):
         reward_mean = None
         reward_breakdown_last = {}
         reward_breakdown_mean = {}
+        new_training_episodes = []
         if getattr(self.model, "ep_info_buffer", None):
             buffer_entries = list(self.model.ep_info_buffer)
             ep_rewards = [ep_info["r"] for ep_info in buffer_entries]
@@ -92,6 +96,27 @@ class TrainingProgressCallback(BaseCallback):
                 key: float(np.mean([breakdown[key] for breakdown in breakdown_buffer if key in breakdown]))
                 for key in breakdown_keys
             }
+
+        infos = self.locals.get("infos", [])
+        dones = self.locals.get("dones", [])
+        if infos is not None and dones is not None:
+            for done, info in zip(dones, infos):
+                if not done or not info:
+                    continue
+                reward_history_episode = info.get("reward_history_episode")
+                if not reward_history_episode:
+                    continue
+                self._training_episode_counter += 1
+                episode_info = info.get("episode", {}) if isinstance(info.get("episode"), dict) else {}
+                reward_total = info.get("reward_total", episode_info.get("r", 0.0))
+                reward_breakdown_episode = info.get("reward_breakdown_episode", {})
+                new_training_episodes.append({
+                    "episode": self._training_episode_counter,
+                    "reward": float(reward_total),
+                    "reward_breakdown": reward_breakdown_episode,
+                    "reward_history": reward_history_episode,
+                    "at_step": steps_done,
+                })
         
         # Update shared status (frontend can poll this)
         status.update({
@@ -100,6 +125,8 @@ class TrainingProgressCallback(BaseCallback):
             "reward_mean": reward_mean,
             "reward_breakdown_last": reward_breakdown_last,
             "reward_breakdown_mean": reward_breakdown_mean,
+            "latest_training_episode_history": new_training_episodes[-1]["reward_history"] if new_training_episodes else status.get("latest_training_episode_history", []),
+            "recent_training_episodes": (new_training_episodes + status.get("recent_training_episodes", []))[:25] if new_training_episodes else status.get("recent_training_episodes", []),
             "fps": fps,
         })
         
@@ -119,6 +146,7 @@ class TrainingProgressCallback(BaseCallback):
                         "eval_reward": status.get("eval_reward"),
                         "reward_breakdown": reward_breakdown_last,
                         "reward_breakdown_mean": reward_breakdown_mean,
+                        "new_training_episodes": new_training_episodes,
                         "fps": fps,
                         "ts": time.time(),
                     }, self.run_id)
