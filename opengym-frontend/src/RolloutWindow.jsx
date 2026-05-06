@@ -24,6 +24,7 @@ function RolloutWindow({
   const [trainingEpisodes, setTrainingEpisodes] = useState([]);
   const [frames, setFrames] = useState([]);
   const [capturedEpisodeFramesByEpisode, setCapturedEpisodeFramesByEpisode] = useState({});
+  const [selectedVisualizationEpisode, setSelectedVisualizationEpisode] = useState(null);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [stepInterval, setStepInterval] = useState(5);
@@ -56,6 +57,7 @@ function RolloutWindow({
   const [selectedTimelineStep, setSelectedTimelineStep] = useState(null);
   const [rolloutTimelineMode, setRolloutTimelineMode] = useState('episode');
   const [rolloutTimelineOutcomeFilter, setRolloutTimelineOutcomeFilter] = useState('all');
+  const [rolloutWorkspaceViewIndex, setRolloutWorkspaceViewIndex] = useState(0);
   const [rolloutRewardBreakdown, setRolloutRewardBreakdown] = useState({});
   const [latestRolloutRawTerms, setLatestRolloutRawTerms] = useState({});
   const [rewardLogs, setRewardLogs] = useState([]);
@@ -123,11 +125,22 @@ function RolloutWindow({
 
   const hydrateLoadedRollouts = useCallback((loadedRollouts) => {
     const safeRollouts = Array.isArray(loadedRollouts) ? loadedRollouts : [];
+    const earliestEpisode = safeRollouts.reduce((minEpisode, rollout) => {
+      const episode = Number(rollout?.episode);
+      if (!Number.isFinite(episode)) return minEpisode;
+      if (minEpisode === null || episode < minEpisode) return episode;
+      return minEpisode;
+    }, null);
+    const initialTimelineRollout =
+      earliestEpisode === null
+        ? safeRollouts[0] || {}
+        : safeRollouts.find((rollout) => Number(rollout?.episode) === earliestEpisode) || safeRollouts[0] || {};
     setRollouts(safeRollouts);
     setTrainingRollouts([]);
     setTrainingEpisodes([]);
     setFrames([]);
     setCapturedEpisodeFramesByEpisode({});
+    setSelectedVisualizationEpisode(null);
     setCurrentFrame(0);
     setIsPlaying(false);
     setTrainingRewardBreakdown({});
@@ -141,8 +154,11 @@ function RolloutWindow({
     setEpisodeNumForSimulation(latest.episode ?? 0);
     setRolloutRewardBreakdown(latest.reward_breakdown || {});
     setLatestRolloutRawTerms(latest.reward_raw_terms || {});
-    setSelectedTimelineEpisode(latest.episode ?? null);
-    setSelectedTimelineStep(latest.episode_terminal_timestep ?? (Array.isArray(latest.reward_history) ? latest.reward_history.length : null));
+    setSelectedTimelineEpisode(initialTimelineRollout.episode ?? null);
+    setSelectedTimelineStep(
+      initialTimelineRollout.episode_terminal_timestep ??
+      (Array.isArray(initialTimelineRollout.reward_history) ? initialTimelineRollout.reward_history.length : null)
+    );
     setRewardLogs(
       safeRollouts.slice(0, rewardLogLimit).map((rollout) => ({
         source: 'loaded',
@@ -665,13 +681,25 @@ function RolloutWindow({
     [matchesEpisodeOutcome, rolloutTimelineOutcomeFilter, rollouts]
   );
 
+  const earliestFilteredRollout = useMemo(() => {
+    if (filteredRollouts.length === 0) return null;
+    return filteredRollouts.reduce((earliest, entry) => {
+      if (!earliest) return entry;
+      const currentEpisode = Number(entry?.episode);
+      const earliestEpisode = Number(earliest?.episode);
+      if (!Number.isFinite(currentEpisode)) return earliest;
+      if (!Number.isFinite(earliestEpisode) || currentEpisode < earliestEpisode) return entry;
+      return earliest;
+    }, null);
+  }, [filteredRollouts]);
+
   const selectedTimelineRollout = useMemo(() => {
     if (filteredRollouts.length === 0) return null;
     if (selectedTimelineEpisode === null || selectedTimelineEpisode === undefined) {
-      return filteredRollouts[0];
+      return earliestFilteredRollout || filteredRollouts[0];
     }
-    return filteredRollouts.find((entry) => entry.episode === selectedTimelineEpisode) || filteredRollouts[0];
-  }, [filteredRollouts, selectedTimelineEpisode]);
+    return filteredRollouts.find((entry) => entry.episode === selectedTimelineEpisode) || earliestFilteredRollout || filteredRollouts[0];
+  }, [earliestFilteredRollout, filteredRollouts, selectedTimelineEpisode]);
 
   const selectedTimelineTarget = useMemo(() => {
     if (rolloutTimelineMode === 'average') {
@@ -690,6 +718,12 @@ function RolloutWindow({
     if (!selectedTimelineStep) return null;
     return selectedTimelineTarget.reward_history[selectedTimelineStep - 1] || null;
   }, [selectedTimelineStep, selectedTimelineTarget]);
+
+  const linkedSelectedFrameIndex = useMemo(() => {
+    if (selectedEpisodeFrames.length === 0) return 0;
+    if (!selectedTimelineStep) return 0;
+    return Math.max(0, Math.min(selectedEpisodeFrames.length - 1, selectedTimelineStep - 1));
+  }, [selectedEpisodeFrames, selectedTimelineStep]);
 
   const timelineGraphDefinitions = useMemo(() => {
     const rewardHistory = Array.isArray(selectedTimelineTarget?.reward_history)
@@ -791,6 +825,28 @@ function RolloutWindow({
     success: rollouts.filter((entry) => entry.episode_outcome === 'success').length,
     failure: rollouts.filter((entry) => entry.episode_outcome === 'failure').length,
   }), [rollouts]);
+  const rolloutWorkspaceViews = useMemo(
+    () => ([
+      { key: 'visualization', title: 'Rollout Visualization' },
+      { key: 'reward_chart', title: 'Rollout Reward Chart' },
+      { key: 'temporal_breakdown', title: 'Temporal Reward Breakdown' },
+    ]),
+    []
+  );
+  const currentRolloutWorkspaceView = rolloutWorkspaceViews[rolloutWorkspaceViewIndex] || rolloutWorkspaceViews[0];
+  const availableVisualizationEpisodes = useMemo(
+    () => Object.keys(capturedEpisodeFramesByEpisode)
+      .map((key) => Number(key))
+      .filter((value) => Number.isFinite(value))
+      .sort((a, b) => a - b),
+    [capturedEpisodeFramesByEpisode]
+  );
+  const visualizationFrames = useMemo(() => {
+    if (selectedVisualizationEpisode !== null && selectedVisualizationEpisode !== undefined) {
+      return capturedEpisodeFramesByEpisode[selectedVisualizationEpisode] || [];
+    }
+    return frames || [];
+  }, [capturedEpisodeFramesByEpisode, frames, selectedVisualizationEpisode]);
 
   const saveRewardConfig = useCallback(async () => {
     if (isSavedViewer) {
@@ -1009,6 +1065,22 @@ function RolloutWindow({
   }, [filteredTrainingEpisodes, selectedTrainingTimelineEpisode]);
 
   useEffect(() => {
+    if (availableVisualizationEpisodes.length === 0) {
+      setSelectedVisualizationEpisode(null);
+      return;
+    }
+    const hasSelectedEpisode = availableVisualizationEpisodes.includes(Number(selectedVisualizationEpisode));
+    if (!hasSelectedEpisode) {
+      setSelectedVisualizationEpisode(availableVisualizationEpisodes[0]);
+    }
+  }, [availableVisualizationEpisodes, selectedVisualizationEpisode]);
+
+  useEffect(() => {
+    setCurrentFrame(0);
+    setIsPlaying(false);
+  }, [selectedVisualizationEpisode]);
+
+  useEffect(() => {
     if (rolloutGraphDefinitions.length === 0) {
       setRolloutGraphIndex(0);
       return;
@@ -1032,9 +1104,9 @@ function RolloutWindow({
     }
     const hasSelectedEpisode = filteredRollouts.some((entry) => entry.episode === selectedTimelineEpisode);
     if (!hasSelectedEpisode) {
-      setSelectedTimelineEpisode(filteredRollouts[0].episode ?? null);
+      setSelectedTimelineEpisode(earliestFilteredRollout?.episode ?? filteredRollouts[0].episode ?? null);
     }
-  }, [filteredRollouts, selectedTimelineEpisode]);
+  }, [earliestFilteredRollout, filteredRollouts, selectedTimelineEpisode]);
 
   useEffect(() => {
     if (!selectedTimelineTarget || !Array.isArray(selectedTimelineTarget.reward_history) || selectedTimelineTarget.reward_history.length === 0) {
@@ -1058,13 +1130,6 @@ function RolloutWindow({
     const nextFrameIndex = Math.max(0, Math.min(selectedEpisodeFrames.length - 1, selectedTimelineStep - 1));
     setCurrentFrame((prev) => (prev === nextFrameIndex ? prev : nextFrameIndex));
   }, [rolloutTimelineMode, selectedEpisodeFrames, selectedTimelineStep]);
-
-  useEffect(() => {
-    if (rolloutTimelineMode !== 'episode') return;
-    if (selectedEpisodeFrames.length === 0) return;
-    const inferredStep = Math.max(1, Math.min(selectedEpisodeFrames.length, currentFrame + 1));
-    setSelectedTimelineStep((prev) => (prev === inferredStep ? prev : inferredStep));
-  }, [currentFrame, rolloutTimelineMode, selectedEpisodeFrames]);
 
   useEffect(() => {
     let retryTimeout;
@@ -1266,12 +1331,14 @@ function RolloutWindow({
             // if data.type is not session
             if(data.ep_frames.length > 0){
               setFrames(data.ep_frames);        // store all frames
-              setCurrentFrame(0);            // start at first frame
               if (data.sim_frame_episode_number !== null && data.sim_frame_episode_number !== undefined) {
                 setCapturedEpisodeFramesByEpisode((prev) => ({
                   ...prev,
                   [data.sim_frame_episode_number]: data.ep_frames,
                 }));
+                setSelectedVisualizationEpisode((prev) =>
+                  prev === null || prev === undefined ? data.sim_frame_episode_number : prev
+                );
               }
             }
             // console.log("Episode: ", data.episode, "   Reward: ", data.reward); // DEBUG:FRONTEND
@@ -1298,8 +1365,6 @@ function RolloutWindow({
               setEpisodeInfo({ episode: data.episode, reward: data.reward });
               setRolloutRewardBreakdown(data.reward_breakdown || {});
               setLatestRolloutRawTerms(data.reward_raw_terms || {});
-              setSelectedTimelineEpisode(data.episode);
-              setSelectedTimelineStep(data.episode_terminal_timestep ?? (Array.isArray(data.reward_history) ? data.reward_history.length : null));
               setRollouts((prev) => [newData, ...prev]);
               appendRewardLog({
                 source: 'rollout',
@@ -1330,6 +1395,7 @@ function RolloutWindow({
       setRolloutRewardBreakdown({});
       setRewardLogs([]);
       setCapturedEpisodeFramesByEpisode({});
+      setSelectedVisualizationEpisode(null);
       setSelectedTimelineEpisode(null);
       setSelectedTimelineStep(null);
       // initial attempt
@@ -1351,11 +1417,11 @@ function RolloutWindow({
 
   // This is the useEffect for the frame Data from the video
   useEffect(() => {
-    if (!isPlaying || (frames && frames.length) === 0) return;
+    if (!isPlaying || (visualizationFrames && visualizationFrames.length) === 0) return;
     //advance frame at ferquency of 20fps
     intervalRef.current = setInterval(() => {
       setCurrentFrame((prev) => {
-        if (Array.isArray(frames) && prev < frames.length - 1) return prev + 1;  // advance frame
+        if (Array.isArray(visualizationFrames) && prev < visualizationFrames.length - 1) return prev + 1;  // advance frame
         // want to implement looping, so no stop at end
         //clearInterval(intervalRef.current);             // stop at end
         return 0;
@@ -1363,7 +1429,7 @@ function RolloutWindow({
     }, replayInterval); // ~20 FPS
 
     return () => clearInterval(intervalRef.current); // clean up
-  }, [isPlaying, frames]);
+  }, [isPlaying, replayInterval, visualizationFrames]);
 
   const handlePlay = () => setIsPlaying(true);
   const handlePause = () => {
@@ -2266,8 +2332,77 @@ function RolloutWindow({
           </div>
         </div>
       </div>
+      <div
+        style={{
+          ...sectionPanelStyle,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '0.75rem',
+          flexWrap: 'wrap',
+        }}
+      >
+        <button
+          onClick={() => setRolloutWorkspaceViewIndex((prev) => (prev - 1 + rolloutWorkspaceViews.length) % rolloutWorkspaceViews.length)}
+          style={{
+            width: '36px',
+            height: '36px',
+            borderRadius: '999px',
+            border: '1px solid #cbd5e1',
+            backgroundColor: 'white',
+            color: '#334155',
+            fontWeight: 700,
+          }}
+          aria-label="Show previous rollout panel"
+        >
+          {'<'}
+        </button>
+        <div style={{ textAlign: 'center', flex: '1 1 240px' }}>
+          <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#334155' }}>{currentRolloutWorkspaceView.title}</div>
+          <div style={{ fontSize: '0.82rem', color: '#64748b' }}>
+            {rolloutWorkspaceViewIndex + 1} / {rolloutWorkspaceViews.length}
+          </div>
+        </div>
+        <select
+          value={String(rolloutWorkspaceViewIndex)}
+          onChange={(event) => setRolloutWorkspaceViewIndex(Number(event.target.value))}
+          style={{
+            minWidth: '240px',
+            padding: '0.45rem 0.6rem',
+            borderRadius: '8px',
+            border: '1px solid #cbd5e1',
+            backgroundColor: 'white',
+            color: '#334155',
+            fontSize: '0.92rem',
+          }}
+          aria-label="Choose rollout workspace view"
+        >
+          {rolloutWorkspaceViews.map((view, index) => (
+            <option key={view.key} value={index}>
+              {view.title}
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={() => setRolloutWorkspaceViewIndex((prev) => (prev + 1) % rolloutWorkspaceViews.length)}
+          style={{
+            width: '36px',
+            height: '36px',
+            borderRadius: '999px',
+            border: '1px solid #cbd5e1',
+            backgroundColor: 'white',
+            color: '#334155',
+            fontWeight: 700,
+          }}
+          aria-label="Show next rollout panel"
+        >
+          {'>'}
+        </button>
+      </div>
       
       {/* Playback Controls */}
+      {currentRolloutWorkspaceView.key === 'visualization' && (
+      <>
       <div style={sectionPanelStyle}>
       <p style={{ fontSize: '1rem', marginTop: 0 }}>
         Simulating per every {" "}
@@ -2291,8 +2426,28 @@ function RolloutWindow({
         steps
       </p>
       <p style={{ fontSize: '1rem' }}>
-        Simulating Episode <strong style={{ color: '#0ea5e9' }}>{episodeNumForSimulation}</strong>
+        Simulating Episode <strong style={{ color: '#0ea5e9' }}>{selectedVisualizationEpisode ?? episodeNumForSimulation}</strong>
       </p>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+        <label htmlFor="visualizationEpisode" style={{ fontWeight: 600 }}>Captured rollout episode</label>
+        <select
+          id="visualizationEpisode"
+          value={selectedVisualizationEpisode ?? ''}
+          onChange={(event) => setSelectedVisualizationEpisode(Number(event.target.value))}
+          disabled={availableVisualizationEpisodes.length === 0}
+          style={{ padding: '.4rem .55rem', minWidth: 220 }}
+        >
+          {availableVisualizationEpisodes.length === 0 ? (
+            <option value="">No captured rollout videos yet</option>
+          ) : (
+            availableVisualizationEpisodes.map((episode) => (
+              <option key={`visualization-episode-${episode}`} value={episode}>
+                Episode {episode}
+              </option>
+            ))
+          )}
+        </select>
+      </div>
       <div
         style={{
           display: 'flex',
@@ -2307,8 +2462,8 @@ function RolloutWindow({
       </div>
       </div>
 
-    {/* Playback Speed Slider */}
-    <div style={{ ...sectionPanelStyle, marginTop: '1rem', textAlign: 'center' }}>
+      {/* Playback Speed Slider */}
+      <div style={{ ...sectionPanelStyle, marginTop: '1rem', textAlign: 'center' }}>
       <label htmlFor="replaySpeed" style={{ fontWeight: 600 }}>
         🎞 Frame Playback Speed:
       </label>
@@ -2337,12 +2492,12 @@ function RolloutWindow({
           borderRadius: '4px',
         }}
       />
-    </div>
-    {/*<RolloutSlideshow/>*/}
-    {frames && frames.length > 0 && (
+      </div>
+      {/*<RolloutSlideshow/>*/}
+      {visualizationFrames && visualizationFrames.length > 0 && (
       <div style={{ ...sectionPanelStyle, marginTop: '1rem', textAlign: 'center' }}>
         <img
-          src={`data:image/jpeg;base64,${frames[currentFrame]}`}
+          src={`data:image/jpeg;base64,${visualizationFrames[currentFrame]}`}
           alt={`frame ${currentFrame}`}
           style={{
             width: '100%',
@@ -2353,8 +2508,11 @@ function RolloutWindow({
           }}
         />
       </div>
-    )}
+      )}
+      </>
+      )}
 
+    {currentRolloutWorkspaceView.key === 'reward_chart' && (
     <div style={{ ...sectionPanelStyle, marginTop: '1rem' }}>
       <h3 style={{ fontSize: '1.6rem', color: '#6366f1', marginTop: 0 }}>📈 Rollout Reward Chart</h3>
       <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
@@ -2504,6 +2662,8 @@ function RolloutWindow({
         </div>
       </div>
     </div>
+    )}
+    {currentRolloutWorkspaceView.key === 'temporal_breakdown' && (
     <div style={{ ...sectionPanelStyle, marginTop: '1rem' }}>
       <h3 style={{ fontSize: '1.35rem', color: '#0f766e', marginTop: 0 }}>Temporal Reward Breakdown</h3>
       <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
@@ -2714,7 +2874,7 @@ function RolloutWindow({
                 Timestep {selectedTimelineStep ?? 1} / {selectedEpisodeFrames.length}
               </div>
               <img
-                src={`data:image/jpeg;base64,${selectedEpisodeFrames[Math.max(0, Math.min(selectedEpisodeFrames.length - 1, currentFrame))]}`}
+                src={`data:image/jpeg;base64,${selectedEpisodeFrames[linkedSelectedFrameIndex]}`}
                 alt={`episode ${selectedTimelineEpisode} timestep ${selectedTimelineStep}`}
                 style={{
                   width: '100%',
@@ -2781,6 +2941,7 @@ function RolloutWindow({
         </div>
       </div>
     </div>
+    )}
     </div>
   </div>
 );
