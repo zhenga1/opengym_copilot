@@ -115,6 +115,11 @@ class TrainingProgressCallback(BaseCallback):
                     "reward": float(reward_total),
                     "reward_breakdown": reward_breakdown_episode,
                     "reward_history": reward_history_episode,
+                    "episode_outcome": info.get("episode_outcome", "unknown"),
+                    "episode_outcome_reason": info.get("episode_outcome_reason", "outcome unavailable"),
+                    "episode_terminal_timestep": int(info.get("episode_terminal_timestep", len(reward_history_episode))),
+                    "terminated": bool(info.get("episode_terminated", False)),
+                    "truncated": bool(info.get("episode_truncated", False)),
                     "at_step": steps_done,
                 })
         

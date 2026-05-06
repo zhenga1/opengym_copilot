@@ -23,6 +23,7 @@ function RolloutWindow({
   const [trainingRollouts, setTrainingRollouts] = useState([]);
   const [trainingEpisodes, setTrainingEpisodes] = useState([]);
   const [frames, setFrames] = useState([]);
+  const [capturedEpisodeFramesByEpisode, setCapturedEpisodeFramesByEpisode] = useState({});
   const [currentFrame, setCurrentFrame] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [stepInterval, setStepInterval] = useState(5);
@@ -47,9 +48,14 @@ function RolloutWindow({
   const [trainingGraphIndex, setTrainingGraphIndex] = useState(0);
   const [trainingTimelineGraphIndex, setTrainingTimelineGraphIndex] = useState(0);
   const [selectedTrainingTimelineEpisode, setSelectedTrainingTimelineEpisode] = useState(null);
+  const [trainingTimelineMode, setTrainingTimelineMode] = useState('episode');
+  const [trainingTimelineOutcomeFilter, setTrainingTimelineOutcomeFilter] = useState('all');
   const [rolloutGraphIndex, setRolloutGraphIndex] = useState(0);
   const [timelineGraphIndex, setTimelineGraphIndex] = useState(0);
   const [selectedTimelineEpisode, setSelectedTimelineEpisode] = useState(null);
+  const [selectedTimelineStep, setSelectedTimelineStep] = useState(null);
+  const [rolloutTimelineMode, setRolloutTimelineMode] = useState('episode');
+  const [rolloutTimelineOutcomeFilter, setRolloutTimelineOutcomeFilter] = useState('all');
   const [rolloutRewardBreakdown, setRolloutRewardBreakdown] = useState({});
   const [latestRolloutRawTerms, setLatestRolloutRawTerms] = useState({});
   const [rewardLogs, setRewardLogs] = useState([]);
@@ -84,6 +90,7 @@ function RolloutWindow({
   }
   const timestamp = formatDate(Date.now());
   const rewardLogLimit = 30;
+  const terminalHighlightWindow = 8;
   const rolloutChartMinWidth = 600;
   const rolloutChartPointWidth = 36;
   const rolloutChartBucketSize = 25;
@@ -120,6 +127,7 @@ function RolloutWindow({
     setTrainingRollouts([]);
     setTrainingEpisodes([]);
     setFrames([]);
+    setCapturedEpisodeFramesByEpisode({});
     setCurrentFrame(0);
     setIsPlaying(false);
     setTrainingRewardBreakdown({});
@@ -134,6 +142,7 @@ function RolloutWindow({
     setRolloutRewardBreakdown(latest.reward_breakdown || {});
     setLatestRolloutRawTerms(latest.reward_raw_terms || {});
     setSelectedTimelineEpisode(latest.episode ?? null);
+    setSelectedTimelineStep(latest.episode_terminal_timestep ?? (Array.isArray(latest.reward_history) ? latest.reward_history.length : null));
     setRewardLogs(
       safeRollouts.slice(0, rewardLogLimit).map((rollout) => ({
         source: 'loaded',
@@ -231,16 +240,219 @@ function RolloutWindow({
             };
           })
         : [];
-      const latestStepBreakdown = nextRewardHistory.length > 0 ? nextRewardHistory[nextRewardHistory.length - 1].reward_breakdown : null;
+      const aggregatedBreakdown = nextRewardHistory.reduce((acc, stepEntry) => {
+        const stepBreakdown = stepEntry.reward_breakdown || {};
+        for (const [key, value] of Object.entries(stepBreakdown)) {
+          acc[key] = (acc[key] || 0) + Number(value || 0);
+        }
+        return acc;
+      }, {});
       const totalReward = nextRewardHistory.reduce((sum, stepEntry) => sum + Number(stepEntry.reward ?? 0), 0);
       return {
         ...entry,
         reward: nextRewardHistory.length > 0 ? totalReward : entry.reward,
-        reward_breakdown: latestStepBreakdown ? { ...(entry.reward_breakdown || {}), ...latestStepBreakdown, total: totalReward } : entry.reward_breakdown,
+        reward_breakdown: nextRewardHistory.length > 0 ? { ...aggregatedBreakdown, total: totalReward } : entry.reward_breakdown,
         reward_history: nextRewardHistory.length > 0 ? nextRewardHistory : entry.reward_history,
       };
     });
   }, [computeBreakdownFromRawTerms]);
+
+  const summarizeEpisodeOutcome = useCallback((entry) => {
+    if (!entry) {
+      return {
+        outcome: 'unknown',
+        label: 'Outcome unavailable',
+        detail: 'No episode selected.',
+        terminalTimestep: null,
+        highlightStart: null,
+        highlightEnd: null,
+        accentColor: 'rgba(100, 116, 139, 0.9)',
+        shadeColor: 'rgba(148, 163, 184, 0.14)',
+      };
+    }
+
+    const rewardHistory = Array.isArray(entry.reward_history) ? entry.reward_history : [];
+    const inferredOutcome =
+      entry.episode_outcome ||
+      (entry.truncated && !entry.terminated ? 'success' : entry.terminated ? 'failure' : 'unknown');
+    const terminalTimestep =
+      Number(entry.episode_terminal_timestep) ||
+      (rewardHistory.length > 0 ? rewardHistory.length : null);
+    const highlightEnd = terminalTimestep;
+    const highlightStart = terminalTimestep
+      ? Math.max(1, terminalTimestep - terminalHighlightWindow + 1)
+      : null;
+
+    if (inferredOutcome === 'success') {
+      return {
+        outcome: 'success',
+        label: terminalTimestep ? `Success at timestep ${terminalTimestep}` : 'Successful episode',
+        detail: entry.episode_outcome_reason || 'Episode ended successfully.',
+        terminalTimestep,
+        highlightStart,
+        highlightEnd,
+        accentColor: 'rgba(22, 163, 74, 0.95)',
+        shadeColor: 'rgba(34, 197, 94, 0.12)',
+      };
+    }
+
+    if (inferredOutcome === 'failure') {
+      return {
+        outcome: 'failure',
+        label: terminalTimestep ? `Failure at timestep ${terminalTimestep}` : 'Failed episode',
+        detail: entry.episode_outcome_reason || 'Episode terminated in failure.',
+        terminalTimestep,
+        highlightStart,
+        highlightEnd,
+        accentColor: 'rgba(220, 38, 38, 0.95)',
+        shadeColor: 'rgba(239, 68, 68, 0.12)',
+      };
+    }
+
+    return {
+      outcome: 'unknown',
+      label: terminalTimestep ? `Terminal event at timestep ${terminalTimestep}` : 'Outcome unavailable',
+      detail: entry.episode_outcome_reason || 'The environment did not report a clear success/failure signal.',
+      terminalTimestep,
+      highlightStart,
+      highlightEnd,
+      accentColor: 'rgba(100, 116, 139, 0.9)',
+      shadeColor: 'rgba(148, 163, 184, 0.14)',
+    };
+  }, []);
+
+  const buildTerminalHighlightPlugin = useCallback((summary) => ({
+    id: `terminal-highlight-${summary?.outcome || 'unknown'}-${summary?.terminalTimestep || 0}`,
+    beforeDatasetsDraw(chart) {
+      const highlightStart = summary?.highlightStart;
+      const highlightEnd = summary?.highlightEnd;
+      if (!highlightStart || !highlightEnd) return;
+      const xScale = chart.scales?.x;
+      const chartArea = chart.chartArea;
+      const labels = chart.data?.labels || [];
+      if (!xScale || !chartArea || labels.length === 0) return;
+
+      const startIndex = Math.max(0, Math.min(labels.length - 1, highlightStart - 1));
+      const endIndex = Math.max(0, Math.min(labels.length - 1, highlightEnd - 1));
+      const firstPixel = xScale.getPixelForValue(startIndex);
+      const lastPixel = xScale.getPixelForValue(endIndex);
+      const nextPixel = endIndex < labels.length - 1 ? xScale.getPixelForValue(endIndex + 1) : lastPixel;
+      const prevPixel = startIndex > 0 ? xScale.getPixelForValue(startIndex - 1) : firstPixel;
+      const stepHalfWidth = Math.max(8, Math.abs(nextPixel - prevPixel) / 2);
+
+      const { ctx } = chart;
+      ctx.save();
+      ctx.fillStyle = summary.shadeColor;
+      ctx.fillRect(
+        firstPixel - stepHalfWidth,
+        chartArea.top,
+        (lastPixel - firstPixel) + stepHalfWidth * 2,
+        chartArea.bottom - chartArea.top
+      );
+      ctx.strokeStyle = summary.accentColor;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(lastPixel, chartArea.top);
+      ctx.lineTo(lastPixel, chartArea.bottom);
+      ctx.stroke();
+      ctx.restore();
+    },
+  }), []);
+
+  const buildSelectedStepPlugin = useCallback((selectedStep) => ({
+    id: `selected-step-${selectedStep || 0}`,
+    afterDatasetsDraw(chart) {
+      if (!selectedStep) return;
+      const xScale = chart.scales?.x;
+      const chartArea = chart.chartArea;
+      const labels = chart.data?.labels || [];
+      if (!xScale || !chartArea || labels.length === 0) return;
+      const targetIndex = Math.max(0, Math.min(labels.length - 1, selectedStep - 1));
+      const targetPixel = xScale.getPixelForValue(targetIndex);
+      const { ctx } = chart;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(15, 23, 42, 0.9)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 6]);
+      ctx.beginPath();
+      ctx.moveTo(targetPixel, chartArea.top);
+      ctx.lineTo(targetPixel, chartArea.bottom);
+      ctx.stroke();
+      ctx.restore();
+    },
+  }), []);
+
+  const matchesEpisodeOutcome = useCallback((entry, filter) => {
+    if (filter === 'all') return true;
+    return (entry?.episode_outcome || 'unknown') === filter;
+  }, []);
+
+  const buildAverageEpisodeProfile = useCallback((entries, filter, labelPrefix) => {
+    const eligibleEntries = entries.filter((entry) => Array.isArray(entry.reward_history) && entry.reward_history.length > 0);
+    if (eligibleEntries.length === 0) {
+      return null;
+    }
+
+    const histories = eligibleEntries.map((entry) => entry.reward_history);
+    const maxLength = Math.max(...histories.map((history) => history.length), 0);
+    const averageHistory = Array.from({ length: maxLength }, (_, index) => {
+      const steps = histories.map((history) => history[index]).filter(Boolean);
+      const breakdownKeys = Array.from(
+        new Set(steps.flatMap((step) => Object.keys(step.reward_breakdown || {})))
+      );
+      const rawKeys = Array.from(
+        new Set(steps.flatMap((step) => Object.keys(step.reward_raw_terms || {})))
+      );
+
+      const mean = (values) => {
+        const valid = values.filter((value) => Number.isFinite(value));
+        if (valid.length === 0) return null;
+        return valid.reduce((sum, value) => sum + Number(value), 0) / valid.length;
+      };
+
+      const rewardBreakdown = {};
+      for (const key of breakdownKeys) {
+        rewardBreakdown[key] = mean(steps.map((step) => step.reward_breakdown?.[key]));
+      }
+
+      const rewardRawTerms = {};
+      for (const key of rawKeys) {
+        rewardRawTerms[key] = mean(steps.map((step) => step.reward_raw_terms?.[key]));
+      }
+
+      const rewardValue = mean(steps.map((step) => step.reward));
+      return {
+        step: index + 1,
+        reward: rewardValue,
+        reward_breakdown: rewardBreakdown,
+        reward_raw_terms: rewardRawTerms,
+      };
+    });
+
+    const averageTerminalTimestep = Math.round(
+      eligibleEntries.reduce((sum, entry) => {
+        const historyLength = Array.isArray(entry.reward_history) ? entry.reward_history.length : 0;
+        return sum + Number(entry.episode_terminal_timestep || historyLength || 0);
+      }, 0) / eligibleEntries.length
+    );
+
+    return {
+      episode: `${labelPrefix}-${filter}-average`,
+      reward: averageHistory.reduce((sum, step) => sum + Number(step.reward || 0), 0),
+      reward_breakdown: averageHistory.reduce((acc, step) => {
+        for (const [key, value] of Object.entries(step.reward_breakdown || {})) {
+          acc[key] = (acc[key] || 0) + Number(value || 0);
+        }
+        return acc;
+      }, {}),
+      reward_history: averageHistory,
+      episode_outcome: filter === 'all' ? 'unknown' : filter,
+      episode_outcome_reason: `Average across ${eligibleEntries.length} ${filter === 'all' ? 'episodes' : `${filter} episodes`}.`,
+      episode_terminal_timestep: averageTerminalTimestep,
+      sample_count: eligibleEntries.length,
+      is_average_profile: true,
+    };
+  }, []);
 
   const trainingGraphDefinitions = useMemo(() => {
     const orderedTicks = [...trainingRollouts].reverse();
@@ -289,17 +501,29 @@ function RolloutWindow({
     datasets: [],
   };
 
+  const filteredTrainingEpisodes = useMemo(
+    () => trainingEpisodes.filter((entry) => matchesEpisodeOutcome(entry, trainingTimelineOutcomeFilter)),
+    [matchesEpisodeOutcome, trainingEpisodes, trainingTimelineOutcomeFilter]
+  );
+
   const selectedTrainingTimelineRollout = useMemo(() => {
-    if (trainingEpisodes.length === 0) return null;
+    if (filteredTrainingEpisodes.length === 0) return null;
     if (selectedTrainingTimelineEpisode === null || selectedTrainingTimelineEpisode === undefined) {
-      return trainingEpisodes[0];
+      return filteredTrainingEpisodes[0];
     }
-    return trainingEpisodes.find((entry) => entry.episode === selectedTrainingTimelineEpisode) || trainingEpisodes[0];
-  }, [selectedTrainingTimelineEpisode, trainingEpisodes]);
+    return filteredTrainingEpisodes.find((entry) => entry.episode === selectedTrainingTimelineEpisode) || filteredTrainingEpisodes[0];
+  }, [filteredTrainingEpisodes, selectedTrainingTimelineEpisode]);
+
+  const selectedTrainingTimelineTarget = useMemo(() => {
+    if (trainingTimelineMode === 'average') {
+      return buildAverageEpisodeProfile(filteredTrainingEpisodes, trainingTimelineOutcomeFilter, 'training');
+    }
+    return selectedTrainingTimelineRollout;
+  }, [buildAverageEpisodeProfile, filteredTrainingEpisodes, selectedTrainingTimelineRollout, trainingTimelineMode, trainingTimelineOutcomeFilter]);
 
   const trainingTimelineGraphDefinitions = useMemo(() => {
-    const rewardHistory = Array.isArray(selectedTrainingTimelineRollout?.reward_history)
-      ? selectedTrainingTimelineRollout.reward_history
+    const rewardHistory = Array.isArray(selectedTrainingTimelineTarget?.reward_history)
+      ? selectedTrainingTimelineTarget.reward_history
       : [];
     const labels = rewardHistory.map((entry, index) => entry.step ?? index + 1);
     const breakdownKeys = Array.from(
@@ -330,7 +554,9 @@ function RolloutWindow({
 
     return [
       {
-        title: 'All Shaped Terms In Training Episode',
+        title: trainingTimelineMode === 'average'
+          ? `Average Shaped Terms In ${trainingTimelineOutcomeFilter === 'all' ? 'All' : trainingTimelineOutcomeFilter.charAt(0).toUpperCase() + trainingTimelineOutcomeFilter.slice(1)} Training Episodes`
+          : 'All Shaped Terms In Training Episode',
         labels,
         datasets: [
           {
@@ -347,7 +573,11 @@ function RolloutWindow({
           })),
         ],
       },
-      makeSeries('Training Episode Total Reward', (entry) => entry.reward_breakdown?.total ?? entry.reward ?? null, 'rgb(59, 130, 246)'),
+      makeSeries(
+        trainingTimelineMode === 'average' ? 'Average Training Episode Total Reward' : 'Training Episode Total Reward',
+        (entry) => entry.reward_breakdown?.total ?? entry.reward ?? null,
+        'rgb(59, 130, 246)'
+      ),
       ...breakdownKeys.map((key, index) =>
         makeSeries(
           `Training Episode Term: ${key}`,
@@ -363,13 +593,21 @@ function RolloutWindow({
         )
       ),
     ];
-  }, [selectedTrainingTimelineRollout]);
+  }, [selectedTrainingTimelineTarget, trainingTimelineMode, trainingTimelineOutcomeFilter]);
 
   const currentTrainingTimelineGraph = trainingTimelineGraphDefinitions[trainingTimelineGraphIndex] || {
     title: 'Training Episode Reward Timeline',
     labels: [],
     datasets: [],
   };
+  const selectedTrainingTimelineSummary = useMemo(
+    () => summarizeEpisodeOutcome(selectedTrainingTimelineTarget),
+    [selectedTrainingTimelineTarget, summarizeEpisodeOutcome]
+  );
+  const trainingTimelinePlugins = useMemo(
+    () => [buildTerminalHighlightPlugin(selectedTrainingTimelineSummary)],
+    [buildTerminalHighlightPlugin, selectedTrainingTimelineSummary]
+  );
 
   const rolloutGraphDefinitions = useMemo(() => {
     const orderedRollouts = [...rollouts].reverse();
@@ -422,17 +660,40 @@ function RolloutWindow({
     datasets: [],
   };
 
+  const filteredRollouts = useMemo(
+    () => rollouts.filter((entry) => matchesEpisodeOutcome(entry, rolloutTimelineOutcomeFilter)),
+    [matchesEpisodeOutcome, rolloutTimelineOutcomeFilter, rollouts]
+  );
+
   const selectedTimelineRollout = useMemo(() => {
-    if (rollouts.length === 0) return null;
+    if (filteredRollouts.length === 0) return null;
     if (selectedTimelineEpisode === null || selectedTimelineEpisode === undefined) {
-      return rollouts[0];
+      return filteredRollouts[0];
     }
-    return rollouts.find((entry) => entry.episode === selectedTimelineEpisode) || rollouts[0];
-  }, [rollouts, selectedTimelineEpisode]);
+    return filteredRollouts.find((entry) => entry.episode === selectedTimelineEpisode) || filteredRollouts[0];
+  }, [filteredRollouts, selectedTimelineEpisode]);
+
+  const selectedTimelineTarget = useMemo(() => {
+    if (rolloutTimelineMode === 'average') {
+      return buildAverageEpisodeProfile(filteredRollouts, rolloutTimelineOutcomeFilter, 'rollout');
+    }
+    return selectedTimelineRollout;
+  }, [buildAverageEpisodeProfile, filteredRollouts, rolloutTimelineMode, rolloutTimelineOutcomeFilter, selectedTimelineRollout]);
+
+  const selectedEpisodeFrames = useMemo(() => {
+    if (rolloutTimelineMode !== 'episode' || !selectedTimelineRollout) return [];
+    return capturedEpisodeFramesByEpisode[selectedTimelineRollout.episode] || [];
+  }, [capturedEpisodeFramesByEpisode, rolloutTimelineMode, selectedTimelineRollout]);
+
+  const selectedTimelineStepEntry = useMemo(() => {
+    if (!selectedTimelineTarget || !Array.isArray(selectedTimelineTarget.reward_history)) return null;
+    if (!selectedTimelineStep) return null;
+    return selectedTimelineTarget.reward_history[selectedTimelineStep - 1] || null;
+  }, [selectedTimelineStep, selectedTimelineTarget]);
 
   const timelineGraphDefinitions = useMemo(() => {
-    const rewardHistory = Array.isArray(selectedTimelineRollout?.reward_history)
-      ? selectedTimelineRollout.reward_history
+    const rewardHistory = Array.isArray(selectedTimelineTarget?.reward_history)
+      ? selectedTimelineTarget.reward_history
       : [];
     const labels = rewardHistory.map((entry, index) => entry.step ?? index + 1);
     const breakdownKeys = Array.from(
@@ -465,7 +726,9 @@ function RolloutWindow({
 
     return [
       {
-        title: 'All Shaped Terms In Episode',
+        title: rolloutTimelineMode === 'average'
+          ? `Average Shaped Terms In ${rolloutTimelineOutcomeFilter === 'all' ? 'All' : rolloutTimelineOutcomeFilter.charAt(0).toUpperCase() + rolloutTimelineOutcomeFilter.slice(1)} Episodes`
+          : 'All Shaped Terms In Episode',
         labels,
         datasets: [
           {
@@ -482,7 +745,11 @@ function RolloutWindow({
           })),
         ],
       },
-      makeSeries('Episode Total Reward', (entry) => entry.reward_breakdown?.total ?? entry.reward ?? null, 'rgb(56, 189, 248)'),
+      makeSeries(
+        rolloutTimelineMode === 'average' ? 'Average Episode Total Reward' : 'Episode Total Reward',
+        (entry) => entry.reward_breakdown?.total ?? entry.reward ?? null,
+        'rgb(56, 189, 248)'
+      ),
       ...breakdownKeys.map((key, index) =>
         makeSeries(
           `Episode Term: ${key}`,
@@ -498,13 +765,32 @@ function RolloutWindow({
         )
       ),
     ];
-  }, [selectedTimelineRollout]);
+  }, [rolloutTimelineMode, rolloutTimelineOutcomeFilter, selectedTimelineTarget]);
 
   const currentTimelineGraph = timelineGraphDefinitions[timelineGraphIndex] || {
     title: 'Episode Reward Timeline',
     labels: [],
     datasets: [],
   };
+  const selectedRolloutTimelineSummary = useMemo(
+    () => summarizeEpisodeOutcome(selectedTimelineTarget),
+    [selectedTimelineTarget, summarizeEpisodeOutcome]
+  );
+  const rolloutTimelinePlugins = useMemo(
+    () => [
+      buildTerminalHighlightPlugin(selectedRolloutTimelineSummary),
+      buildSelectedStepPlugin(selectedTimelineStep),
+    ],
+    [buildSelectedStepPlugin, buildTerminalHighlightPlugin, selectedRolloutTimelineSummary, selectedTimelineStep]
+  );
+  const trainingOutcomeCounts = useMemo(() => ({
+    success: trainingEpisodes.filter((entry) => entry.episode_outcome === 'success').length,
+    failure: trainingEpisodes.filter((entry) => entry.episode_outcome === 'failure').length,
+  }), [trainingEpisodes]);
+  const rolloutOutcomeCounts = useMemo(() => ({
+    success: rollouts.filter((entry) => entry.episode_outcome === 'success').length,
+    failure: rollouts.filter((entry) => entry.episode_outcome === 'failure').length,
+  }), [rollouts]);
 
   const saveRewardConfig = useCallback(async () => {
     if (isSavedViewer) {
@@ -712,15 +998,15 @@ function RolloutWindow({
   }, [trainingTimelineGraphDefinitions.length]);
 
   useEffect(() => {
-    if (trainingEpisodes.length === 0) {
+    if (filteredTrainingEpisodes.length === 0) {
       setSelectedTrainingTimelineEpisode(null);
       return;
     }
-    const hasSelectedEpisode = trainingEpisodes.some((entry) => entry.episode === selectedTrainingTimelineEpisode);
+    const hasSelectedEpisode = filteredTrainingEpisodes.some((entry) => entry.episode === selectedTrainingTimelineEpisode);
     if (!hasSelectedEpisode) {
-      setSelectedTrainingTimelineEpisode(trainingEpisodes[0].episode ?? null);
+      setSelectedTrainingTimelineEpisode(filteredTrainingEpisodes[0].episode ?? null);
     }
-  }, [selectedTrainingTimelineEpisode, trainingEpisodes]);
+  }, [filteredTrainingEpisodes, selectedTrainingTimelineEpisode]);
 
   useEffect(() => {
     if (rolloutGraphDefinitions.length === 0) {
@@ -739,15 +1025,46 @@ function RolloutWindow({
   }, [timelineGraphDefinitions.length]);
 
   useEffect(() => {
-    if (rollouts.length === 0) {
+    if (filteredRollouts.length === 0) {
       setSelectedTimelineEpisode(null);
+      setSelectedTimelineStep(null);
       return;
     }
-    const hasSelectedEpisode = rollouts.some((entry) => entry.episode === selectedTimelineEpisode);
+    const hasSelectedEpisode = filteredRollouts.some((entry) => entry.episode === selectedTimelineEpisode);
     if (!hasSelectedEpisode) {
-      setSelectedTimelineEpisode(rollouts[0].episode ?? null);
+      setSelectedTimelineEpisode(filteredRollouts[0].episode ?? null);
     }
-  }, [rollouts, selectedTimelineEpisode]);
+  }, [filteredRollouts, selectedTimelineEpisode]);
+
+  useEffect(() => {
+    if (!selectedTimelineTarget || !Array.isArray(selectedTimelineTarget.reward_history) || selectedTimelineTarget.reward_history.length === 0) {
+      setSelectedTimelineStep(null);
+      return;
+    }
+    const maxStep = selectedTimelineTarget.reward_history.length;
+    const defaultStep = Math.min(
+      Number(selectedTimelineTarget.episode_terminal_timestep || maxStep),
+      maxStep
+    );
+    if (!selectedTimelineStep || selectedTimelineStep > maxStep) {
+      setSelectedTimelineStep(defaultStep);
+    }
+  }, [selectedTimelineStep, selectedTimelineTarget]);
+
+  useEffect(() => {
+    if (rolloutTimelineMode !== 'episode') return;
+    if (selectedEpisodeFrames.length === 0) return;
+    if (!selectedTimelineStep) return;
+    const nextFrameIndex = Math.max(0, Math.min(selectedEpisodeFrames.length - 1, selectedTimelineStep - 1));
+    setCurrentFrame((prev) => (prev === nextFrameIndex ? prev : nextFrameIndex));
+  }, [rolloutTimelineMode, selectedEpisodeFrames, selectedTimelineStep]);
+
+  useEffect(() => {
+    if (rolloutTimelineMode !== 'episode') return;
+    if (selectedEpisodeFrames.length === 0) return;
+    const inferredStep = Math.max(1, Math.min(selectedEpisodeFrames.length, currentFrame + 1));
+    setSelectedTimelineStep((prev) => (prev === inferredStep ? prev : inferredStep));
+  }, [currentFrame, rolloutTimelineMode, selectedEpisodeFrames]);
 
   useEffect(() => {
     let retryTimeout;
@@ -950,6 +1267,12 @@ function RolloutWindow({
             if(data.ep_frames.length > 0){
               setFrames(data.ep_frames);        // store all frames
               setCurrentFrame(0);            // start at first frame
+              if (data.sim_frame_episode_number !== null && data.sim_frame_episode_number !== undefined) {
+                setCapturedEpisodeFramesByEpisode((prev) => ({
+                  ...prev,
+                  [data.sim_frame_episode_number]: data.ep_frames,
+                }));
+              }
             }
             // console.log("Episode: ", data.episode, "   Reward: ", data.reward); // DEBUG:FRONTEND
             // console.log("Frames received length: ", data.ep_frames.length); // DEBUG:FRONTEND
@@ -965,12 +1288,18 @@ function RolloutWindow({
               reward_breakdown: data.reward_breakdown || {},
               reward_raw_terms: data.reward_raw_terms || {},
               reward_history: data.reward_history || [],
+              episode_outcome: data.episode_outcome || 'unknown',
+              episode_outcome_reason: data.episode_outcome_reason || 'outcome unavailable',
+              episode_terminal_timestep: data.episode_terminal_timestep ?? null,
+              terminated: Boolean(data.terminated),
+              truncated: Boolean(data.truncated),
             };
             if (!trainMode) {
               setEpisodeInfo({ episode: data.episode, reward: data.reward });
               setRolloutRewardBreakdown(data.reward_breakdown || {});
               setLatestRolloutRawTerms(data.reward_raw_terms || {});
               setSelectedTimelineEpisode(data.episode);
+              setSelectedTimelineStep(data.episode_terminal_timestep ?? (Array.isArray(data.reward_history) ? data.reward_history.length : null));
               setRollouts((prev) => [newData, ...prev]);
               appendRewardLog({
                 source: 'rollout',
@@ -1000,7 +1329,9 @@ function RolloutWindow({
       setTrainingRewardBreakdownMean({});
       setRolloutRewardBreakdown({});
       setRewardLogs([]);
+      setCapturedEpisodeFramesByEpisode({});
       setSelectedTimelineEpisode(null);
+      setSelectedTimelineStep(null);
       // initial attempt
       togglePause(false);
       connect();
@@ -1553,18 +1884,61 @@ function RolloutWindow({
             marginBottom: '0.9rem',
           }}
         >
+          <label htmlFor="trainingTimelineMode" style={{ fontWeight: 600 }}>Mode</label>
+          <select
+            id="trainingTimelineMode"
+            value={trainingTimelineMode}
+            onChange={(event) => setTrainingTimelineMode(event.target.value)}
+            style={{ padding: '0.4rem 0.55rem', minWidth: 180 }}
+          >
+            <option value="episode">Single Episode</option>
+            <option value="average">Average By Type</option>
+          </select>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 600 }}>Episode Type</span>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+              <input
+                type="radio"
+                name="trainingTimelineOutcome"
+                value="all"
+                checked={trainingTimelineOutcomeFilter === 'all'}
+                onChange={(event) => setTrainingTimelineOutcomeFilter(event.target.value)}
+              />
+              All
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+              <input
+                type="radio"
+                name="trainingTimelineOutcome"
+                value="success"
+                checked={trainingTimelineOutcomeFilter === 'success'}
+                onChange={(event) => setTrainingTimelineOutcomeFilter(event.target.value)}
+              />
+              Successful ({trainingOutcomeCounts.success})
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+              <input
+                type="radio"
+                name="trainingTimelineOutcome"
+                value="failure"
+                checked={trainingTimelineOutcomeFilter === 'failure'}
+                onChange={(event) => setTrainingTimelineOutcomeFilter(event.target.value)}
+              />
+              Failed ({trainingOutcomeCounts.failure})
+            </label>
+          </div>
           <label htmlFor="trainingTimelineEpisode" style={{ fontWeight: 600 }}>Episode</label>
           <select
             id="trainingTimelineEpisode"
             value={selectedTrainingTimelineEpisode ?? ''}
             onChange={(event) => setSelectedTrainingTimelineEpisode(Number(event.target.value))}
             style={{ padding: '0.4rem 0.55rem', minWidth: 160 }}
-            disabled={trainingEpisodes.length === 0}
+            disabled={trainingTimelineMode === 'average' || filteredTrainingEpisodes.length === 0}
           >
-            {trainingEpisodes.length === 0 ? (
+            {filteredTrainingEpisodes.length === 0 ? (
               <option value="">No training episodes yet</option>
             ) : (
-              trainingEpisodes.map((entry) => (
+              filteredTrainingEpisodes.map((entry) => (
                 <option key={`training-episode-${entry.episode}`} value={entry.episode}>
                   Episode {entry.episode}
                 </option>
@@ -1593,8 +1967,34 @@ function RolloutWindow({
         <div style={{ textAlign: 'center', marginBottom: '0.75rem' }}>
           <div style={{ fontSize: '1rem', fontWeight: 700, color: '#334155' }}>{currentTrainingTimelineGraph.title}</div>
           <div style={{ fontSize: '0.82rem', color: '#64748b' }}>
-            {selectedTrainingTimelineRollout ? `Training episode ${selectedTrainingTimelineRollout.episode} timestep reward view` : 'Select a completed training episode to inspect timestep rewards'}
+            {selectedTrainingTimelineTarget
+              ? selectedTrainingTimelineTarget.is_average_profile
+                ? `Average reward forensic profile built from ${selectedTrainingTimelineTarget.sample_count} episodes`
+                : `Training episode ${selectedTrainingTimelineTarget.episode} timestep reward view`
+              : 'Select a completed training episode to inspect timestep rewards'}
           </div>
+        </div>
+        <div
+          style={{
+            marginBottom: '0.9rem',
+            padding: '0.75rem 0.9rem',
+            borderRadius: '12px',
+            backgroundColor: selectedTrainingTimelineSummary.shadeColor,
+            border: `1px solid ${selectedTrainingTimelineSummary.accentColor}`,
+            textAlign: 'left',
+          }}
+        >
+          <div style={{ fontWeight: 800, color: selectedTrainingTimelineSummary.accentColor }}>
+            {selectedTrainingTimelineSummary.label}
+          </div>
+          <div style={{ color: '#475569', fontSize: '0.84rem', marginTop: '0.2rem' }}>
+            {selectedTrainingTimelineSummary.detail}
+          </div>
+          {selectedTrainingTimelineSummary.highlightStart && selectedTrainingTimelineSummary.highlightEnd && (
+            <div style={{ color: '#475569', fontSize: '0.8rem', marginTop: '0.2rem' }}>
+              Highlighting timesteps {selectedTrainingTimelineSummary.highlightStart} to {selectedTrainingTimelineSummary.highlightEnd} to focus attention on the terminal region.
+            </div>
+          )}
         </div>
         <div
           style={{
@@ -1617,6 +2017,7 @@ function RolloutWindow({
                 borderWidth: 2,
               })),
             }}
+            plugins={trainingTimelinePlugins}
             options={{
               responsive: true,
               maintainAspectRatio: false,
@@ -2108,28 +2509,71 @@ function RolloutWindow({
       <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
         Inspect reward contributions inside one episode to see which term spikes right before failure and which term dominates each timestep.
       </div>
-      <div
-        style={{
-          display: 'flex',
-          gap: '0.75rem',
-          alignItems: 'center',
+        <div
+          style={{
+            display: 'flex',
+            gap: '0.75rem',
+            alignItems: 'center',
           justifyContent: 'center',
           flexWrap: 'wrap',
-          marginBottom: '0.9rem',
-        }}
-      >
+            marginBottom: '0.9rem',
+          }}
+        >
+        <label htmlFor="rolloutTimelineMode" style={{ fontWeight: 600 }}>Mode</label>
+        <select
+          id="rolloutTimelineMode"
+          value={rolloutTimelineMode}
+          onChange={(event) => setRolloutTimelineMode(event.target.value)}
+          style={{ padding: '0.4rem 0.55rem', minWidth: 180 }}
+        >
+          <option value="episode">Single Episode</option>
+          <option value="average">Average By Type</option>
+        </select>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 600 }}>Episode Type</span>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+            <input
+              type="radio"
+              name="rolloutTimelineOutcome"
+              value="all"
+              checked={rolloutTimelineOutcomeFilter === 'all'}
+              onChange={(event) => setRolloutTimelineOutcomeFilter(event.target.value)}
+            />
+            All
+          </label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+            <input
+              type="radio"
+              name="rolloutTimelineOutcome"
+              value="success"
+              checked={rolloutTimelineOutcomeFilter === 'success'}
+              onChange={(event) => setRolloutTimelineOutcomeFilter(event.target.value)}
+            />
+            Successful ({rolloutOutcomeCounts.success})
+          </label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+            <input
+              type="radio"
+              name="rolloutTimelineOutcome"
+              value="failure"
+              checked={rolloutTimelineOutcomeFilter === 'failure'}
+              onChange={(event) => setRolloutTimelineOutcomeFilter(event.target.value)}
+            />
+            Failed ({rolloutOutcomeCounts.failure})
+          </label>
+        </div>
         <label htmlFor="timelineEpisode" style={{ fontWeight: 600 }}>Episode</label>
         <select
           id="timelineEpisode"
           value={selectedTimelineEpisode ?? ''}
           onChange={(event) => setSelectedTimelineEpisode(Number(event.target.value))}
           style={{ padding: '0.4rem 0.55rem', minWidth: 160 }}
-          disabled={rollouts.length === 0}
+          disabled={rolloutTimelineMode === 'average' || filteredRollouts.length === 0}
         >
-          {rollouts.length === 0 ? (
+          {filteredRollouts.length === 0 ? (
             <option value="">No episodes yet</option>
           ) : (
-            rollouts.map((entry) => (
+            filteredRollouts.map((entry) => (
               <option key={`episode-${entry.episode}`} value={entry.episode}>
                 Episode {entry.episode}
               </option>
@@ -2155,11 +2599,37 @@ function RolloutWindow({
           )}
         </select>
       </div>
-      <div style={{ textAlign: 'center', marginBottom: '0.75rem' }}>
-        <div style={{ fontSize: '1rem', fontWeight: 700, color: '#334155' }}>{currentTimelineGraph.title}</div>
-        <div style={{ fontSize: '0.82rem', color: '#64748b' }}>
-          {selectedTimelineRollout ? `Episode ${selectedTimelineRollout.episode} timestep reward view` : 'Select an episode to inspect timestep rewards'}
+        <div style={{ textAlign: 'center', marginBottom: '0.75rem' }}>
+          <div style={{ fontSize: '1rem', fontWeight: 700, color: '#334155' }}>{currentTimelineGraph.title}</div>
+          <div style={{ fontSize: '0.82rem', color: '#64748b' }}>
+            {selectedTimelineTarget
+              ? selectedTimelineTarget.is_average_profile
+              ? `Average reward forensic profile built from ${selectedTimelineTarget.sample_count} episodes`
+              : `Episode ${selectedTimelineTarget.episode} timestep reward view`
+            : 'Select an episode to inspect timestep rewards'}
         </div>
+      </div>
+      <div
+        style={{
+          marginBottom: '0.9rem',
+          padding: '0.75rem 0.9rem',
+          borderRadius: '12px',
+          backgroundColor: selectedRolloutTimelineSummary.shadeColor,
+          border: `1px solid ${selectedRolloutTimelineSummary.accentColor}`,
+          textAlign: 'left',
+        }}
+      >
+        <div style={{ fontWeight: 800, color: selectedRolloutTimelineSummary.accentColor }}>
+          {selectedRolloutTimelineSummary.label}
+        </div>
+        <div style={{ color: '#475569', fontSize: '0.84rem', marginTop: '0.2rem' }}>
+          {selectedRolloutTimelineSummary.detail}
+        </div>
+        {selectedRolloutTimelineSummary.highlightStart && selectedRolloutTimelineSummary.highlightEnd && (
+          <div style={{ color: '#475569', fontSize: '0.8rem', marginTop: '0.2rem' }}>
+            Highlighting timesteps {selectedRolloutTimelineSummary.highlightStart} to {selectedRolloutTimelineSummary.highlightEnd} to focus attention on the terminal region.
+          </div>
+        )}
       </div>
       <div
         style={{
@@ -2182,11 +2652,18 @@ function RolloutWindow({
               borderWidth: 2,
             })),
           }}
+          plugins={rolloutTimelinePlugins}
           options={{
             responsive: true,
             maintainAspectRatio: false,
             animation: false,
             normalized: true,
+            onClick: (_, elements) => {
+              if (!elements || elements.length === 0) return;
+              if (rolloutTimelineMode !== 'episode') return;
+              const nextIndex = elements[0].index;
+              setSelectedTimelineStep(nextIndex + 1);
+            },
             interaction: {
               intersect: false,
               mode: 'index',
@@ -2207,8 +2684,101 @@ function RolloutWindow({
               },
               y: { title: { display: true, text: 'Reward Contribution' } },
             },
+            }}
+          />
+        </div>
+      <div style={{ marginTop: '1rem', display: 'grid', gridTemplateColumns: 'minmax(260px, 1fr) minmax(260px, 1fr)', gap: '1rem' }}>
+        <div
+          style={{
+            borderRadius: '12px',
+            border: '1px solid rgba(148, 163, 184, 0.18)',
+            background: 'rgba(255,255,255,0.55)',
+            padding: '0.9rem',
           }}
-        />
+        >
+          <div style={{ fontWeight: 800, color: '#334155', marginBottom: '0.45rem' }}>Linked Rollout Frame</div>
+          <div style={{ color: '#64748b', fontSize: '0.82rem', marginBottom: '0.7rem' }}>
+            Click a timestep on the chart to jump to the matching captured frame when that episode has video.
+          </div>
+          {rolloutTimelineMode === 'average' ? (
+            <div style={{ color: '#64748b', fontSize: '0.85rem' }}>
+              Frame linkage is only available in `Single Episode` mode.
+            </div>
+          ) : selectedEpisodeFrames.length === 0 ? (
+            <div style={{ color: '#64748b', fontSize: '0.85rem' }}>
+              No captured video exists for this episode. Video is only recorded every configured capture interval.
+            </div>
+          ) : (
+            <>
+              <div style={{ color: '#334155', fontWeight: 700, marginBottom: '0.55rem' }}>
+                Timestep {selectedTimelineStep ?? 1} / {selectedEpisodeFrames.length}
+              </div>
+              <img
+                src={`data:image/jpeg;base64,${selectedEpisodeFrames[Math.max(0, Math.min(selectedEpisodeFrames.length - 1, currentFrame))]}`}
+                alt={`episode ${selectedTimelineEpisode} timestep ${selectedTimelineStep}`}
+                style={{
+                  width: '100%',
+                  maxWidth: '460px',
+                  borderRadius: '12px',
+                  border: '2px solid rgba(14, 165, 233, 0.35)',
+                  boxShadow: '0 6px 18px rgba(15, 23, 42, 0.12)',
+                }}
+              />
+              <input
+                type="range"
+                min="1"
+                max={selectedEpisodeFrames.length}
+                step="1"
+                value={Math.max(1, selectedTimelineStep || 1)}
+                onChange={(event) => setSelectedTimelineStep(Number(event.target.value))}
+                style={{ width: '100%', marginTop: '0.8rem' }}
+              />
+            </>
+          )}
+        </div>
+        <div
+          style={{
+            borderRadius: '12px',
+            border: '1px solid rgba(148, 163, 184, 0.18)',
+            background: 'rgba(255,255,255,0.55)',
+            padding: '0.9rem',
+            textAlign: 'left',
+          }}
+        >
+          <div style={{ fontWeight: 800, color: '#334155', marginBottom: '0.45rem' }}>Exact Reward Structure At Selected Timestep</div>
+          <div style={{ color: '#64748b', fontSize: '0.82rem', marginBottom: '0.7rem' }}>
+            This is the reward forensic snapshot for the currently selected timestep.
+          </div>
+          {!selectedTimelineStepEntry ? (
+            <div style={{ color: '#64748b', fontSize: '0.85rem' }}>
+              Select a single rollout episode and click a timestep on the chart.
+            </div>
+          ) : (
+            <>
+              <div style={{ color: '#334155', fontWeight: 700, marginBottom: '0.5rem' }}>
+                Timestep {selectedTimelineStepEntry.step}
+              </div>
+              <div style={{ color: '#0f766e', fontWeight: 700, marginBottom: '0.7rem' }}>
+                Total reward: {Number(selectedTimelineStepEntry.reward_breakdown?.total ?? selectedTimelineStepEntry.reward ?? 0).toFixed(3)}
+              </div>
+              {Object.entries(selectedTimelineStepEntry.reward_breakdown || {}).filter(([key]) => key !== 'total').map(([key, value]) => (
+                <div
+                  key={`selected-breakdown-${key}`}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: '0.75rem',
+                    padding: '0.22rem 0',
+                    borderBottom: '1px solid rgba(148, 163, 184, 0.12)',
+                  }}
+                >
+                  <span style={{ color: '#475569' }}>{key}</span>
+                  <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{Number(value).toFixed(3)}</span>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
       </div>
     </div>
     </div>

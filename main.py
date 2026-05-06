@@ -801,6 +801,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
             current_step = step + 1
             
             send_frame_interval = 5 if run_id not in number_of_steps_dictionary else number_of_steps_dictionary[run_id]
+            capture_episode_frames = episodes_seen % send_frame_interval == 0
             ep_reward += reward
             for key, value in step_reward_breakdown.items():
                 ep_reward_breakdown[key] = ep_reward_breakdown.get(key, 0.0) + float(value)
@@ -812,6 +813,8 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                 "reward_breakdown": {key: float(value) for key, value in step_reward_breakdown.items()},
                 "reward_raw_terms": {key: float(value) for key, value in step_reward_raw_terms.items()},
             })
+            if capture_episode_frames:
+                ep_frames.append(render_env(env))
 
             # Prepare for next step
             if done:
@@ -830,6 +833,11 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                     "reward_breakdown": {key: float(value) for key, value in ep_reward_breakdown.items()},
                     "reward_raw_terms": {key: float(value) for key, value in ep_reward_raw_terms.items()},
                     "reward_history": ep_reward_history,
+                    "episode_outcome": info.get("episode_outcome", "unknown"),
+                    "episode_outcome_reason": info.get("episode_outcome_reason", "outcome unavailable"),
+                    "episode_terminal_timestep": int(info.get("episode_terminal_timestep", len(ep_reward_history))),
+                    "terminated": bool(info.get("episode_terminated", terminated)),
+                    "truncated": bool(info.get("episode_truncated", truncated)),
                     "reward_weights": reward_weights_for_run(run_id, env_name),
                     #"done": done
                 }
@@ -847,8 +855,6 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                 episodes_seen += 1
                 ep_frames = []
             else:
-                if episodes_seen % send_frame_interval == 0 :
-                    ep_frames.append(render_env(env))
                 obs = next_obs
                 step += 1
 

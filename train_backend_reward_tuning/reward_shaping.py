@@ -10,6 +10,21 @@ from train_backend_reward_tuning.reward_templates import (
 )
 
 
+def infer_episode_outcome(info: dict[str, Any], terminated: bool, truncated: bool) -> tuple[str, str]:
+    is_success = info.get("is_success")
+    if is_success is True:
+        return "success", "environment reported success"
+    if is_success is False:
+        return "failure", "environment reported failure"
+    if truncated and not terminated:
+        return "success", "time limit reached"
+    if terminated:
+        return "failure", "environment terminated"
+    if truncated:
+        return "success", "episode truncated"
+    return "unknown", "outcome unavailable"
+
+
 def reward_monitor_keys(env_name: str) -> tuple[str, ...]:
     keys = [f"reward_{term['key']}" for term in reward_template_for_env(env_name)]
     keys.append("reward_total")
@@ -113,6 +128,7 @@ class RewardShapingWrapper(gym.Wrapper):
 
         if terminated or truncated:
             episode_total = float(sum(self._episode_term_sums.values()))
+            episode_outcome, outcome_reason = infer_episode_outcome(info, terminated, truncated)
             info["reward_total"] = episode_total
             for key, value in self._episode_term_sums.items():
                 info[f"reward_{key}"] = float(value)
@@ -121,6 +137,11 @@ class RewardShapingWrapper(gym.Wrapper):
                 **{key: float(value) for key, value in self._episode_term_sums.items()},
             }
             info["reward_history_episode"] = list(self._episode_reward_history)
+            info["episode_outcome"] = episode_outcome
+            info["episode_outcome_reason"] = outcome_reason
+            info["episode_terminal_timestep"] = len(self._episode_reward_history)
+            info["episode_terminated"] = bool(terminated)
+            info["episode_truncated"] = bool(truncated)
 
         self._previous_action = action
         return obs, float(total_reward), terminated, truncated, info
