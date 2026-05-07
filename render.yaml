@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: opengym-copilot
+    env: docker
+    plan: starter
+    autoDeploy: true
+    healthCheckPath: /healthz
+    disk:
+      name: opengym-data
+      mountPath: /var/lib/opengym
+      sizeGB: 10
+    envVars:
+      - key: OPEN_GYM_DATA_DIR
+        value: /var/lib/opengym
