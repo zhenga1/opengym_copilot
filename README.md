@@ -168,6 +168,8 @@ Steps:
 3. Render will detect `render.yaml`, build the Docker image, and deploy the app.
 4. Open the generated `https://...onrender.com` URL and the React app should load from the FastAPI server.
 
+The official demo is at the following link: `https://opengym-copilot.onrender.com/`. 
+
 ### Local Production-Style Run
 
 Build the frontend once:
