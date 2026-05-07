@@ -49,7 +49,7 @@ Reward configuration is stored per `run_id`, so different rollout windows can us
 
 Starting training opens a popup that lets you configure:
 
-- training output path
+- training output filename inside the managed `models/` storage
 - device (`cpu` or `cuda`)
 - learning rate
 - learning rate schedule
@@ -131,8 +131,8 @@ Saved rollout JSON files can be loaded back into the app. Loading a saved rollou
 Create an environment with the required Python packages, then start FastAPI:
 
 ```bash
-pip install fastapi uvicorn gymnasium stable-baselines3 opencv-python python-multipart torch
-uvicorn main:app --reload
+pip install -r requirements.txt
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### Frontend
@@ -142,6 +142,67 @@ cd opengym-frontend
 npm install
 npm run dev
 ```
+
+The dev frontend uses the Vite proxy, so HTTP requests and WebSocket traffic still land on the FastAPI backend at `localhost:8000`.
+
+## Production Website Deployment
+
+This app cannot be deployed as GitHub Pages alone because training, uploads, saved rollouts, and WebSocket streaming all require a live Python backend. The workable path is:
+
+1. Push this repo to GitHub.
+2. Deploy the repo to a container host such as Render, Railway, Fly.io, or a VM.
+3. Let FastAPI serve the built React frontend and the API from the same origin.
+
+### Render via GitHub
+
+This repo now includes:
+
+- `Dockerfile` for a single-container production build
+- `render.yaml` for a Render web service with a persistent disk
+- `requirements.txt` for the Python backend
+
+Steps:
+
+1. Create a new GitHub repo and push this project.
+2. In Render, choose `New +` -> `Blueprint` and point it at the GitHub repo.
+3. Render will detect `render.yaml`, build the Docker image, and deploy the app.
+4. Open the generated `https://...onrender.com` URL and the React app should load from the FastAPI server.
+
+### Local Production-Style Run
+
+Build the frontend once:
+
+```bash
+cd opengym-frontend
+npm install
+npm run build
+```
+
+Then run only the backend from the repo root:
+
+```bash
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+FastAPI will serve:
+
+- the API endpoints
+- the WebSocket endpoint at `/ws/rollout`
+- the built frontend at `/`
+
+### Environment Variables
+
+- `OPEN_GYM_DATA_DIR`: storage root for `models/`, `rollouts/`, and `progress_bar.log`
+- `CORS_ALLOW_ORIGINS`: comma-separated origins for split frontend/backend deployments
+- `VITE_API_BASE_URL`: optional frontend override for API base URL
+- `VITE_WS_BASE_URL`: optional frontend override for WebSocket base URL
+- `VITE_DEV_BACKEND_URL`: optional Vite dev proxy target
+
+### Operational Notes
+
+- Public hosting is practical for lighter CPU environments first. MuJoCo and large multi-user training loads will want a stronger host, and often a GPU-backed machine.
+- Render starter instances sleep when idle and are not a good fit for serious training throughput.
+- Model files and saved rollouts are now constrained to the app-managed storage directories, which is necessary for an internet-facing deployment.
 
 ## Demo
 

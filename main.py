@@ -1,4 +1,6 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 import asyncio
 import gymnasium as gym
 from pydantic import BaseModel
@@ -8,8 +10,10 @@ import json
 import numpy as np
 import cv2
 import base64
+import os
 from typing import Any
 import importlib.util
+from pathlib import Path
 #import constants
 
 from urllib.parse import parse_qs
@@ -54,7 +58,30 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 time_intervals = {}
 rollout_fps = {}
 
-progress_bar_log_file = open("progress_bar.log", "w")
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = Path(os.getenv("OPEN_GYM_DATA_DIR", str(BASE_DIR))).resolve()
+MODELS_DIR = (DATA_DIR / "models").resolve()
+ROLLOUTS_DIR = (DATA_DIR / "rollouts").resolve()
+PROGRESS_LOG_PATH = (DATA_DIR / "progress_bar.log").resolve()
+FRONTEND_DIST_DIR = (BASE_DIR / "opengym-frontend" / "dist").resolve()
+
+for path in (DATA_DIR, MODELS_DIR, ROLLOUTS_DIR):
+    path.mkdir(parents=True, exist_ok=True)
+
+cors_origins_raw = os.getenv(
+    "CORS_ALLOW_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000",
+)
+allow_origins = [origin.strip() for origin in cors_origins_raw.split(",") if origin.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allow_origins or ["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+progress_bar_log_file = open(PROGRESS_LOG_PATH, "w")
 train_run_progresses = {}
 HAS_MULTIPART = importlib.util.find_spec("multipart") is not None
 
@@ -104,7 +131,51 @@ from fastapi import WebSocket, APIRouter, WebSocketDisconnect
 from threading import Thread, Lock
 from datetime import datetime
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-default_model_path = f"models/ppo_model_{env_name}_{timestamp}.zip"
+
+
+def build_default_model_path(selected_env_name: str) -> str:
+    safe_env_name = (selected_env_name or "env").replace("/", "_")
+    return str((MODELS_DIR / f"ppo_model_{safe_env_name}_{timestamp}.zip").resolve())
+
+
+def sanitize_storage_name(name: str | None, suffix: str) -> str:
+    raw_name = (name or "").strip()
+    candidate = Path(raw_name).name
+    if not candidate:
+        candidate = f"default{suffix}"
+    if not candidate.endswith(suffix):
+        candidate = f"{candidate}{suffix}"
+    return candidate
+
+
+def resolve_model_output_path(requested_path: str | None, run_id: str | None, selected_env_name: str) -> Path:
+    default_name = sanitize_storage_name(f"ppo_model_{selected_env_name}_{run_id or 'session'}", ".zip")
+    if not requested_path or not requested_path.strip():
+        return (MODELS_DIR / default_name).resolve()
+
+    candidate = Path(requested_path.strip())
+    if candidate.is_absolute():
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            resolved = (MODELS_DIR / default_name).resolve()
+        else:
+            try:
+                resolved.relative_to(MODELS_DIR)
+            except ValueError:
+                resolved = (MODELS_DIR / sanitize_storage_name(candidate.name, ".zip")).resolve()
+    else:
+        safe_parts = [part for part in candidate.parts if part not in {"", ".", ".."}]
+        resolved = (MODELS_DIR / Path(*safe_parts)).resolve() if safe_parts else (MODELS_DIR / default_name).resolve()
+
+    if resolved.suffix.lower() != ".zip":
+        resolved = resolved.with_suffix(".zip")
+    try:
+        resolved.relative_to(MODELS_DIR)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="training output path must stay inside the managed models directory") from exc
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    return resolved
 
 def encode_jpeg(frame_np, quality=80):
     import io
@@ -626,7 +697,7 @@ def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_step
                 RUNS_TRAINING_STATUS[run_id]["reward_ablation_status"] = "error"
             train_model_actual_path = ""
             if run_id not in trained_model_paths:
-                train_model_actual_path = default_model_path
+                train_model_actual_path = build_default_model_path(env_name)
             else:
                 train_model_actual_path = trained_model_paths[run_id]
             model.save(train_model_actual_path)
@@ -650,15 +721,12 @@ def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_step
     # status option
     return model
 
-import os
 from fastapi import UploadFile, File
-MODELS_DIR = os.path.join(os.getcwd(), "models")
 print("Models directory: ", MODELS_DIR)
-os.makedirs(MODELS_DIR, exist_ok=True)
 @app.get("/models")
 def list_models():
-    os.makedirs(MODELS_DIR, exist_ok=True)
-    files = [f for f in os.listdir(MODELS_DIR) if f.endswith('.zip')]
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    files = [path.name for path in MODELS_DIR.iterdir() if path.is_file() and path.suffix == ".zip"]
     return {"models": sorted(files)}
 
 class RolloutSpeedRequest(BaseModel):
@@ -780,24 +848,25 @@ class SetTrainingDirRequest(BaseModel):
     run_id: str
     train_dir_path: str
     device:str
+    env_name: str | None = None
     training_hyperparams: dict | None = None
 
 @app.post("/set_training_dir")
 def set_training_dir(req: SetTrainingDirRequest):
     run_id = req.run_id
-    where_to_save_trained_model = req.train_dir_path
+    where_to_save_trained_model = resolve_model_output_path(req.train_dir_path, run_id, req.env_name or env_name or "env")
 
     print("New parameter obtained: Here is where save trained model - ", where_to_save_trained_model)
     device = req.device
     print("Device obtainied ", device)
-    trained_model_paths[run_id] = where_to_save_trained_model
+    trained_model_paths[run_id] = str(where_to_save_trained_model)
     training_model_devices[run_id] = device
     training_hyperparams_by_run[run_id] = normalize_training_hyperparams(req.training_hyperparams)
     # Here you would typically set the training directory for the session
     return {
         "status": "training directory set",
         "run_id": run_id,
-        "path": where_to_save_trained_model,
+        "path": str(where_to_save_trained_model),
         "training_hyperparams": training_hyperparams_by_run[run_id],
     }
 
@@ -809,30 +878,28 @@ class SaveRolloutRequest(BaseModel):
 class LoadRolloutRequest(BaseModel):
     rollout_filename: str
 
-rollouts_dir = os.path.join(os.getcwd(), "rollouts")
-os.makedirs(rollouts_dir, exist_ok=True)
 @app.post("/save_rollouts_data")
 def save_rollouts_data(saveRolloutRequest: SaveRolloutRequest):
     run_id = saveRolloutRequest.run_id
-    rollout_filename = saveRolloutRequest.rollout_filename
-    if rollout_filename == "" or rollout_filename is None or (len(rollout_filename)>=4 and ".json" not in rollout_filename):
-        #print(f"Rollout filename: {rollout_filename} is invalid, please check. ")
-        rollout_filename = f"rollouts_{run_id}.json"
+    rollout_filename = sanitize_storage_name(
+        saveRolloutRequest.rollout_filename or f"rollouts_{run_id}",
+        ".json",
+    )
     rollouts = saveRolloutRequest.rollouts
-    with open(os.path.join(rollouts_dir, rollout_filename), "w") as f:
+    with open(ROLLOUTS_DIR / rollout_filename, "w") as f:
         json.dump(rollouts, f)
     return {"status": "success", "run_id": run_id, "rollouts": rollouts}
 
 @app.get("/rollouts_files")
 def list_rollouts_files():
-    files = [f for f in os.listdir(rollouts_dir) if f.endswith(".json")]
+    files = [path.name for path in ROLLOUTS_DIR.iterdir() if path.is_file() and path.suffix == ".json"]
     return {"rollouts": sorted(files)}
 
 @app.post("/load_rollouts_data")
 def load_rollouts_data(loadRolloutRequest: LoadRolloutRequest):
-    rollout_filename = os.path.basename(loadRolloutRequest.rollout_filename)
-    rollout_path = os.path.join(rollouts_dir, rollout_filename)
-    if not os.path.exists(rollout_path):
+    rollout_filename = sanitize_storage_name(loadRolloutRequest.rollout_filename, ".json")
+    rollout_path = ROLLOUTS_DIR / rollout_filename
+    if not rollout_path.exists():
         raise HTTPException(status_code=404, detail="Rollout file not found.")
     with open(rollout_path, "r") as f:
         rollouts = json.load(f)
@@ -847,12 +914,13 @@ class SessionState:
 if HAS_MULTIPART:
     @app.post("/upload_model")
     async def upload_model(file: UploadFile = File(...)):
-      if not file.filename.endswith(".zip"):
+      if not file.filename or not file.filename.endswith(".zip"):
           return {"ok": False, "error": "must be a .zip"}
-      dest = os.path.join(MODELS_DIR, file.filename)
+      safe_model_name = sanitize_storage_name(file.filename, ".zip")
+      dest = MODELS_DIR / safe_model_name
       with open(dest, "wb") as f:
           f.write(await file.read())
-      return {"ok": True, "model_name": file.filename}
+      return {"ok": True, "model_name": safe_model_name}
 else:
     @app.post("/upload_model")
     async def upload_model():
@@ -874,7 +942,7 @@ class DeleteAllTempModelsRequest(BaseModel):
 
 @app.get("/get_model_path")
 def get_model_path():
-    return MODELS_DIR
+    return str(MODELS_DIR)
 
 number_of_steps_dictionary = {}
 class ChangeNumberOfStepsRequest(BaseModel):
@@ -891,15 +959,14 @@ def change_number_of_steps(req: ChangeNumberOfStepsRequest):
 @app.post("/load_model")
 def load_model(req: LoadRequest):
     ensure_sb3_available()
-    from os.path import join, exists
     print("model loading began: ")
     if req.model_name == "":
         with current_model_locks[req.run_id]:
             current_model[req.run_id]  = None
         print("load model is None")
         return {"ok": True, "run_id": req.run_id, "model":""}
-    path = join(MODELS_DIR, req.model_name)
-    if not exists(path):
+    path = MODELS_DIR / sanitize_storage_name(req.model_name, ".zip")
+    if not path.exists():
         return {"ok": False, "error": "model_not_found"}
     # Load the model
     # print("Sessions are this: ", sessions)
@@ -909,18 +976,18 @@ def load_model(req: LoadRequest):
     #     return {"ok": False, "error": "session_not_found"}
     try:
         with current_model_locks[req.run_id]:
-            current_model[req.run_id] = PPO.load(path)
+            current_model[req.run_id] = PPO.load(str(path))
         print("load model is", current_model)
-        return {"ok": True, "run_id": req.run_id, "model": req.model_name}
+        return {"ok": True, "run_id": req.run_id, "model": path.name}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 @app.post("/delete_all_temp_models")
 def delete_all_temp_models(req: DeleteAllTempModelsRequest):
     run_id = req.run_id
-    for filename in os.listdir(MODELS_DIR):
-        if filename.startswith(f"temp_{run_id}_") and filename.endswith(".zip"):
-            os.remove(os.path.join(MODELS_DIR, filename))
+    for model_path in MODELS_DIR.iterdir():
+        if model_path.is_file() and model_path.name.startswith(f"temp_{run_id}_") and model_path.suffix == ".zip":
+            model_path.unlink()
     return {"ok": True, "run_id": run_id, "status": "all temp models deleted"}
 
 
@@ -1101,3 +1168,49 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
             await asyncio.sleep(time_intervals[run_id] if (run_id in time_intervals) else 0.05)  # throttle to ~20 FPS
     except WebSocketDisconnect:
         print("Client disconnected. ")
+    finally:
+        if "env" in locals():
+            env.close()
+
+
+@app.get("/healthz")
+def healthcheck():
+    return {
+        "ok": True,
+        "models_dir": str(MODELS_DIR),
+        "rollouts_dir": str(ROLLOUTS_DIR),
+        "frontend_built": FRONTEND_DIST_DIR.exists(),
+    }
+
+
+def _frontend_file_response(relative_path: str) -> FileResponse:
+    target_path = (FRONTEND_DIST_DIR / relative_path).resolve()
+    try:
+        target_path.relative_to(FRONTEND_DIST_DIR)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="frontend asset not found") from exc
+    if not target_path.exists() or not target_path.is_file():
+        raise HTTPException(status_code=404, detail="frontend asset not found")
+    return FileResponse(target_path)
+
+
+@app.get("/")
+def serve_frontend_index():
+    if not FRONTEND_DIST_DIR.exists():
+        return {
+            "message": "Frontend build not found. Run `npm install && npm run build` inside `opengym-frontend` before starting production.",
+            "api": "OpenGym Copilot backend is running.",
+        }
+    return FileResponse(FRONTEND_DIST_DIR / "index.html")
+
+
+@app.get("/{full_path:path}")
+def serve_frontend_assets(full_path: str):
+    if not FRONTEND_DIST_DIR.exists():
+        raise HTTPException(status_code=404, detail="frontend build not found")
+    if full_path.startswith(("models", "rollouts", "progress", "reward_config", "training_runs", "ws")):
+        raise HTTPException(status_code=404, detail="not found")
+    target = (FRONTEND_DIST_DIR / full_path).resolve()
+    if target.exists() and target.is_file():
+        return _frontend_file_response(full_path)
+    return FileResponse(FRONTEND_DIST_DIR / "index.html")

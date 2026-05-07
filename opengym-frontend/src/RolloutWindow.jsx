@@ -3,8 +3,10 @@ import {Line} from 'react-chartjs-2'
 import SetPathPopup from './SetPathPopup'
 import SaveRolloutPopup from './RolloutPopup'
 import ProgressBar from './ProgressBar'
-import axios  from 'axios'
+import { isCancel } from 'axios'
+import apiClient from './apiClient'
 import {Chart as ChartJS, LineElement, CategoryScale, LinearScale, PointElement} from 'chart.js'
+import { buildWebSocketUrl } from './runtimeConfig'
 
 ChartJS.register(LineElement, CategoryScale, LinearScale, PointElement);
 
@@ -910,7 +912,7 @@ function RolloutWindow({
 
     setRewardConfigLoading(true);
     try {
-      const response = await axios.post("/reward_config", {
+      const response = await apiClient.post("/reward_config", {
         run_id: runId,
         env_name: envName,
         terms: rewardConfig.map((term) => ({
@@ -1016,7 +1018,7 @@ function RolloutWindow({
     setRolloutSpeed(newSpeed);
 
     try {
-      await axios.post("/rollout_speed", { "run_id": runId, "fps":newSpeed,"delay": 1.0 / newSpeed });
+      await apiClient.post("/rollout_speed", { "run_id": runId, "fps":newSpeed,"delay": 1.0 / newSpeed });
     } catch (e) {
       console.error("Failed to set rollout speed:", e);
     }
@@ -1030,10 +1032,11 @@ function RolloutWindow({
       // Set Train path FIRST
       // THEN SET THE TRAIN MODE AND toggle pause
       // persist to backend (example endpoint)
-      await axios.post("/set_training_dir", {
+      await apiClient.post("/set_training_dir", {
         "run_id": runId,
         "train_dir_path": path,
         "device": device,
+        "env_name": envName,
         "training_hyperparams": nextTrainingHyperparams,
       });
       setTrainingPath(path);
@@ -1052,7 +1055,7 @@ function RolloutWindow({
   };
   const deleteAllTempModels = () => {
     // delete all the models in the temporary directory
-    axios.post("/delete_all_temp_models", { "run_id": runId });
+    apiClient.post("/delete_all_temp_models", { "run_id": runId });
     // force reload of the temp model directory
     setReloadAllTempModelsSwitcher(prev => !prev);
     
@@ -1064,7 +1067,7 @@ function RolloutWindow({
       return;
     }
     try {
-      await axios.post("/change_number_of_steps", { "run_id": runId, "number_of_steps": steps });
+      await apiClient.post("/change_number_of_steps", { "run_id": runId, "number_of_steps": steps });
     } catch (e) {
       console.error("Failed to change number of steps:", e);
     }
@@ -1077,7 +1080,7 @@ function RolloutWindow({
     }
     const newState = ns !== undefined ? ns : !isPaused;
     // console.log("Sending pause state:", newState); // DEBUG:FRONTEND
-    await axios.post("/pause_rollout", { session_id: sessionId, paused: newState });
+    await apiClient.post("/pause_rollout", { session_id: sessionId, paused: newState });
     isPausedRef.current = newState;
     setIsPaused(newState);
   };
@@ -1196,7 +1199,7 @@ function RolloutWindow({
     // console.log("Fetching models from server..."); // DEBUG:FRONTEND
     const fetchModels = async () => {
       try {
-        const res = await axios.get("/models");
+        const res = await apiClient.get("/models");
         // Get the models that currently exist
         // console.log("Available models: ", res); // DEBUG:FRONTEND
         setServerModels(res.data.models || []);
@@ -1208,7 +1211,7 @@ function RolloutWindow({
     };
     const fetchRolloutFiles = async () => {
       try {
-        const res = await axios.get("/rollouts_files");
+        const res = await apiClient.get("/rollouts_files");
         const files = res.data.rollouts || [];
         setRolloutFiles(files);
         setSelectedRolloutFile((prev) => (prev && files.includes(prev) ? prev : files[0] || ""));
@@ -1230,7 +1233,7 @@ function RolloutWindow({
 
     async function fetchRunId() {
       try {
-        const returnData = await axios.get("/unique_run_id");
+        const returnData = await apiClient.get("/unique_run_id");
         if (!cancelled) {
           setRunId(returnData.data.run_id);
           attempt = 0; // reset the backoff attempt after success
@@ -1238,7 +1241,7 @@ function RolloutWindow({
       } catch (error) {
         if (!cancelled) {
           // if intential cancel, don't retry
-          if (axios.isCancel?.(error) || error?.name === "CanceledError") return;
+          if (isCancel?.(error) || error?.name === "CanceledError") return;
           attempt ++;
           const delay = Math.min(30000, 1000 * 2 ** attempt); // exponential backoff up to 30s
           retryTimer  = setTimeout(fetchRunId, delay);
@@ -1266,7 +1269,7 @@ function RolloutWindow({
     async function fetchRewardConfig() {
       setRewardConfigLoading(true);
       try {
-        const response = await axios.get("/reward_config", {
+        const response = await apiClient.get("/reward_config", {
           params: { run_id: runId, env_name: envName },
         });
         if (cancelled) return;
@@ -1305,7 +1308,7 @@ function RolloutWindow({
     let cancelled = false;
     const fetchTrainingRunStatus = async () => {
       try {
-        const response = await axios.get(`/training_runs/${runId}`);
+        const response = await apiClient.get(`/training_runs/${runId}`);
         if (cancelled) return;
         setTrainingAblationReport(response.data?.reward_ablation || null);
         setTrainingAblationStatus(response.data?.reward_ablation_status || 'idle');
@@ -1377,7 +1380,12 @@ function RolloutWindow({
     }
     else {
       const connect = () => {
-        const url = `ws://localhost:8000/ws/rollout?runid=${runId}&env=${envName}&train=${trainMode}&train_steps=${trainSteps}`
+        const url = buildWebSocketUrl('/ws/rollout', {
+          runid: runId,
+          env: envName,
+          train: trainMode,
+          train_steps: trainSteps,
+        });
         // console.log("Attempting to connect to : ", url); // DEBUG:FRONTEND
         const ws = new WebSocket(url);
 
@@ -1551,7 +1559,7 @@ function RolloutWindow({
     if (!runId || stoppingTraining) return;
     setStoppingTraining(true);
     try {
-      await axios.post("/stop_training", { run_id: runId });
+      await apiClient.post("/stop_training", { run_id: runId });
       setTrainMode(false);
     } catch (e) {
       console.error("Failed to stop training:", e);
@@ -1582,9 +1590,9 @@ function RolloutWindow({
     try {
       // “Clear” the session’s model by loading none; implement either:
       // 1) a dedicated endpoint:
-      // await axios.post("/unload_model", { session_id: sessionId });
+      // await apiClient.post("/unload_model", { session_id: sessionId });
       // OR 2) overload load_model with a sentinel:
-      await axios.post("/load_model", { run_id: runId, model_name: "" });
+      await apiClient.post("/load_model", { run_id: runId, model_name: "" });
     } finally {
       setLoading(false);
     }
@@ -1599,7 +1607,7 @@ function RolloutWindow({
     if (!selectedServerModel) return useNone();
     setLoading(true);
     try {
-      await axios.post("/load_model", {
+      await apiClient.post("/load_model", {
         run_id: runId,
         model_name: selectedServerModel,
       });
@@ -1619,8 +1627,8 @@ function RolloutWindow({
     }
     setSavingRollouts(true);
     try {
-      const res = await axios.post("/save_rollouts_data", { run_id: runId, rollout_filename: filename, rollouts: rollouts});
-      const filesRes = await axios.get("/rollouts_files");
+      const res = await apiClient.post("/save_rollouts_data", { run_id: runId, rollout_filename: filename, rollouts: rollouts});
+      const filesRes = await apiClient.get("/rollouts_files");
       const files = filesRes.data.rollouts || [];
       setRolloutFiles(files);
       setSelectedRolloutFile(filename && files.includes(filename) ? filename : files[0] || "");
@@ -1641,7 +1649,7 @@ function RolloutWindow({
     }
     setLoadingSavedRollouts(true);
     try {
-      const res = await axios.post("/load_rollouts_data", {
+      const res = await apiClient.post("/load_rollouts_data", {
         rollout_filename: selectedRolloutFile,
       });
       const loadedRollouts = Array.isArray(res.data?.rollouts) ? res.data.rollouts : [];
@@ -1664,10 +1672,10 @@ function RolloutWindow({
     try {
       const form = new FormData();
       form.append("file", file); // field name "file" expected by backend
-      const up = await axios.post("/upload_model", form);
+      const up = await apiClient.post("/upload_model", form);
       const modelName = up.data?.model_name; // backend should return stored filename
       if (modelName) {
-        await axios.post("/load_model", { run_id: runId, model_name: modelName });
+        await apiClient.post("/load_model", { run_id: runId, model_name: modelName });
       }
     } finally {
       setLoading(false);
@@ -1676,7 +1684,7 @@ function RolloutWindow({
   };
 
   const getRootSavedModelsLink = async() => {
-    const result = await axios.get("/get_model_path");
+    const result = await apiClient.get("/get_model_path");
     // console.log("Root saved models link from backend:", result.data); // DEBUG:FRONTEND
     let path = result.data;
     try {
