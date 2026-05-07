@@ -61,7 +61,7 @@ const SetPathPopup = ({
         </div>
 
         <div className="popup-body">
-          <label className="popup-label">Training folder (server-side path)</label>
+          <label className="popup-label">Training output filename</label>
           <input
             ref={inputRef}
             className="popup-input"

@@ -1,38 +1,46 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+const backendTarget = process.env.VITE_DEV_BACKEND_URL || 'http://localhost:8000';
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
   server:{
     proxy: {
-    '/progress': 'http://localhost:8000',
-    '/start': 'http://localhost:8000',
-    '/pause_rollout': 'http://localhost:8000',
-    '/load_model': 'http://localhost:8000',
+    '/progress': backendTarget,
+    '/start': backendTarget,
+    '/pause_rollout': backendTarget,
+    '/load_model': backendTarget,
     '/upload_model': {
-      target: 'http://localhost:8000',
+      target: backendTarget,
       changeOrigin: true,
       secure : false,
     },
-    '/models' : 'http://localhost:8000',
-    '/get_model_path': 'http://localhost:8000',
-    '/set_training_dir': 'http://localhost:8000',
-    '/stop_training': 'http://localhost:8000',
-    '/unique_run_id': 'http://localhost:8000',
-    '/reward_config': 'http://localhost:8000',
+    '/models' : backendTarget,
+    '/get_model_path': backendTarget,
+    '/set_training_dir': backendTarget,
+    '/stop_training': backendTarget,
+    '/unique_run_id': backendTarget,
+    '/reward_config': backendTarget,
     "/training_runs": {
-        target: "http://localhost:8000", // FastAPI backend
+        target: backendTarget,
         changeOrigin: true,
-        // Used for disabling SSL verification in development
         secure: false,
       },
-    "/rollout_speed": 'http://localhost:8000',
-    "/save_rollouts_data": 'http://localhost:8000',
-    "/load_rollouts_data": 'http://localhost:8000',
-    "/rollouts_files": 'http://localhost:8000',
-    '/change_number_of_steps': 'http://localhost:8000',
-    '/delete_all_temp_models': 'http://localhost:8000',
+    "/rollout_speed": backendTarget,
+    "/save_rollouts_data": backendTarget,
+    "/load_rollouts_data": backendTarget,
+    "/rollouts_files": backendTarget,
+    '/change_number_of_steps': backendTarget,
+    '/delete_all_temp_models': backendTarget,
+    '/healthz': backendTarget,
+    '/ws': {
+      target: backendTarget,
+      ws: true,
+      changeOrigin: true,
+      secure: false,
+    },
     }
   }
 }

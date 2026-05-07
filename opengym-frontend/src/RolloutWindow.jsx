@@ -3,8 +3,10 @@ import {Line} from 'react-chartjs-2'
 import SetPathPopup from './SetPathPopup'
 import SaveRolloutPopup from './RolloutPopup'
 import ProgressBar from './ProgressBar'
-import axios  from 'axios'
+import { isCancel } from 'axios'
+import apiClient from './apiClient'
 import {Chart as ChartJS, LineElement, CategoryScale, LinearScale, PointElement} from 'chart.js'
+import { buildWebSocketUrl } from './runtimeConfig'
 
 ChartJS.register(LineElement, CategoryScale, LinearScale, PointElement);
 
@@ -21,7 +23,10 @@ function RolloutWindow({
   const isSavedViewer = viewerMode === 'saved';
   const [rollouts, setRollouts] = useState([]);
   const [trainingRollouts, setTrainingRollouts] = useState([]);
+  const [trainingEpisodes, setTrainingEpisodes] = useState([]);
   const [frames, setFrames] = useState([]);
+  const [capturedEpisodeFramesByEpisode, setCapturedEpisodeFramesByEpisode] = useState({});
+  const [selectedVisualizationEpisode, setSelectedVisualizationEpisode] = useState(null);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [stepInterval, setStepInterval] = useState(5);
@@ -41,10 +46,25 @@ function RolloutWindow({
   const [rewardConfigLoading, setRewardConfigLoading] = useState(false);
   const [rewardConfigStatus, setRewardConfigStatus] = useState("Loading reward terms...");
   const [supportsCustomReward, setSupportsCustomReward] = useState(false);
+  const [availableRewardVariables, setAvailableRewardVariables] = useState([]);
+  const [rewardFormulaExamples, setRewardFormulaExamples] = useState([]);
   const [trainingRewardBreakdown, setTrainingRewardBreakdown] = useState({});
   const [trainingRewardBreakdownMean, setTrainingRewardBreakdownMean] = useState({});
+  const [trainingAblationReport, setTrainingAblationReport] = useState(null);
+  const [trainingAblationStatus, setTrainingAblationStatus] = useState('idle');
   const [trainingGraphIndex, setTrainingGraphIndex] = useState(0);
+  const [trainingWorkspaceViewIndex, setTrainingWorkspaceViewIndex] = useState(0);
+  const [trainingTimelineGraphIndex, setTrainingTimelineGraphIndex] = useState(0);
+  const [selectedTrainingTimelineEpisode, setSelectedTrainingTimelineEpisode] = useState(null);
+  const [trainingTimelineMode, setTrainingTimelineMode] = useState('episode');
+  const [trainingTimelineOutcomeFilter, setTrainingTimelineOutcomeFilter] = useState('all');
   const [rolloutGraphIndex, setRolloutGraphIndex] = useState(0);
+  const [timelineGraphIndex, setTimelineGraphIndex] = useState(0);
+  const [selectedTimelineEpisode, setSelectedTimelineEpisode] = useState(null);
+  const [selectedTimelineStep, setSelectedTimelineStep] = useState(null);
+  const [rolloutTimelineMode, setRolloutTimelineMode] = useState('episode');
+  const [rolloutTimelineOutcomeFilter, setRolloutTimelineOutcomeFilter] = useState('all');
+  const [rolloutWorkspaceViewIndex, setRolloutWorkspaceViewIndex] = useState(0);
   const [rolloutRewardBreakdown, setRolloutRewardBreakdown] = useState({});
   const [latestRolloutRawTerms, setLatestRolloutRawTerms] = useState({});
   const [rewardLogs, setRewardLogs] = useState([]);
@@ -79,6 +99,7 @@ function RolloutWindow({
   }
   const timestamp = formatDate(Date.now());
   const rewardLogLimit = 30;
+  const terminalHighlightWindow = 8;
   const rolloutChartMinWidth = 600;
   const rolloutChartPointWidth = 36;
   const rolloutChartBucketSize = 25;
@@ -111,9 +132,22 @@ function RolloutWindow({
 
   const hydrateLoadedRollouts = useCallback((loadedRollouts) => {
     const safeRollouts = Array.isArray(loadedRollouts) ? loadedRollouts : [];
+    const earliestEpisode = safeRollouts.reduce((minEpisode, rollout) => {
+      const episode = Number(rollout?.episode);
+      if (!Number.isFinite(episode)) return minEpisode;
+      if (minEpisode === null || episode < minEpisode) return episode;
+      return minEpisode;
+    }, null);
+    const initialTimelineRollout =
+      earliestEpisode === null
+        ? safeRollouts[0] || {}
+        : safeRollouts.find((rollout) => Number(rollout?.episode) === earliestEpisode) || safeRollouts[0] || {};
     setRollouts(safeRollouts);
     setTrainingRollouts([]);
+    setTrainingEpisodes([]);
     setFrames([]);
+    setCapturedEpisodeFramesByEpisode({});
+    setSelectedVisualizationEpisode(null);
     setCurrentFrame(0);
     setIsPlaying(false);
     setTrainingRewardBreakdown({});
@@ -127,6 +161,11 @@ function RolloutWindow({
     setEpisodeNumForSimulation(latest.episode ?? 0);
     setRolloutRewardBreakdown(latest.reward_breakdown || {});
     setLatestRolloutRawTerms(latest.reward_raw_terms || {});
+    setSelectedTimelineEpisode(initialTimelineRollout.episode ?? null);
+    setSelectedTimelineStep(
+      initialTimelineRollout.episode_terminal_timestep ??
+      (Array.isArray(initialTimelineRollout.reward_history) ? initialTimelineRollout.reward_history.length : null)
+    );
     setRewardLogs(
       safeRollouts.slice(0, rewardLogLimit).map((rollout) => ({
         source: 'loaded',
@@ -155,12 +194,49 @@ function RolloutWindow({
         description: 'Recovered from rollout reward breakdown.',
         enabled: true,
         weight: 1,
+        expression: '',
+        is_custom: false,
       };
 
       return [...prev, { ...seededTerm, [field]: nextValue }];
     });
     setRewardConfigDirty(true);
     setRewardConfigStatus("Unsaved reward changes.");
+  }, []);
+
+  const addCustomRewardTerm = useCallback(() => {
+    setRewardConfig((prev) => {
+      let index = prev.filter((term) => term.is_custom).length + 1;
+      let key = `custom_term_${index}`;
+      while (prev.some((term) => term.key === key)) {
+        index += 1;
+        key = `custom_term_${index}`;
+      }
+      return [
+        ...prev,
+        {
+          key,
+          label: `Custom Term ${index}`,
+          description: 'User-defined reward term computed from the formula below.',
+          enabled: true,
+          weight: 1.0,
+          expression: '0',
+          is_custom: true,
+        },
+      ];
+    });
+    setRewardConfigDirty(true);
+    setRewardConfigStatus('Added custom reward term. Define its formula, then apply reward changes.');
+  }, []);
+
+  const removeRewardTerm = useCallback((termKey) => {
+    setRewardConfig((prev) => prev.filter((term) => term.key !== termKey));
+    setRewardConfigDirty(true);
+    setRewardConfigStatus('Removed custom reward term. Apply reward changes to persist.');
+  }, []);
+
+  const showSavedViewerRewardMessage = useCallback(() => {
+    setRewardConfigStatus('Saved rollout viewers are read-only. Edit reward terms from a live rollout window.');
   }, []);
 
   const computeBreakdownFromRawTerms = useCallback((terms, rawTerms) => {
@@ -180,17 +256,263 @@ function RolloutWindow({
 
   const applyRewardConfigToRollouts = useCallback((entries, terms) => {
     return entries.map((entry) => {
+      const nextRewardHistory = Array.isArray(entry.reward_history)
+        ? entry.reward_history.map((stepEntry) => {
+            const nextStepBreakdown = computeBreakdownFromRawTerms(terms, stepEntry.reward_raw_terms || {});
+            if (!nextStepBreakdown) {
+              return stepEntry;
+            }
+            return {
+              ...stepEntry,
+              reward: nextStepBreakdown.total,
+              reward_breakdown: nextStepBreakdown,
+            };
+          })
+        : [];
       const nextBreakdown = computeBreakdownFromRawTerms(terms, entry.reward_raw_terms || {});
       if (!nextBreakdown) {
-        return entry;
+        return {
+          ...entry,
+          reward_history: nextRewardHistory.length > 0 ? nextRewardHistory : entry.reward_history,
+        };
       }
       return {
         ...entry,
         reward: nextBreakdown.total,
         reward_breakdown: nextBreakdown,
+        reward_history: nextRewardHistory,
       };
     });
   }, [computeBreakdownFromRawTerms]);
+
+  const applyRewardConfigToTrainingEpisodes = useCallback((entries, terms) => {
+    return entries.map((entry) => {
+      const nextRewardHistory = Array.isArray(entry.reward_history)
+        ? entry.reward_history.map((stepEntry) => {
+            const nextStepBreakdown = computeBreakdownFromRawTerms(terms, stepEntry.reward_raw_terms || {});
+            if (!nextStepBreakdown) {
+              return stepEntry;
+            }
+            return {
+              ...stepEntry,
+              reward: nextStepBreakdown.total,
+              reward_breakdown: nextStepBreakdown,
+            };
+          })
+        : [];
+      const aggregatedBreakdown = nextRewardHistory.reduce((acc, stepEntry) => {
+        const stepBreakdown = stepEntry.reward_breakdown || {};
+        for (const [key, value] of Object.entries(stepBreakdown)) {
+          acc[key] = (acc[key] || 0) + Number(value || 0);
+        }
+        return acc;
+      }, {});
+      const totalReward = nextRewardHistory.reduce((sum, stepEntry) => sum + Number(stepEntry.reward ?? 0), 0);
+      return {
+        ...entry,
+        reward: nextRewardHistory.length > 0 ? totalReward : entry.reward,
+        reward_breakdown: nextRewardHistory.length > 0 ? { ...aggregatedBreakdown, total: totalReward } : entry.reward_breakdown,
+        reward_history: nextRewardHistory.length > 0 ? nextRewardHistory : entry.reward_history,
+      };
+    });
+  }, [computeBreakdownFromRawTerms]);
+
+  const summarizeEpisodeOutcome = useCallback((entry) => {
+    if (!entry) {
+      return {
+        outcome: 'unknown',
+        label: 'Outcome unavailable',
+        detail: 'No episode selected.',
+        terminalTimestep: null,
+        highlightStart: null,
+        highlightEnd: null,
+        accentColor: 'rgba(100, 116, 139, 0.9)',
+        shadeColor: 'rgba(148, 163, 184, 0.14)',
+      };
+    }
+
+    const rewardHistory = Array.isArray(entry.reward_history) ? entry.reward_history : [];
+    const inferredOutcome =
+      entry.episode_outcome ||
+      (entry.truncated && !entry.terminated ? 'success' : entry.terminated ? 'failure' : 'unknown');
+    const terminalTimestep =
+      Number(entry.episode_terminal_timestep) ||
+      (rewardHistory.length > 0 ? rewardHistory.length : null);
+    const highlightEnd = terminalTimestep;
+    const highlightStart = terminalTimestep
+      ? Math.max(1, terminalTimestep - terminalHighlightWindow + 1)
+      : null;
+
+    if (inferredOutcome === 'success') {
+      return {
+        outcome: 'success',
+        label: terminalTimestep ? `Success at timestep ${terminalTimestep}` : 'Successful episode',
+        detail: entry.episode_outcome_reason || 'Episode ended successfully.',
+        terminalTimestep,
+        highlightStart,
+        highlightEnd,
+        accentColor: 'rgba(22, 163, 74, 0.95)',
+        shadeColor: 'rgba(34, 197, 94, 0.12)',
+      };
+    }
+
+    if (inferredOutcome === 'failure') {
+      return {
+        outcome: 'failure',
+        label: terminalTimestep ? `Failure at timestep ${terminalTimestep}` : 'Failed episode',
+        detail: entry.episode_outcome_reason || 'Episode terminated in failure.',
+        terminalTimestep,
+        highlightStart,
+        highlightEnd,
+        accentColor: 'rgba(220, 38, 38, 0.95)',
+        shadeColor: 'rgba(239, 68, 68, 0.12)',
+      };
+    }
+
+    return {
+      outcome: 'unknown',
+      label: terminalTimestep ? `Terminal event at timestep ${terminalTimestep}` : 'Outcome unavailable',
+      detail: entry.episode_outcome_reason || 'The environment did not report a clear success/failure signal.',
+      terminalTimestep,
+      highlightStart,
+      highlightEnd,
+      accentColor: 'rgba(100, 116, 139, 0.9)',
+      shadeColor: 'rgba(148, 163, 184, 0.14)',
+    };
+  }, []);
+
+  const buildTerminalHighlightPlugin = useCallback((summary) => ({
+    id: `terminal-highlight-${summary?.outcome || 'unknown'}-${summary?.terminalTimestep || 0}`,
+    beforeDatasetsDraw(chart) {
+      const highlightStart = summary?.highlightStart;
+      const highlightEnd = summary?.highlightEnd;
+      if (!highlightStart || !highlightEnd) return;
+      const xScale = chart.scales?.x;
+      const chartArea = chart.chartArea;
+      const labels = chart.data?.labels || [];
+      if (!xScale || !chartArea || labels.length === 0) return;
+
+      const startIndex = Math.max(0, Math.min(labels.length - 1, highlightStart - 1));
+      const endIndex = Math.max(0, Math.min(labels.length - 1, highlightEnd - 1));
+      const firstPixel = xScale.getPixelForValue(startIndex);
+      const lastPixel = xScale.getPixelForValue(endIndex);
+      const nextPixel = endIndex < labels.length - 1 ? xScale.getPixelForValue(endIndex + 1) : lastPixel;
+      const prevPixel = startIndex > 0 ? xScale.getPixelForValue(startIndex - 1) : firstPixel;
+      const stepHalfWidth = Math.max(8, Math.abs(nextPixel - prevPixel) / 2);
+
+      const { ctx } = chart;
+      ctx.save();
+      ctx.fillStyle = summary.shadeColor;
+      ctx.fillRect(
+        firstPixel - stepHalfWidth,
+        chartArea.top,
+        (lastPixel - firstPixel) + stepHalfWidth * 2,
+        chartArea.bottom - chartArea.top
+      );
+      ctx.strokeStyle = summary.accentColor;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(lastPixel, chartArea.top);
+      ctx.lineTo(lastPixel, chartArea.bottom);
+      ctx.stroke();
+      ctx.restore();
+    },
+  }), []);
+
+  const buildSelectedStepPlugin = useCallback((selectedStep) => ({
+    id: `selected-step-${selectedStep || 0}`,
+    afterDatasetsDraw(chart) {
+      if (!selectedStep) return;
+      const xScale = chart.scales?.x;
+      const chartArea = chart.chartArea;
+      const labels = chart.data?.labels || [];
+      if (!xScale || !chartArea || labels.length === 0) return;
+      const targetIndex = Math.max(0, Math.min(labels.length - 1, selectedStep - 1));
+      const targetPixel = xScale.getPixelForValue(targetIndex);
+      const { ctx } = chart;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(15, 23, 42, 0.9)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 6]);
+      ctx.beginPath();
+      ctx.moveTo(targetPixel, chartArea.top);
+      ctx.lineTo(targetPixel, chartArea.bottom);
+      ctx.stroke();
+      ctx.restore();
+    },
+  }), []);
+
+  const matchesEpisodeOutcome = useCallback((entry, filter) => {
+    if (filter === 'all') return true;
+    return (entry?.episode_outcome || 'unknown') === filter;
+  }, []);
+
+  const buildAverageEpisodeProfile = useCallback((entries, filter, labelPrefix) => {
+    const eligibleEntries = entries.filter((entry) => Array.isArray(entry.reward_history) && entry.reward_history.length > 0);
+    if (eligibleEntries.length === 0) {
+      return null;
+    }
+
+    const histories = eligibleEntries.map((entry) => entry.reward_history);
+    const maxLength = Math.max(...histories.map((history) => history.length), 0);
+    const averageHistory = Array.from({ length: maxLength }, (_, index) => {
+      const steps = histories.map((history) => history[index]).filter(Boolean);
+      const breakdownKeys = Array.from(
+        new Set(steps.flatMap((step) => Object.keys(step.reward_breakdown || {})))
+      );
+      const rawKeys = Array.from(
+        new Set(steps.flatMap((step) => Object.keys(step.reward_raw_terms || {})))
+      );
+
+      const mean = (values) => {
+        const valid = values.filter((value) => Number.isFinite(value));
+        if (valid.length === 0) return null;
+        return valid.reduce((sum, value) => sum + Number(value), 0) / valid.length;
+      };
+
+      const rewardBreakdown = {};
+      for (const key of breakdownKeys) {
+        rewardBreakdown[key] = mean(steps.map((step) => step.reward_breakdown?.[key]));
+      }
+
+      const rewardRawTerms = {};
+      for (const key of rawKeys) {
+        rewardRawTerms[key] = mean(steps.map((step) => step.reward_raw_terms?.[key]));
+      }
+
+      const rewardValue = mean(steps.map((step) => step.reward));
+      return {
+        step: index + 1,
+        reward: rewardValue,
+        reward_breakdown: rewardBreakdown,
+        reward_raw_terms: rewardRawTerms,
+      };
+    });
+
+    const averageTerminalTimestep = Math.round(
+      eligibleEntries.reduce((sum, entry) => {
+        const historyLength = Array.isArray(entry.reward_history) ? entry.reward_history.length : 0;
+        return sum + Number(entry.episode_terminal_timestep || historyLength || 0);
+      }, 0) / eligibleEntries.length
+    );
+
+    return {
+      episode: `${labelPrefix}-${filter}-average`,
+      reward: averageHistory.reduce((sum, step) => sum + Number(step.reward || 0), 0),
+      reward_breakdown: averageHistory.reduce((acc, step) => {
+        for (const [key, value] of Object.entries(step.reward_breakdown || {})) {
+          acc[key] = (acc[key] || 0) + Number(value || 0);
+        }
+        return acc;
+      }, {}),
+      reward_history: averageHistory,
+      episode_outcome: filter === 'all' ? 'unknown' : filter,
+      episode_outcome_reason: `Average across ${eligibleEntries.length} ${filter === 'all' ? 'episodes' : `${filter} episodes`}.`,
+      episode_terminal_timestep: averageTerminalTimestep,
+      sample_count: eligibleEntries.length,
+      is_average_profile: true,
+    };
+  }, []);
 
   const trainingGraphDefinitions = useMemo(() => {
     const orderedTicks = [...trainingRollouts].reverse();
@@ -238,6 +560,114 @@ function RolloutWindow({
     labels: [],
     datasets: [],
   };
+
+  const filteredTrainingEpisodes = useMemo(
+    () => trainingEpisodes.filter((entry) => matchesEpisodeOutcome(entry, trainingTimelineOutcomeFilter)),
+    [matchesEpisodeOutcome, trainingEpisodes, trainingTimelineOutcomeFilter]
+  );
+
+  const selectedTrainingTimelineRollout = useMemo(() => {
+    if (filteredTrainingEpisodes.length === 0) return null;
+    if (selectedTrainingTimelineEpisode === null || selectedTrainingTimelineEpisode === undefined) {
+      return filteredTrainingEpisodes[0];
+    }
+    return filteredTrainingEpisodes.find((entry) => entry.episode === selectedTrainingTimelineEpisode) || filteredTrainingEpisodes[0];
+  }, [filteredTrainingEpisodes, selectedTrainingTimelineEpisode]);
+
+  const selectedTrainingTimelineTarget = useMemo(() => {
+    if (trainingTimelineMode === 'average') {
+      return buildAverageEpisodeProfile(filteredTrainingEpisodes, trainingTimelineOutcomeFilter, 'training');
+    }
+    return selectedTrainingTimelineRollout;
+  }, [buildAverageEpisodeProfile, filteredTrainingEpisodes, selectedTrainingTimelineRollout, trainingTimelineMode, trainingTimelineOutcomeFilter]);
+
+  const trainingTimelineGraphDefinitions = useMemo(() => {
+    const rewardHistory = Array.isArray(selectedTrainingTimelineTarget?.reward_history)
+      ? selectedTrainingTimelineTarget.reward_history
+      : [];
+    const labels = rewardHistory.map((entry, index) => entry.step ?? index + 1);
+    const breakdownKeys = Array.from(
+      new Set(
+        rewardHistory.flatMap((entry) =>
+          Object.keys(entry.reward_breakdown || {}).filter((key) => key !== 'total')
+        )
+      )
+    );
+    const rawKeys = Array.from(
+      new Set(
+        rewardHistory.flatMap((entry) => Object.keys(entry.reward_raw_terms || {}))
+      )
+    );
+
+    const makeSeries = (title, accessor, color) => ({
+      title,
+      labels,
+      datasets: [
+        {
+          label: title,
+          data: rewardHistory.map((entry) => accessor(entry)),
+          borderColor: color,
+          backgroundColor: color,
+        },
+      ],
+    });
+
+    return [
+      {
+        title: trainingTimelineMode === 'average'
+          ? `Average Shaped Terms In ${trainingTimelineOutcomeFilter === 'all' ? 'All' : trainingTimelineOutcomeFilter.charAt(0).toUpperCase() + trainingTimelineOutcomeFilter.slice(1)} Training Episodes`
+          : 'All Shaped Terms In Training Episode',
+        labels,
+        datasets: [
+          {
+            label: 'total_reward',
+            data: rewardHistory.map((entry) => entry.reward_breakdown?.total ?? entry.reward ?? null),
+            borderColor: 'rgb(59, 130, 246)',
+            backgroundColor: 'rgb(59, 130, 246)',
+          },
+          ...breakdownKeys.map((key, index) => ({
+            label: key,
+            data: rewardHistory.map((entry) => entry.reward_breakdown?.[key] ?? null),
+            borderColor: `hsl(${(index * 47 + 145) % 360} 72% 48%)`,
+            backgroundColor: `hsl(${(index * 47 + 145) % 360} 72% 48%)`,
+          })),
+        ],
+      },
+      makeSeries(
+        trainingTimelineMode === 'average' ? 'Average Training Episode Total Reward' : 'Training Episode Total Reward',
+        (entry) => entry.reward_breakdown?.total ?? entry.reward ?? null,
+        'rgb(59, 130, 246)'
+      ),
+      ...breakdownKeys.map((key, index) =>
+        makeSeries(
+          `Training Episode Term: ${key}`,
+          (entry) => entry.reward_breakdown?.[key] ?? null,
+          `hsl(${(index * 47 + 145) % 360} 72% 48%)`
+        )
+      ),
+      ...rawKeys.map((key, index) =>
+        makeSeries(
+          `Training Episode Raw Term: ${key}`,
+          (entry) => entry.reward_raw_terms?.[key] ?? null,
+          `hsl(${(index * 47 + 305) % 360} 70% 45%)`
+        )
+      ),
+    ];
+  }, [selectedTrainingTimelineTarget, trainingTimelineMode, trainingTimelineOutcomeFilter]);
+
+  const currentTrainingTimelineGraph = trainingTimelineGraphDefinitions[trainingTimelineGraphIndex] || {
+    title: 'Training Episode Reward Timeline',
+    labels: [],
+    datasets: [],
+  };
+  const selectedTrainingTimelineSummary = useMemo(
+    () => summarizeEpisodeOutcome(selectedTrainingTimelineTarget),
+    [selectedTrainingTimelineTarget, summarizeEpisodeOutcome]
+  );
+  const trainingTimelinePlugins = useMemo(
+    () => [buildTerminalHighlightPlugin(selectedTrainingTimelineSummary)],
+    [buildTerminalHighlightPlugin, selectedTrainingTimelineSummary]
+  );
 
   const rolloutGraphDefinitions = useMemo(() => {
     const orderedRollouts = [...rollouts].reverse();
@@ -290,6 +720,186 @@ function RolloutWindow({
     datasets: [],
   };
 
+  const filteredRollouts = useMemo(
+    () => rollouts.filter((entry) => matchesEpisodeOutcome(entry, rolloutTimelineOutcomeFilter)),
+    [matchesEpisodeOutcome, rolloutTimelineOutcomeFilter, rollouts]
+  );
+
+  const earliestFilteredRollout = useMemo(() => {
+    if (filteredRollouts.length === 0) return null;
+    return filteredRollouts.reduce((earliest, entry) => {
+      if (!earliest) return entry;
+      const currentEpisode = Number(entry?.episode);
+      const earliestEpisode = Number(earliest?.episode);
+      if (!Number.isFinite(currentEpisode)) return earliest;
+      if (!Number.isFinite(earliestEpisode) || currentEpisode < earliestEpisode) return entry;
+      return earliest;
+    }, null);
+  }, [filteredRollouts]);
+
+  const selectedTimelineRollout = useMemo(() => {
+    if (filteredRollouts.length === 0) return null;
+    if (selectedTimelineEpisode === null || selectedTimelineEpisode === undefined) {
+      return earliestFilteredRollout || filteredRollouts[0];
+    }
+    return filteredRollouts.find((entry) => entry.episode === selectedTimelineEpisode) || earliestFilteredRollout || filteredRollouts[0];
+  }, [earliestFilteredRollout, filteredRollouts, selectedTimelineEpisode]);
+
+  const selectedTimelineTarget = useMemo(() => {
+    if (rolloutTimelineMode === 'average') {
+      return buildAverageEpisodeProfile(filteredRollouts, rolloutTimelineOutcomeFilter, 'rollout');
+    }
+    return selectedTimelineRollout;
+  }, [buildAverageEpisodeProfile, filteredRollouts, rolloutTimelineMode, rolloutTimelineOutcomeFilter, selectedTimelineRollout]);
+
+  const selectedEpisodeFrames = useMemo(() => {
+    if (rolloutTimelineMode !== 'episode' || !selectedTimelineRollout) return [];
+    return capturedEpisodeFramesByEpisode[selectedTimelineRollout.episode] || [];
+  }, [capturedEpisodeFramesByEpisode, rolloutTimelineMode, selectedTimelineRollout]);
+
+  const selectedTimelineStepEntry = useMemo(() => {
+    if (!selectedTimelineTarget || !Array.isArray(selectedTimelineTarget.reward_history)) return null;
+    if (!selectedTimelineStep) return null;
+    return selectedTimelineTarget.reward_history[selectedTimelineStep - 1] || null;
+  }, [selectedTimelineStep, selectedTimelineTarget]);
+
+  const linkedSelectedFrameIndex = useMemo(() => {
+    if (selectedEpisodeFrames.length === 0) return 0;
+    if (!selectedTimelineStep) return 0;
+    return Math.max(0, Math.min(selectedEpisodeFrames.length - 1, selectedTimelineStep - 1));
+  }, [selectedEpisodeFrames, selectedTimelineStep]);
+
+  const timelineGraphDefinitions = useMemo(() => {
+    const rewardHistory = Array.isArray(selectedTimelineTarget?.reward_history)
+      ? selectedTimelineTarget.reward_history
+      : [];
+    const labels = rewardHistory.map((entry, index) => entry.step ?? index + 1);
+    const breakdownKeys = Array.from(
+      new Set(
+        rewardHistory.flatMap((entry) =>
+          Object.keys(entry.reward_breakdown || {}).filter((key) => key !== 'total')
+        )
+      )
+    );
+    const rawKeys = Array.from(
+      new Set(
+        rewardHistory.flatMap((entry) =>
+          Object.keys(entry.reward_raw_terms || {})
+        )
+      )
+    );
+
+    const makeSeries = (title, accessor, color) => ({
+      title,
+      labels,
+      datasets: [
+        {
+          label: title,
+          data: rewardHistory.map((entry) => accessor(entry)),
+          borderColor: color,
+          backgroundColor: color,
+        },
+      ],
+    });
+
+    return [
+      {
+        title: rolloutTimelineMode === 'average'
+          ? `Average Shaped Terms In ${rolloutTimelineOutcomeFilter === 'all' ? 'All' : rolloutTimelineOutcomeFilter.charAt(0).toUpperCase() + rolloutTimelineOutcomeFilter.slice(1)} Episodes`
+          : 'All Shaped Terms In Episode',
+        labels,
+        datasets: [
+          {
+            label: 'total_reward',
+            data: rewardHistory.map((entry) => entry.reward_breakdown?.total ?? entry.reward ?? null),
+            borderColor: 'rgb(56, 189, 248)',
+            backgroundColor: 'rgb(56, 189, 248)',
+          },
+          ...breakdownKeys.map((key, index) => ({
+            label: key,
+            data: rewardHistory.map((entry) => entry.reward_breakdown?.[key] ?? null),
+            borderColor: `hsl(${(index * 47 + 25) % 360} 74% 52%)`,
+            backgroundColor: `hsl(${(index * 47 + 25) % 360} 74% 52%)`,
+          })),
+        ],
+      },
+      makeSeries(
+        rolloutTimelineMode === 'average' ? 'Average Episode Total Reward' : 'Episode Total Reward',
+        (entry) => entry.reward_breakdown?.total ?? entry.reward ?? null,
+        'rgb(56, 189, 248)'
+      ),
+      ...breakdownKeys.map((key, index) =>
+        makeSeries(
+          `Episode Term: ${key}`,
+          (entry) => entry.reward_breakdown?.[key] ?? null,
+          `hsl(${(index * 47 + 25) % 360} 74% 52%)`
+        )
+      ),
+      ...rawKeys.map((key, index) =>
+        makeSeries(
+          `Episode Raw Term: ${key}`,
+          (entry) => entry.reward_raw_terms?.[key] ?? null,
+          `hsl(${(index * 47 + 205) % 360} 70% 45%)`
+        )
+      ),
+    ];
+  }, [rolloutTimelineMode, rolloutTimelineOutcomeFilter, selectedTimelineTarget]);
+
+  const currentTimelineGraph = timelineGraphDefinitions[timelineGraphIndex] || {
+    title: 'Episode Reward Timeline',
+    labels: [],
+    datasets: [],
+  };
+  const selectedRolloutTimelineSummary = useMemo(
+    () => summarizeEpisodeOutcome(selectedTimelineTarget),
+    [selectedTimelineTarget, summarizeEpisodeOutcome]
+  );
+  const rolloutTimelinePlugins = useMemo(
+    () => [
+      buildTerminalHighlightPlugin(selectedRolloutTimelineSummary),
+      buildSelectedStepPlugin(selectedTimelineStep),
+    ],
+    [buildSelectedStepPlugin, buildTerminalHighlightPlugin, selectedRolloutTimelineSummary, selectedTimelineStep]
+  );
+  const trainingOutcomeCounts = useMemo(() => ({
+    success: trainingEpisodes.filter((entry) => entry.episode_outcome === 'success').length,
+    failure: trainingEpisodes.filter((entry) => entry.episode_outcome === 'failure').length,
+  }), [trainingEpisodes]);
+  const trainingWorkspaceViews = useMemo(
+    () => ([
+      { key: 'reward_chart', title: 'Training Reward Chart' },
+      { key: 'temporal_breakdown', title: 'Training Temporal Breakdown' },
+    ]),
+    []
+  );
+  const currentTrainingWorkspaceView = trainingWorkspaceViews[trainingWorkspaceViewIndex] || trainingWorkspaceViews[0];
+  const rolloutOutcomeCounts = useMemo(() => ({
+    success: rollouts.filter((entry) => entry.episode_outcome === 'success').length,
+    failure: rollouts.filter((entry) => entry.episode_outcome === 'failure').length,
+  }), [rollouts]);
+  const rolloutWorkspaceViews = useMemo(
+    () => ([
+      { key: 'visualization', title: 'Rollout Visualization' },
+      { key: 'reward_chart', title: 'Rollout Reward Chart' },
+      { key: 'temporal_breakdown', title: 'Temporal Reward Breakdown' },
+    ]),
+    []
+  );
+  const currentRolloutWorkspaceView = rolloutWorkspaceViews[rolloutWorkspaceViewIndex] || rolloutWorkspaceViews[0];
+  const availableVisualizationEpisodes = useMemo(
+    () => Object.keys(capturedEpisodeFramesByEpisode)
+      .map((key) => Number(key))
+      .filter((value) => Number.isFinite(value))
+      .sort((a, b) => a - b),
+    [capturedEpisodeFramesByEpisode]
+  );
+  const visualizationFrames = useMemo(() => {
+    if (selectedVisualizationEpisode !== null && selectedVisualizationEpisode !== undefined) {
+      return capturedEpisodeFramesByEpisode[selectedVisualizationEpisode] || [];
+    }
+    return frames || [];
+  }, [capturedEpisodeFramesByEpisode, frames, selectedVisualizationEpisode]);
+
   const saveRewardConfig = useCallback(async () => {
     if (isSavedViewer) {
       setRewardConfigStatus("Saved rollout viewers are read-only. Apply reward changes from a live rollout.");
@@ -302,17 +912,22 @@ function RolloutWindow({
 
     setRewardConfigLoading(true);
     try {
-      const response = await axios.post("/reward_config", {
+      const response = await apiClient.post("/reward_config", {
         run_id: runId,
         env_name: envName,
         terms: rewardConfig.map((term) => ({
           key: term.key,
+          label: term.label,
+          description: term.description,
           weight: Number(term.weight),
           enabled: Boolean(term.enabled),
+          expression: term.expression || '',
         })),
       });
       const nextTerms = response.data.terms || [];
       setRewardConfig(nextTerms);
+      setAvailableRewardVariables(response.data.available_variables || []);
+      setTrainingEpisodes((prev) => applyRewardConfigToTrainingEpisodes(prev, nextTerms));
       const nextRollouts = applyRewardConfigToRollouts(rollouts, nextTerms);
       setRollouts(nextRollouts);
       const nextBreakdown = computeBreakdownFromRawTerms(nextTerms, latestRolloutRawTerms);
@@ -339,7 +954,7 @@ function RolloutWindow({
     } finally {
       setRewardConfigLoading(false);
     }
-  }, [applyRewardConfigToRollouts, computeBreakdownFromRawTerms, envName, isSavedViewer, latestRolloutRawTerms, rewardConfig, rollouts, runId]);
+  }, [applyRewardConfigToRollouts, applyRewardConfigToTrainingEpisodes, computeBreakdownFromRawTerms, envName, isSavedViewer, latestRolloutRawTerms, rewardConfig, rollouts, runId]);
   // This effectively flips the showPopup
   // showPopup = true => showPopup = false, and vice versa
   const togglePopup = () => {
@@ -403,7 +1018,7 @@ function RolloutWindow({
     setRolloutSpeed(newSpeed);
 
     try {
-      await axios.post("/rollout_speed", { "run_id": runId, "fps":newSpeed,"delay": 1.0 / newSpeed });
+      await apiClient.post("/rollout_speed", { "run_id": runId, "fps":newSpeed,"delay": 1.0 / newSpeed });
     } catch (e) {
       console.error("Failed to set rollout speed:", e);
     }
@@ -417,14 +1032,17 @@ function RolloutWindow({
       // Set Train path FIRST
       // THEN SET THE TRAIN MODE AND toggle pause
       // persist to backend (example endpoint)
-      await axios.post("/set_training_dir", {
+      await apiClient.post("/set_training_dir", {
         "run_id": runId,
         "train_dir_path": path,
         "device": device,
+        "env_name": envName,
         "training_hyperparams": nextTrainingHyperparams,
       });
       setTrainingPath(path);
       setTrainingHyperparams(nextTrainingHyperparams);
+      setTrainingAblationReport(null);
+      setTrainingAblationStatus('idle');
       closePathPopup();
 
       toggleTrainPauseTogether();
@@ -437,7 +1055,7 @@ function RolloutWindow({
   };
   const deleteAllTempModels = () => {
     // delete all the models in the temporary directory
-    axios.post("/delete_all_temp_models", { "run_id": runId });
+    apiClient.post("/delete_all_temp_models", { "run_id": runId });
     // force reload of the temp model directory
     setReloadAllTempModelsSwitcher(prev => !prev);
     
@@ -449,7 +1067,7 @@ function RolloutWindow({
       return;
     }
     try {
-      await axios.post("/change_number_of_steps", { "run_id": runId, "number_of_steps": steps });
+      await apiClient.post("/change_number_of_steps", { "run_id": runId, "number_of_steps": steps });
     } catch (e) {
       console.error("Failed to change number of steps:", e);
     }
@@ -462,7 +1080,7 @@ function RolloutWindow({
     }
     const newState = ns !== undefined ? ns : !isPaused;
     // console.log("Sending pause state:", newState); // DEBUG:FRONTEND
-    await axios.post("/pause_rollout", { session_id: sessionId, paused: newState });
+    await apiClient.post("/pause_rollout", { session_id: sessionId, paused: newState });
     isPausedRef.current = newState;
     setIsPaused(newState);
   };
@@ -471,9 +1089,13 @@ function RolloutWindow({
     if (isSavedViewer) {
       setRewardConfig([]);
       setSupportsCustomReward(false);
+      setAvailableRewardVariables([]);
+      setRewardFormulaExamples([]);
       setRewardConfigDirty(false);
       setRewardConfigLoading(false);
       setRewardConfigStatus("Saved rollout viewer. Reward terms shown below come from the loaded JSON.");
+      setTrainingAblationReport(null);
+      setTrainingAblationStatus('idle');
       hydrateLoadedRollouts(initialRollouts);
     }
   }, [hydrateLoadedRollouts, initialRollouts, isSavedViewer]);
@@ -487,6 +1109,41 @@ function RolloutWindow({
   }, [trainingGraphDefinitions.length]);
 
   useEffect(() => {
+    if (trainingTimelineGraphDefinitions.length === 0) {
+      setTrainingTimelineGraphIndex(0);
+      return;
+    }
+    setTrainingTimelineGraphIndex((prev) => prev % trainingTimelineGraphDefinitions.length);
+  }, [trainingTimelineGraphDefinitions.length]);
+
+  useEffect(() => {
+    if (filteredTrainingEpisodes.length === 0) {
+      setSelectedTrainingTimelineEpisode(null);
+      return;
+    }
+    const hasSelectedEpisode = filteredTrainingEpisodes.some((entry) => entry.episode === selectedTrainingTimelineEpisode);
+    if (!hasSelectedEpisode) {
+      setSelectedTrainingTimelineEpisode(filteredTrainingEpisodes[0].episode ?? null);
+    }
+  }, [filteredTrainingEpisodes, selectedTrainingTimelineEpisode]);
+
+  useEffect(() => {
+    if (availableVisualizationEpisodes.length === 0) {
+      setSelectedVisualizationEpisode(null);
+      return;
+    }
+    const hasSelectedEpisode = availableVisualizationEpisodes.includes(Number(selectedVisualizationEpisode));
+    if (!hasSelectedEpisode) {
+      setSelectedVisualizationEpisode(availableVisualizationEpisodes[0]);
+    }
+  }, [availableVisualizationEpisodes, selectedVisualizationEpisode]);
+
+  useEffect(() => {
+    setCurrentFrame(0);
+    setIsPlaying(false);
+  }, [selectedVisualizationEpisode]);
+
+  useEffect(() => {
     if (rolloutGraphDefinitions.length === 0) {
       setRolloutGraphIndex(0);
       return;
@@ -495,11 +1152,54 @@ function RolloutWindow({
   }, [rolloutGraphDefinitions.length]);
 
   useEffect(() => {
+    if (timelineGraphDefinitions.length === 0) {
+      setTimelineGraphIndex(0);
+      return;
+    }
+    setTimelineGraphIndex((prev) => prev % timelineGraphDefinitions.length);
+  }, [timelineGraphDefinitions.length]);
+
+  useEffect(() => {
+    if (filteredRollouts.length === 0) {
+      setSelectedTimelineEpisode(null);
+      setSelectedTimelineStep(null);
+      return;
+    }
+    const hasSelectedEpisode = filteredRollouts.some((entry) => entry.episode === selectedTimelineEpisode);
+    if (!hasSelectedEpisode) {
+      setSelectedTimelineEpisode(earliestFilteredRollout?.episode ?? filteredRollouts[0].episode ?? null);
+    }
+  }, [earliestFilteredRollout, filteredRollouts, selectedTimelineEpisode]);
+
+  useEffect(() => {
+    if (!selectedTimelineTarget || !Array.isArray(selectedTimelineTarget.reward_history) || selectedTimelineTarget.reward_history.length === 0) {
+      setSelectedTimelineStep(null);
+      return;
+    }
+    const maxStep = selectedTimelineTarget.reward_history.length;
+    const defaultStep = Math.min(
+      Number(selectedTimelineTarget.episode_terminal_timestep || maxStep),
+      maxStep
+    );
+    if (!selectedTimelineStep || selectedTimelineStep > maxStep) {
+      setSelectedTimelineStep(defaultStep);
+    }
+  }, [selectedTimelineStep, selectedTimelineTarget]);
+
+  useEffect(() => {
+    if (rolloutTimelineMode !== 'episode') return;
+    if (selectedEpisodeFrames.length === 0) return;
+    if (!selectedTimelineStep) return;
+    const nextFrameIndex = Math.max(0, Math.min(selectedEpisodeFrames.length - 1, selectedTimelineStep - 1));
+    setCurrentFrame((prev) => (prev === nextFrameIndex ? prev : nextFrameIndex));
+  }, [rolloutTimelineMode, selectedEpisodeFrames, selectedTimelineStep]);
+
+  useEffect(() => {
     let retryTimeout;
     // console.log("Fetching models from server..."); // DEBUG:FRONTEND
     const fetchModels = async () => {
       try {
-        const res = await axios.get("/models");
+        const res = await apiClient.get("/models");
         // Get the models that currently exist
         // console.log("Available models: ", res); // DEBUG:FRONTEND
         setServerModels(res.data.models || []);
@@ -511,7 +1211,7 @@ function RolloutWindow({
     };
     const fetchRolloutFiles = async () => {
       try {
-        const res = await axios.get("/rollouts_files");
+        const res = await apiClient.get("/rollouts_files");
         const files = res.data.rollouts || [];
         setRolloutFiles(files);
         setSelectedRolloutFile((prev) => (prev && files.includes(prev) ? prev : files[0] || ""));
@@ -533,7 +1233,7 @@ function RolloutWindow({
 
     async function fetchRunId() {
       try {
-        const returnData = await axios.get("/unique_run_id");
+        const returnData = await apiClient.get("/unique_run_id");
         if (!cancelled) {
           setRunId(returnData.data.run_id);
           attempt = 0; // reset the backoff attempt after success
@@ -541,7 +1241,7 @@ function RolloutWindow({
       } catch (error) {
         if (!cancelled) {
           // if intential cancel, don't retry
-          if (axios.isCancel?.(error) || error?.name === "CanceledError") return;
+          if (isCancel?.(error) || error?.name === "CanceledError") return;
           attempt ++;
           const delay = Math.min(30000, 1000 * 2 ** attempt); // exponential backoff up to 30s
           retryTimer  = setTimeout(fetchRunId, delay);
@@ -569,12 +1269,14 @@ function RolloutWindow({
     async function fetchRewardConfig() {
       setRewardConfigLoading(true);
       try {
-        const response = await axios.get("/reward_config", {
+        const response = await apiClient.get("/reward_config", {
           params: { run_id: runId, env_name: envName },
         });
         if (cancelled) return;
         setRewardConfig(response.data.terms || []);
         setSupportsCustomReward(Boolean(response.data.supports_custom_reward));
+        setAvailableRewardVariables(response.data.available_variables || []);
+        setRewardFormulaExamples(response.data.formula_examples || []);
         setRewardConfigDirty(false);
         setRewardConfigStatus(
           response.data.supports_custom_reward
@@ -584,6 +1286,8 @@ function RolloutWindow({
       } catch (error) {
         if (cancelled) return;
         console.error("Failed to fetch reward config:", error);
+        setAvailableRewardVariables([]);
+        setRewardFormulaExamples([]);
         setRewardConfigStatus("Failed to load reward settings.");
       } finally {
         if (!cancelled) {
@@ -599,6 +1303,30 @@ function RolloutWindow({
   }, [envName, isSavedViewer, runId]);
 
   useEffect(() => {
+    if (isSavedViewer || !runId) return undefined;
+
+    let cancelled = false;
+    const fetchTrainingRunStatus = async () => {
+      try {
+        const response = await apiClient.get(`/training_runs/${runId}`);
+        if (cancelled) return;
+        setTrainingAblationReport(response.data?.reward_ablation || null);
+        setTrainingAblationStatus(response.data?.reward_ablation_status || 'idle');
+      } catch (error) {
+        if (cancelled) return;
+        console.error('Failed to fetch training run status:', error);
+      }
+    };
+
+    fetchTrainingRunStatus();
+    const interval = setInterval(fetchTrainingRunStatus, trainMode ? 2500 : 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [isSavedViewer, runId, trainMode]);
+
+  useEffect(() => {
     if (!isActive) return;
 
     onSidebarStateChange({
@@ -608,11 +1336,15 @@ function RolloutWindow({
       rewardConfigLoading,
       rewardConfigStatus,
       supportsCustomReward,
+      availableRewardVariables,
+      rewardFormulaExamples,
       latestTrainingBreakdown: trainingRewardBreakdown,
       latestTrainingMeanBreakdown: trainingRewardBreakdownMean,
       latestRolloutBreakdown: rolloutRewardBreakdown,
       rewardLogs,
-      onTermChange: updateRewardTerm,
+      onTermChange: isSavedViewer ? showSavedViewerRewardMessage : updateRewardTerm,
+      onAddCustomTerm: isSavedViewer ? showSavedViewerRewardMessage : addCustomRewardTerm,
+      onRemoveTerm: isSavedViewer ? showSavedViewerRewardMessage : removeRewardTerm,
       onSaveConfig: saveRewardConfig,
     });
   }, [
@@ -624,11 +1356,17 @@ function RolloutWindow({
     rewardConfigLoading,
     rewardConfigStatus,
     supportsCustomReward,
+    availableRewardVariables,
+    rewardFormulaExamples,
     trainingRewardBreakdown,
     trainingRewardBreakdownMean,
     rolloutRewardBreakdown,
     rewardLogs,
     updateRewardTerm,
+    addCustomRewardTerm,
+    removeRewardTerm,
+    showSavedViewerRewardMessage,
+    isSavedViewer,
     saveRewardConfig,
   ]);
   /* Here we are adding envName to the dependency array of useEffect, so useEffect will rerun when envName changes*/
@@ -642,7 +1380,12 @@ function RolloutWindow({
     }
     else {
       const connect = () => {
-        const url = `ws://localhost:8000/ws/rollout?runid=${runId}&env=${envName}&train=${trainMode}&train_steps=${trainSteps}`
+        const url = buildWebSocketUrl('/ws/rollout', {
+          runid: runId,
+          env: envName,
+          train: trainMode,
+          train_steps: trainSteps,
+        });
         // console.log("Attempting to connect to : ", url); // DEBUG:FRONTEND
         const ws = new WebSocket(url);
 
@@ -678,6 +1421,10 @@ function RolloutWindow({
             setTrainingRollouts((prev) => [rewardData, ...prev]);
             setTrainingRewardBreakdown(data.reward_breakdown || {});
             setTrainingRewardBreakdownMean(data.reward_breakdown_mean || {});
+            if (Array.isArray(data.new_training_episodes) && data.new_training_episodes.length > 0) {
+              setTrainingEpisodes((prev) => [...data.new_training_episodes.slice().reverse(), ...prev]);
+              setSelectedTrainingTimelineEpisode(data.new_training_episodes[data.new_training_episodes.length - 1]?.episode ?? null);
+            }
             appendRewardLog({
               source: 'training',
               label: `Step ${data.step}`,
@@ -690,7 +1437,15 @@ function RolloutWindow({
             // if data.type is not session
             if(data.ep_frames.length > 0){
               setFrames(data.ep_frames);        // store all frames
-              setCurrentFrame(0);            // start at first frame
+              if (data.sim_frame_episode_number !== null && data.sim_frame_episode_number !== undefined) {
+                setCapturedEpisodeFramesByEpisode((prev) => ({
+                  ...prev,
+                  [data.sim_frame_episode_number]: data.ep_frames,
+                }));
+                setSelectedVisualizationEpisode((prev) =>
+                  prev === null || prev === undefined ? data.sim_frame_episode_number : prev
+                );
+              }
             }
             // console.log("Episode: ", data.episode, "   Reward: ", data.reward); // DEBUG:FRONTEND
             // console.log("Frames received length: ", data.ep_frames.length); // DEBUG:FRONTEND
@@ -705,6 +1460,12 @@ function RolloutWindow({
               episode: data.episode,
               reward_breakdown: data.reward_breakdown || {},
               reward_raw_terms: data.reward_raw_terms || {},
+              reward_history: data.reward_history || [],
+              episode_outcome: data.episode_outcome || 'unknown',
+              episode_outcome_reason: data.episode_outcome_reason || 'outcome unavailable',
+              episode_terminal_timestep: data.episode_terminal_timestep ?? null,
+              terminated: Boolean(data.terminated),
+              truncated: Boolean(data.truncated),
             };
             if (!trainMode) {
               setEpisodeInfo({ episode: data.episode, reward: data.reward });
@@ -734,10 +1495,15 @@ function RolloutWindow({
       
       setRollouts([]); // restart the graph simulation from the beginning, upon new simulation
       setTrainingRollouts([]);
+      setTrainingEpisodes([]);
       setTrainingRewardBreakdown({});
       setTrainingRewardBreakdownMean({});
       setRolloutRewardBreakdown({});
       setRewardLogs([]);
+      setCapturedEpisodeFramesByEpisode({});
+      setSelectedVisualizationEpisode(null);
+      setSelectedTimelineEpisode(null);
+      setSelectedTimelineStep(null);
       // initial attempt
       togglePause(false);
       connect();
@@ -757,11 +1523,11 @@ function RolloutWindow({
 
   // This is the useEffect for the frame Data from the video
   useEffect(() => {
-    if (!isPlaying || (frames && frames.length) === 0) return;
+    if (!isPlaying || (visualizationFrames && visualizationFrames.length) === 0) return;
     //advance frame at ferquency of 20fps
     intervalRef.current = setInterval(() => {
       setCurrentFrame((prev) => {
-        if (Array.isArray(frames) && prev < frames.length - 1) return prev + 1;  // advance frame
+        if (Array.isArray(visualizationFrames) && prev < visualizationFrames.length - 1) return prev + 1;  // advance frame
         // want to implement looping, so no stop at end
         //clearInterval(intervalRef.current);             // stop at end
         return 0;
@@ -769,7 +1535,7 @@ function RolloutWindow({
     }, replayInterval); // ~20 FPS
 
     return () => clearInterval(intervalRef.current); // clean up
-  }, [isPlaying, frames]);
+  }, [isPlaying, replayInterval, visualizationFrames]);
 
   const handlePlay = () => setIsPlaying(true);
   const handlePause = () => {
@@ -793,7 +1559,7 @@ function RolloutWindow({
     if (!runId || stoppingTraining) return;
     setStoppingTraining(true);
     try {
-      await axios.post("/stop_training", { run_id: runId });
+      await apiClient.post("/stop_training", { run_id: runId });
       setTrainMode(false);
     } catch (e) {
       console.error("Failed to stop training:", e);
@@ -824,9 +1590,9 @@ function RolloutWindow({
     try {
       // “Clear” the session’s model by loading none; implement either:
       // 1) a dedicated endpoint:
-      // await axios.post("/unload_model", { session_id: sessionId });
+      // await apiClient.post("/unload_model", { session_id: sessionId });
       // OR 2) overload load_model with a sentinel:
-      await axios.post("/load_model", { run_id: runId, model_name: "" });
+      await apiClient.post("/load_model", { run_id: runId, model_name: "" });
     } finally {
       setLoading(false);
     }
@@ -841,7 +1607,7 @@ function RolloutWindow({
     if (!selectedServerModel) return useNone();
     setLoading(true);
     try {
-      await axios.post("/load_model", {
+      await apiClient.post("/load_model", {
         run_id: runId,
         model_name: selectedServerModel,
       });
@@ -861,8 +1627,8 @@ function RolloutWindow({
     }
     setSavingRollouts(true);
     try {
-      const res = await axios.post("/save_rollouts_data", { run_id: runId, rollout_filename: filename, rollouts: rollouts});
-      const filesRes = await axios.get("/rollouts_files");
+      const res = await apiClient.post("/save_rollouts_data", { run_id: runId, rollout_filename: filename, rollouts: rollouts});
+      const filesRes = await apiClient.get("/rollouts_files");
       const files = filesRes.data.rollouts || [];
       setRolloutFiles(files);
       setSelectedRolloutFile(filename && files.includes(filename) ? filename : files[0] || "");
@@ -883,7 +1649,7 @@ function RolloutWindow({
     }
     setLoadingSavedRollouts(true);
     try {
-      const res = await axios.post("/load_rollouts_data", {
+      const res = await apiClient.post("/load_rollouts_data", {
         rollout_filename: selectedRolloutFile,
       });
       const loadedRollouts = Array.isArray(res.data?.rollouts) ? res.data.rollouts : [];
@@ -906,10 +1672,10 @@ function RolloutWindow({
     try {
       const form = new FormData();
       form.append("file", file); // field name "file" expected by backend
-      const up = await axios.post("/upload_model", form);
+      const up = await apiClient.post("/upload_model", form);
       const modelName = up.data?.model_name; // backend should return stored filename
       if (modelName) {
-        await axios.post("/load_model", { run_id: runId, model_name: modelName });
+        await apiClient.post("/load_model", { run_id: runId, model_name: modelName });
       }
     } finally {
       setLoading(false);
@@ -918,7 +1684,7 @@ function RolloutWindow({
   };
 
   const getRootSavedModelsLink = async() => {
-    const result = await axios.get("/get_model_path");
+    const result = await apiClient.get("/get_model_path");
     // console.log("Root saved models link from backend:", result.data); // DEBUG:FRONTEND
     let path = result.data;
     try {
@@ -1148,6 +1914,75 @@ function RolloutWindow({
       <div
         style={{
           ...sectionPanelStyle,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '0.75rem',
+          flexWrap: 'wrap',
+        }}
+      >
+        <button
+          onClick={() => setTrainingWorkspaceViewIndex((prev) => (prev - 1 + trainingWorkspaceViews.length) % trainingWorkspaceViews.length)}
+          style={{
+            width: '36px',
+            height: '36px',
+            borderRadius: '999px',
+            border: '1px solid #cbd5e1',
+            backgroundColor: 'white',
+            color: '#334155',
+            fontWeight: 700,
+          }}
+          aria-label="Show previous training panel"
+        >
+          {'<'}
+        </button>
+        <div style={{ textAlign: 'center', flex: '1 1 240px' }}>
+          <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#334155' }}>{currentTrainingWorkspaceView.title}</div>
+          <div style={{ fontSize: '0.82rem', color: '#64748b' }}>
+            {trainingWorkspaceViewIndex + 1} / {trainingWorkspaceViews.length}
+          </div>
+        </div>
+        <select
+          value={String(trainingWorkspaceViewIndex)}
+          onChange={(event) => setTrainingWorkspaceViewIndex(Number(event.target.value))}
+          style={{
+            minWidth: '240px',
+            padding: '0.45rem 0.6rem',
+            borderRadius: '8px',
+            border: '1px solid #cbd5e1',
+            backgroundColor: 'white',
+            color: '#334155',
+            fontSize: '0.92rem',
+          }}
+          aria-label="Choose training workspace view"
+        >
+          {trainingWorkspaceViews.map((view, index) => (
+            <option key={view.key} value={index}>
+              {view.title}
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={() => setTrainingWorkspaceViewIndex((prev) => (prev + 1) % trainingWorkspaceViews.length)}
+          style={{
+            width: '36px',
+            height: '36px',
+            borderRadius: '999px',
+            border: '1px solid #cbd5e1',
+            backgroundColor: 'white',
+            color: '#334155',
+            fontWeight: 700,
+          }}
+          aria-label="Show next training panel"
+        >
+          {'>'}
+        </button>
+      </div>
+    )}
+    {trainMode && currentTrainingWorkspaceView.key === 'reward_chart' && (
+      <div
+        style={{
+          ...sectionPanelStyle,
           width: '100%',
           maxWidth: '100%',
           minWidth: 0,
@@ -1272,6 +2107,256 @@ function RolloutWindow({
             }}
           />
         </div>
+      </div>
+    )}
+    {trainMode && currentTrainingWorkspaceView.key === 'temporal_breakdown' && (
+      <div style={{ ...sectionPanelStyle, marginTop: '1rem' }}>
+        <h3 style={{ fontSize: '1.2rem', color: '#0f766e', marginTop: 0 }}>Training Episode Temporal Breakdown</h3>
+        <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
+          Inspect one completed training episode timestep-by-timestep to see which reward term pushed the policy toward failure or success.
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            gap: '0.75rem',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexWrap: 'wrap',
+            marginBottom: '0.9rem',
+          }}
+        >
+          <label htmlFor="trainingTimelineMode" style={{ fontWeight: 600 }}>Mode</label>
+          <select
+            id="trainingTimelineMode"
+            value={trainingTimelineMode}
+            onChange={(event) => setTrainingTimelineMode(event.target.value)}
+            style={{ padding: '0.4rem 0.55rem', minWidth: 180 }}
+          >
+            <option value="episode">Single Episode</option>
+            <option value="average">Average By Type</option>
+          </select>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 600 }}>Episode Type</span>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+              <input
+                type="radio"
+                name="trainingTimelineOutcome"
+                value="all"
+                checked={trainingTimelineOutcomeFilter === 'all'}
+                onChange={(event) => setTrainingTimelineOutcomeFilter(event.target.value)}
+              />
+              All
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+              <input
+                type="radio"
+                name="trainingTimelineOutcome"
+                value="success"
+                checked={trainingTimelineOutcomeFilter === 'success'}
+                onChange={(event) => setTrainingTimelineOutcomeFilter(event.target.value)}
+              />
+              Successful ({trainingOutcomeCounts.success})
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+              <input
+                type="radio"
+                name="trainingTimelineOutcome"
+                value="failure"
+                checked={trainingTimelineOutcomeFilter === 'failure'}
+                onChange={(event) => setTrainingTimelineOutcomeFilter(event.target.value)}
+              />
+              Failed ({trainingOutcomeCounts.failure})
+            </label>
+          </div>
+          <label htmlFor="trainingTimelineEpisode" style={{ fontWeight: 600 }}>Episode</label>
+          <select
+            id="trainingTimelineEpisode"
+            value={selectedTrainingTimelineEpisode ?? ''}
+            onChange={(event) => setSelectedTrainingTimelineEpisode(Number(event.target.value))}
+            style={{ padding: '0.4rem 0.55rem', minWidth: 160 }}
+            disabled={trainingTimelineMode === 'average' || filteredTrainingEpisodes.length === 0}
+          >
+            {filteredTrainingEpisodes.length === 0 ? (
+              <option value="">No training episodes yet</option>
+            ) : (
+              filteredTrainingEpisodes.map((entry) => (
+                <option key={`training-episode-${entry.episode}`} value={entry.episode}>
+                  Episode {entry.episode}
+                </option>
+              ))
+            )}
+          </select>
+          <label htmlFor="trainingTimelineView" style={{ fontWeight: 600 }}>View</label>
+          <select
+            id="trainingTimelineView"
+            value={String(trainingTimelineGraphIndex)}
+            onChange={(event) => setTrainingTimelineGraphIndex(Number(event.target.value))}
+            style={{ padding: '0.4rem 0.55rem', minWidth: 300 }}
+            disabled={trainingTimelineGraphDefinitions.length === 0}
+          >
+            {trainingTimelineGraphDefinitions.length === 0 ? (
+              <option value="0">No training reward history yet</option>
+            ) : (
+              trainingTimelineGraphDefinitions.map((graph, index) => (
+                <option key={graph.title} value={index}>
+                  {graph.title}
+                </option>
+              ))
+            )}
+          </select>
+        </div>
+        <div style={{ textAlign: 'center', marginBottom: '0.75rem' }}>
+          <div style={{ fontSize: '1rem', fontWeight: 700, color: '#334155' }}>{currentTrainingTimelineGraph.title}</div>
+          <div style={{ fontSize: '0.82rem', color: '#64748b' }}>
+            {selectedTrainingTimelineTarget
+              ? selectedTrainingTimelineTarget.is_average_profile
+                ? `Average reward forensic profile built from ${selectedTrainingTimelineTarget.sample_count} episodes`
+                : `Training episode ${selectedTrainingTimelineTarget.episode} timestep reward view`
+              : 'Select a completed training episode to inspect timestep rewards'}
+          </div>
+        </div>
+        <div
+          style={{
+            marginBottom: '0.9rem',
+            padding: '0.75rem 0.9rem',
+            borderRadius: '12px',
+            backgroundColor: selectedTrainingTimelineSummary.shadeColor,
+            border: `1px solid ${selectedTrainingTimelineSummary.accentColor}`,
+            textAlign: 'left',
+          }}
+        >
+          <div style={{ fontWeight: 800, color: selectedTrainingTimelineSummary.accentColor }}>
+            {selectedTrainingTimelineSummary.label}
+          </div>
+          <div style={{ color: '#475569', fontSize: '0.84rem', marginTop: '0.2rem' }}>
+            {selectedTrainingTimelineSummary.detail}
+          </div>
+          {selectedTrainingTimelineSummary.highlightStart && selectedTrainingTimelineSummary.highlightEnd && (
+            <div style={{ color: '#475569', fontSize: '0.8rem', marginTop: '0.2rem' }}>
+              Highlighting timesteps {selectedTrainingTimelineSummary.highlightStart} to {selectedTrainingTimelineSummary.highlightEnd} to focus attention on the terminal region.
+            </div>
+          )}
+        </div>
+        <div
+          style={{
+            width: '100%',
+            maxWidth: '100%',
+            minWidth: 0,
+            height: '320px',
+            overflow: 'hidden',
+          }}
+        >
+          <Line
+            data={{
+              labels: currentTrainingTimelineGraph.labels,
+              datasets: currentTrainingTimelineGraph.datasets.map((dataset) => ({
+                ...dataset,
+                fill: false,
+                tension: 0.18,
+                pointRadius: 0,
+                pointHoverRadius: 3,
+                borderWidth: 2,
+              })),
+            }}
+            plugins={trainingTimelinePlugins}
+            options={{
+              responsive: true,
+              maintainAspectRatio: false,
+              animation: false,
+              normalized: true,
+              interaction: {
+                intersect: false,
+                mode: 'index',
+              },
+              plugins: {
+                legend: {
+                  display: currentTrainingTimelineGraph.datasets.length > 1,
+                  position: 'bottom',
+                },
+              },
+              scales: {
+                x: {
+                  title: { display: true, text: 'Timestep' },
+                  ticks: {
+                    autoSkip: true,
+                    maxTicksLimit: 14,
+                  },
+                },
+                y: { title: { display: true, text: 'Reward Contribution' } },
+              },
+            }}
+          />
+        </div>
+      </div>
+    )}
+    {!isSavedViewer && (trainingAblationReport || trainingAblationStatus === 'running' || trainingAblationStatus === 'error') && (
+      <div style={{ ...sectionPanelStyle, marginTop: '1rem' }}>
+        <h3 style={{ fontSize: '1.2rem', color: '#7c3aed', marginTop: 0 }}>Post-Training Reward Ablation</h3>
+        <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
+          Re-scores one fixed batch of deterministic evaluation trajectories under native reward only, native plus each enabled term, and the full active reward configuration.
+        </div>
+        {trainingAblationStatus === 'running' && (
+          <div style={{ color: '#475569', fontSize: '0.9rem' }}>
+            Computing reward ablation study from the finished policy...
+          </div>
+        )}
+        {trainingAblationStatus === 'error' && (
+          <div style={{ color: '#b91c1c', fontSize: '0.9rem' }}>
+            {trainingAblationReport?.error || 'Reward ablation study failed.'}
+          </div>
+        )}
+        {Array.isArray(trainingAblationReport?.rows) && trainingAblationReport.rows.length > 0 && (
+          <>
+            <div style={{ color: '#64748b', fontSize: '0.82rem', marginBottom: '0.9rem' }}>
+              Averaged over {trainingAblationReport.eval_episodes || 3} deterministic eval episodes using the same rollout samples for every reward config.
+            </div>
+            <div style={{ display: 'grid', gap: '0.7rem' }}>
+              {trainingAblationReport.rows.map((row) => {
+                const rewards = trainingAblationReport.rows.map((entry) => Number(entry.avg_eval_reward || 0));
+                const maxReward = Math.max(...rewards, 1);
+                const widthPct = Math.max(6, (Number(row.avg_eval_reward || 0) / maxReward) * 100);
+                return (
+                  <div
+                    key={row.label}
+                    style={{
+                      border: '1px solid rgba(148, 163, 184, 0.18)',
+                      borderRadius: '12px',
+                      padding: '0.8rem',
+                      backgroundColor: 'rgba(255,255,255,0.58)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <div style={{ fontWeight: 700, color: '#334155' }}>{row.label}</div>
+                      <div style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace', color: '#0f172a' }}>
+                        Avg Eval Reward: {Number(row.avg_eval_reward || 0).toFixed(2)}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        marginTop: '0.55rem',
+                        height: '12px',
+                        backgroundColor: '#e2e8f0',
+                        borderRadius: '999px',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${widthPct}%`,
+                          height: '100%',
+                          background: 'linear-gradient(90deg, #6366f1, #22c55e)',
+                        }}
+                      />
+                    </div>
+                    <div style={{ marginTop: '0.4rem', fontSize: '0.78rem', color: '#64748b' }}>
+                      Terms: {(row.term_keys || []).join(', ')}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
       </div>
     )}
     {trainMode && (
@@ -1492,8 +2577,77 @@ function RolloutWindow({
           </div>
         </div>
       </div>
+      <div
+        style={{
+          ...sectionPanelStyle,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '0.75rem',
+          flexWrap: 'wrap',
+        }}
+      >
+        <button
+          onClick={() => setRolloutWorkspaceViewIndex((prev) => (prev - 1 + rolloutWorkspaceViews.length) % rolloutWorkspaceViews.length)}
+          style={{
+            width: '36px',
+            height: '36px',
+            borderRadius: '999px',
+            border: '1px solid #cbd5e1',
+            backgroundColor: 'white',
+            color: '#334155',
+            fontWeight: 700,
+          }}
+          aria-label="Show previous rollout panel"
+        >
+          {'<'}
+        </button>
+        <div style={{ textAlign: 'center', flex: '1 1 240px' }}>
+          <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#334155' }}>{currentRolloutWorkspaceView.title}</div>
+          <div style={{ fontSize: '0.82rem', color: '#64748b' }}>
+            {rolloutWorkspaceViewIndex + 1} / {rolloutWorkspaceViews.length}
+          </div>
+        </div>
+        <select
+          value={String(rolloutWorkspaceViewIndex)}
+          onChange={(event) => setRolloutWorkspaceViewIndex(Number(event.target.value))}
+          style={{
+            minWidth: '240px',
+            padding: '0.45rem 0.6rem',
+            borderRadius: '8px',
+            border: '1px solid #cbd5e1',
+            backgroundColor: 'white',
+            color: '#334155',
+            fontSize: '0.92rem',
+          }}
+          aria-label="Choose rollout workspace view"
+        >
+          {rolloutWorkspaceViews.map((view, index) => (
+            <option key={view.key} value={index}>
+              {view.title}
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={() => setRolloutWorkspaceViewIndex((prev) => (prev + 1) % rolloutWorkspaceViews.length)}
+          style={{
+            width: '36px',
+            height: '36px',
+            borderRadius: '999px',
+            border: '1px solid #cbd5e1',
+            backgroundColor: 'white',
+            color: '#334155',
+            fontWeight: 700,
+          }}
+          aria-label="Show next rollout panel"
+        >
+          {'>'}
+        </button>
+      </div>
       
       {/* Playback Controls */}
+      {currentRolloutWorkspaceView.key === 'visualization' && (
+      <>
       <div style={sectionPanelStyle}>
       <p style={{ fontSize: '1rem', marginTop: 0 }}>
         Simulating per every {" "}
@@ -1517,8 +2671,28 @@ function RolloutWindow({
         steps
       </p>
       <p style={{ fontSize: '1rem' }}>
-        Simulating Episode <strong style={{ color: '#0ea5e9' }}>{episodeNumForSimulation}</strong>
+        Simulating Episode <strong style={{ color: '#0ea5e9' }}>{selectedVisualizationEpisode ?? episodeNumForSimulation}</strong>
       </p>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+        <label htmlFor="visualizationEpisode" style={{ fontWeight: 600 }}>Captured rollout episode</label>
+        <select
+          id="visualizationEpisode"
+          value={selectedVisualizationEpisode ?? ''}
+          onChange={(event) => setSelectedVisualizationEpisode(Number(event.target.value))}
+          disabled={availableVisualizationEpisodes.length === 0}
+          style={{ padding: '.4rem .55rem', minWidth: 220 }}
+        >
+          {availableVisualizationEpisodes.length === 0 ? (
+            <option value="">No captured rollout videos yet</option>
+          ) : (
+            availableVisualizationEpisodes.map((episode) => (
+              <option key={`visualization-episode-${episode}`} value={episode}>
+                Episode {episode}
+              </option>
+            ))
+          )}
+        </select>
+      </div>
       <div
         style={{
           display: 'flex',
@@ -1533,8 +2707,8 @@ function RolloutWindow({
       </div>
       </div>
 
-    {/* Playback Speed Slider */}
-    <div style={{ ...sectionPanelStyle, marginTop: '1rem', textAlign: 'center' }}>
+      {/* Playback Speed Slider */}
+      <div style={{ ...sectionPanelStyle, marginTop: '1rem', textAlign: 'center' }}>
       <label htmlFor="replaySpeed" style={{ fontWeight: 600 }}>
         🎞 Frame Playback Speed:
       </label>
@@ -1563,12 +2737,12 @@ function RolloutWindow({
           borderRadius: '4px',
         }}
       />
-    </div>
-    {/*<RolloutSlideshow/>*/}
-    {frames && frames.length > 0 && (
+      </div>
+      {/*<RolloutSlideshow/>*/}
+      {visualizationFrames && visualizationFrames.length > 0 && (
       <div style={{ ...sectionPanelStyle, marginTop: '1rem', textAlign: 'center' }}>
         <img
-          src={`data:image/jpeg;base64,${frames[currentFrame]}`}
+          src={`data:image/jpeg;base64,${visualizationFrames[currentFrame]}`}
           alt={`frame ${currentFrame}`}
           style={{
             width: '100%',
@@ -1579,8 +2753,11 @@ function RolloutWindow({
           }}
         />
       </div>
-    )}
+      )}
+      </>
+      )}
 
+    {currentRolloutWorkspaceView.key === 'reward_chart' && (
     <div style={{ ...sectionPanelStyle, marginTop: '1rem' }}>
       <h3 style={{ fontSize: '1.6rem', color: '#6366f1', marginTop: 0 }}>📈 Rollout Reward Chart</h3>
       <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
@@ -1730,6 +2907,286 @@ function RolloutWindow({
         </div>
       </div>
     </div>
+    )}
+    {currentRolloutWorkspaceView.key === 'temporal_breakdown' && (
+    <div style={{ ...sectionPanelStyle, marginTop: '1rem' }}>
+      <h3 style={{ fontSize: '1.35rem', color: '#0f766e', marginTop: 0 }}>Temporal Reward Breakdown</h3>
+      <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
+        Inspect reward contributions inside one episode to see which term spikes right before failure and which term dominates each timestep.
+      </div>
+        <div
+          style={{
+            display: 'flex',
+            gap: '0.75rem',
+            alignItems: 'center',
+          justifyContent: 'center',
+          flexWrap: 'wrap',
+            marginBottom: '0.9rem',
+          }}
+        >
+        <label htmlFor="rolloutTimelineMode" style={{ fontWeight: 600 }}>Mode</label>
+        <select
+          id="rolloutTimelineMode"
+          value={rolloutTimelineMode}
+          onChange={(event) => setRolloutTimelineMode(event.target.value)}
+          style={{ padding: '0.4rem 0.55rem', minWidth: 180 }}
+        >
+          <option value="episode">Single Episode</option>
+          <option value="average">Average By Type</option>
+        </select>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 600 }}>Episode Type</span>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+            <input
+              type="radio"
+              name="rolloutTimelineOutcome"
+              value="all"
+              checked={rolloutTimelineOutcomeFilter === 'all'}
+              onChange={(event) => setRolloutTimelineOutcomeFilter(event.target.value)}
+            />
+            All
+          </label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+            <input
+              type="radio"
+              name="rolloutTimelineOutcome"
+              value="success"
+              checked={rolloutTimelineOutcomeFilter === 'success'}
+              onChange={(event) => setRolloutTimelineOutcomeFilter(event.target.value)}
+            />
+            Successful ({rolloutOutcomeCounts.success})
+          </label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+            <input
+              type="radio"
+              name="rolloutTimelineOutcome"
+              value="failure"
+              checked={rolloutTimelineOutcomeFilter === 'failure'}
+              onChange={(event) => setRolloutTimelineOutcomeFilter(event.target.value)}
+            />
+            Failed ({rolloutOutcomeCounts.failure})
+          </label>
+        </div>
+        <label htmlFor="timelineEpisode" style={{ fontWeight: 600 }}>Episode</label>
+        <select
+          id="timelineEpisode"
+          value={selectedTimelineEpisode ?? ''}
+          onChange={(event) => setSelectedTimelineEpisode(Number(event.target.value))}
+          style={{ padding: '0.4rem 0.55rem', minWidth: 160 }}
+          disabled={rolloutTimelineMode === 'average' || filteredRollouts.length === 0}
+        >
+          {filteredRollouts.length === 0 ? (
+            <option value="">No episodes yet</option>
+          ) : (
+            filteredRollouts.map((entry) => (
+              <option key={`episode-${entry.episode}`} value={entry.episode}>
+                Episode {entry.episode}
+              </option>
+            ))
+          )}
+        </select>
+        <label htmlFor="timelineView" style={{ fontWeight: 600 }}>View</label>
+        <select
+          id="timelineView"
+          value={String(timelineGraphIndex)}
+          onChange={(event) => setTimelineGraphIndex(Number(event.target.value))}
+          style={{ padding: '0.4rem 0.55rem', minWidth: 280 }}
+          disabled={timelineGraphDefinitions.length === 0}
+        >
+          {timelineGraphDefinitions.length === 0 ? (
+            <option value="0">No reward history yet</option>
+          ) : (
+            timelineGraphDefinitions.map((graph, index) => (
+              <option key={graph.title} value={index}>
+                {graph.title}
+              </option>
+            ))
+          )}
+        </select>
+      </div>
+        <div style={{ textAlign: 'center', marginBottom: '0.75rem' }}>
+          <div style={{ fontSize: '1rem', fontWeight: 700, color: '#334155' }}>{currentTimelineGraph.title}</div>
+          <div style={{ fontSize: '0.82rem', color: '#64748b' }}>
+            {selectedTimelineTarget
+              ? selectedTimelineTarget.is_average_profile
+              ? `Average reward forensic profile built from ${selectedTimelineTarget.sample_count} episodes`
+              : `Episode ${selectedTimelineTarget.episode} timestep reward view`
+            : 'Select an episode to inspect timestep rewards'}
+        </div>
+      </div>
+      <div
+        style={{
+          marginBottom: '0.9rem',
+          padding: '0.75rem 0.9rem',
+          borderRadius: '12px',
+          backgroundColor: selectedRolloutTimelineSummary.shadeColor,
+          border: `1px solid ${selectedRolloutTimelineSummary.accentColor}`,
+          textAlign: 'left',
+        }}
+      >
+        <div style={{ fontWeight: 800, color: selectedRolloutTimelineSummary.accentColor }}>
+          {selectedRolloutTimelineSummary.label}
+        </div>
+        <div style={{ color: '#475569', fontSize: '0.84rem', marginTop: '0.2rem' }}>
+          {selectedRolloutTimelineSummary.detail}
+        </div>
+        {selectedRolloutTimelineSummary.highlightStart && selectedRolloutTimelineSummary.highlightEnd && (
+          <div style={{ color: '#475569', fontSize: '0.8rem', marginTop: '0.2rem' }}>
+            Highlighting timesteps {selectedRolloutTimelineSummary.highlightStart} to {selectedRolloutTimelineSummary.highlightEnd} to focus attention on the terminal region.
+          </div>
+        )}
+      </div>
+      <div
+        style={{
+          width: '100%',
+          maxWidth: '100%',
+          minWidth: 0,
+          height: '320px',
+          overflow: 'hidden',
+        }}
+      >
+        <Line
+          data={{
+            labels: currentTimelineGraph.labels,
+            datasets: currentTimelineGraph.datasets.map((dataset) => ({
+              ...dataset,
+              fill: false,
+              tension: 0.18,
+              pointRadius: 0,
+              pointHoverRadius: 3,
+              borderWidth: 2,
+            })),
+          }}
+          plugins={rolloutTimelinePlugins}
+          options={{
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            normalized: true,
+            onClick: (_, elements) => {
+              if (!elements || elements.length === 0) return;
+              if (rolloutTimelineMode !== 'episode') return;
+              const nextIndex = elements[0].index;
+              setSelectedTimelineStep(nextIndex + 1);
+            },
+            interaction: {
+              intersect: false,
+              mode: 'index',
+            },
+            plugins: {
+              legend: {
+                display: currentTimelineGraph.datasets.length > 1,
+                position: 'bottom',
+              },
+            },
+            scales: {
+              x: {
+                title: { display: true, text: 'Timestep' },
+                ticks: {
+                  autoSkip: true,
+                  maxTicksLimit: 14,
+                },
+              },
+              y: { title: { display: true, text: 'Reward Contribution' } },
+            },
+            }}
+          />
+        </div>
+      <div style={{ marginTop: '1rem', display: 'grid', gridTemplateColumns: 'minmax(260px, 1fr) minmax(260px, 1fr)', gap: '1rem' }}>
+        <div
+          style={{
+            borderRadius: '12px',
+            border: '1px solid rgba(148, 163, 184, 0.18)',
+            background: 'rgba(255,255,255,0.55)',
+            padding: '0.9rem',
+          }}
+        >
+          <div style={{ fontWeight: 800, color: '#334155', marginBottom: '0.45rem' }}>Linked Rollout Frame</div>
+          <div style={{ color: '#64748b', fontSize: '0.82rem', marginBottom: '0.7rem' }}>
+            Click a timestep on the chart to jump to the matching captured frame when that episode has video.
+          </div>
+          {rolloutTimelineMode === 'average' ? (
+            <div style={{ color: '#64748b', fontSize: '0.85rem' }}>
+              Frame linkage is only available in `Single Episode` mode.
+            </div>
+          ) : selectedEpisodeFrames.length === 0 ? (
+            <div style={{ color: '#64748b', fontSize: '0.85rem' }}>
+              No captured video exists for this episode. Video is only recorded every configured capture interval.
+            </div>
+          ) : (
+            <>
+              <div style={{ color: '#334155', fontWeight: 700, marginBottom: '0.55rem' }}>
+                Timestep {selectedTimelineStep ?? 1} / {selectedEpisodeFrames.length}
+              </div>
+              <img
+                src={`data:image/jpeg;base64,${selectedEpisodeFrames[linkedSelectedFrameIndex]}`}
+                alt={`episode ${selectedTimelineEpisode} timestep ${selectedTimelineStep}`}
+                style={{
+                  width: '100%',
+                  maxWidth: '460px',
+                  borderRadius: '12px',
+                  border: '2px solid rgba(14, 165, 233, 0.35)',
+                  boxShadow: '0 6px 18px rgba(15, 23, 42, 0.12)',
+                }}
+              />
+              <input
+                type="range"
+                min="1"
+                max={selectedEpisodeFrames.length}
+                step="1"
+                value={Math.max(1, selectedTimelineStep || 1)}
+                onChange={(event) => setSelectedTimelineStep(Number(event.target.value))}
+                style={{ width: '100%', marginTop: '0.8rem' }}
+              />
+            </>
+          )}
+        </div>
+        <div
+          style={{
+            borderRadius: '12px',
+            border: '1px solid rgba(148, 163, 184, 0.18)',
+            background: 'rgba(255,255,255,0.55)',
+            padding: '0.9rem',
+            textAlign: 'left',
+          }}
+        >
+          <div style={{ fontWeight: 800, color: '#334155', marginBottom: '0.45rem' }}>Exact Reward Structure At Selected Timestep</div>
+          <div style={{ color: '#64748b', fontSize: '0.82rem', marginBottom: '0.7rem' }}>
+            This is the reward forensic snapshot for the currently selected timestep.
+          </div>
+          {!selectedTimelineStepEntry ? (
+            <div style={{ color: '#64748b', fontSize: '0.85rem' }}>
+              Select a single rollout episode and click a timestep on the chart.
+            </div>
+          ) : (
+            <>
+              <div style={{ color: '#334155', fontWeight: 700, marginBottom: '0.5rem' }}>
+                Timestep {selectedTimelineStepEntry.step}
+              </div>
+              <div style={{ color: '#0f766e', fontWeight: 700, marginBottom: '0.7rem' }}>
+                Total reward: {Number(selectedTimelineStepEntry.reward_breakdown?.total ?? selectedTimelineStepEntry.reward ?? 0).toFixed(3)}
+              </div>
+              {Object.entries(selectedTimelineStepEntry.reward_breakdown || {}).filter(([key]) => key !== 'total').map(([key, value]) => (
+                <div
+                  key={`selected-breakdown-${key}`}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: '0.75rem',
+                    padding: '0.22rem 0',
+                    borderBottom: '1px solid rgba(148, 163, 184, 0.12)',
+                  }}
+                >
+                  <span style={{ color: '#475569' }}>{key}</span>
+                  <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{Number(value).toFixed(3)}</span>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+    )}
     </div>
   </div>
 );

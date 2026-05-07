@@ -1,6 +1,6 @@
 // ✅ Valid in .jsx files
 import { useState, useEffect } from "react";
-import axios from "axios";
+import axios from "./apiClient";
 
 
 export default function ProgressBar({ isTraining, runId }) {
