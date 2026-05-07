@@ -7,15 +7,21 @@ function RewardSidebar({
   rewardConfigLoading,
   rewardConfigStatus,
   supportsCustomReward,
+  availableRewardVariables,
+  rewardFormulaExamples,
   latestTrainingBreakdown,
   latestTrainingMeanBreakdown,
   latestRolloutBreakdown,
   rewardLogs,
   onTermChange,
+  onAddCustomTerm,
+  onRemoveTerm,
   onSaveConfig,
 }) {
   const safeRewardConfig = Array.isArray(rewardConfig) ? rewardConfig : [];
   const safeRewardLogs = Array.isArray(rewardLogs) ? rewardLogs : [];
+  const safeRewardVariables = Array.isArray(availableRewardVariables) ? availableRewardVariables : [];
+  const safeFormulaExamples = Array.isArray(rewardFormulaExamples) ? rewardFormulaExamples : [];
   const rolloutEntries = Object.entries(latestRolloutBreakdown || {}).filter(([key, value]) => key !== 'total' && Number.isFinite(value));
   const trainingEntries = Object.entries(latestTrainingBreakdown || {}).filter(([key, value]) => key !== 'total' && Number.isFinite(value));
   const fallbackEntries = rolloutEntries.length > 0 ? rolloutEntries : trainingEntries;
@@ -32,6 +38,8 @@ function RewardSidebar({
           description: 'Recovered from live reward breakdown. Change the weight and apply to persist it.',
           enabled: true,
           weight: key === 'native' ? 1 : 0,
+          expression: '',
+          is_custom: false,
         };
       })
     : safeRewardConfig;
@@ -44,6 +52,7 @@ function RewardSidebar({
   const dragOffsetRef = useRef({ x: 0, y: 0 });
   const [openSections, setOpenSections] = useState({
     rewardTerms: true,
+    formulaHelp: false,
     latestTraining: true,
     trainingMean: false,
     latestRollout: true,
@@ -258,13 +267,88 @@ function RewardSidebar({
                       />
                       <span>{term.label}</span>
                     </span>
-                    <span>{isOpen ? '▾' : '▸'}</span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      {term.is_custom && (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onRemoveTerm(term.key);
+                          }}
+                          style={{
+                            border: '1px solid rgba(248, 113, 113, 0.35)',
+                            backgroundColor: 'rgba(127, 29, 29, 0.4)',
+                            color: '#fecaca',
+                            borderRadius: '999px',
+                            padding: '0.15rem 0.55rem',
+                            fontSize: '0.72rem',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Remove
+                        </button>
+                      )}
+                      <span>{isOpen ? '▾' : '▸'}</span>
+                    </span>
                   </button>
                   {isOpen && (
                     <>
                       <div style={{ color: '#94a3b8', fontSize: '0.78rem', marginTop: '0.35rem', lineHeight: 1.4 }}>
                         {term.description}
                       </div>
+                      {term.is_custom && (
+                        <>
+                          <div style={{ marginTop: '0.55rem' }}>
+                            <div style={{ color: '#cbd5e1', fontSize: '0.8rem', marginBottom: '0.25rem' }}>Key</div>
+                            <input
+                              type="text"
+                              value={term.key}
+                              onChange={(event) => onTermChange(term.key, 'key', event.target.value, term)}
+                              style={{
+                                width: '100%',
+                                padding: '0.45rem 0.55rem',
+                                borderRadius: '8px',
+                                border: '1px solid rgba(148, 163, 184, 0.3)',
+                                backgroundColor: 'rgba(15, 23, 42, 0.65)',
+                                color: '#f8fafc',
+                              }}
+                            />
+                          </div>
+                          <div style={{ marginTop: '0.55rem' }}>
+                            <div style={{ color: '#cbd5e1', fontSize: '0.8rem', marginBottom: '0.25rem' }}>Label</div>
+                            <input
+                              type="text"
+                              value={term.label}
+                              onChange={(event) => onTermChange(term.key, 'label', event.target.value, term)}
+                              style={{
+                                width: '100%',
+                                padding: '0.45rem 0.55rem',
+                                borderRadius: '8px',
+                                border: '1px solid rgba(148, 163, 184, 0.3)',
+                                backgroundColor: 'rgba(15, 23, 42, 0.65)',
+                                color: '#f8fafc',
+                              }}
+                            />
+                          </div>
+                          <div style={{ marginTop: '0.55rem' }}>
+                            <div style={{ color: '#cbd5e1', fontSize: '0.8rem', marginBottom: '0.25rem' }}>Expression</div>
+                            <textarea
+                              value={term.expression || ''}
+                              onChange={(event) => onTermChange(term.key, 'expression', event.target.value, term)}
+                              rows={3}
+                              style={{
+                                width: '100%',
+                                padding: '0.5rem 0.6rem',
+                                borderRadius: '8px',
+                                border: '1px solid rgba(148, 163, 184, 0.3)',
+                                backgroundColor: 'rgba(15, 23, 42, 0.65)',
+                                color: '#f8fafc',
+                                resize: 'vertical',
+                              }}
+                            />
+                          </div>
+                        </>
+                      )}
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.55rem' }}>
                         <span style={{ fontSize: '0.8rem', color: '#cbd5e1' }}>Weight</span>
                         <input
@@ -290,6 +374,24 @@ function RewardSidebar({
             })}
 
             <button
+              type="button"
+              onClick={onAddCustomTerm}
+              style={{
+                width: '100%',
+                marginTop: '0.8rem',
+                padding: '0.65rem 0.9rem',
+                borderRadius: '10px',
+                border: '1px dashed rgba(125, 211, 252, 0.45)',
+                backgroundColor: 'rgba(14, 116, 144, 0.18)',
+                color: '#bae6fd',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              + Add Custom Reward Term
+            </button>
+
+            <button
               onClick={onSaveConfig}
               disabled={rewardConfigLoading || !rewardConfigDirty}
               style={{
@@ -307,6 +409,56 @@ function RewardSidebar({
               {rewardConfigLoading ? 'Saving...' : rewardConfigDirty ? 'Apply Reward Changes' : 'Reward Settings Applied'}
             </button>
             <div style={{ marginTop: '0.55rem', color: '#94a3b8', fontSize: '0.8rem' }}>{rewardConfigStatus}</div>
+
+            <div style={{ marginTop: '0.8rem', borderTop: '1px solid rgba(148, 163, 184, 0.12)', paddingTop: '0.8rem' }}>
+              <button type="button" style={sectionHeaderStyle} onClick={() => toggleSection('formulaHelp')}>
+                <span>Formula Variables</span>
+                <span>{openSections.formulaHelp ? '▾' : '▸'}</span>
+              </button>
+              {openSections.formulaHelp && (
+                <>
+                  <div style={{ color: '#94a3b8', fontSize: '0.78rem', marginTop: '0.5rem', lineHeight: 1.45 }}>
+                    Use these variable names inside custom reward expressions. The backend supports plain arithmetic plus helper functions like abs, min, max, clip, sqrt, square, exp, log, sin, cos, tanh, and sign.
+                  </div>
+                  {safeFormulaExamples.length > 0 && (
+                    <div style={{ marginTop: '0.55rem' }}>
+                      {safeFormulaExamples.map((example) => (
+                        <div
+                          key={example}
+                          style={{
+                            fontFamily: 'ui-monospace, SFMono-Regular, monospace',
+                            fontSize: '0.75rem',
+                            color: '#cbd5e1',
+                            padding: '0.22rem 0',
+                          }}
+                        >
+                          {example}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ marginTop: '0.55rem', maxHeight: '180px', overflowY: 'auto' }}>
+                    {safeRewardVariables.map((variable) => (
+                      <div
+                        key={variable.name}
+                        style={{
+                          borderTop: '1px solid rgba(148, 163, 184, 0.08)',
+                          padding: '0.35rem 0',
+                          textAlign: 'left',
+                        }}
+                      >
+                        <div style={{ fontSize: '0.78rem', color: '#e2e8f0', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
+                          {variable.name}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
+                          {variable.description}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
           </>
         )}
       </div>

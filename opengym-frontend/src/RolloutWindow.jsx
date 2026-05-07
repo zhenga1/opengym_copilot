@@ -44,9 +44,14 @@ function RolloutWindow({
   const [rewardConfigLoading, setRewardConfigLoading] = useState(false);
   const [rewardConfigStatus, setRewardConfigStatus] = useState("Loading reward terms...");
   const [supportsCustomReward, setSupportsCustomReward] = useState(false);
+  const [availableRewardVariables, setAvailableRewardVariables] = useState([]);
+  const [rewardFormulaExamples, setRewardFormulaExamples] = useState([]);
   const [trainingRewardBreakdown, setTrainingRewardBreakdown] = useState({});
   const [trainingRewardBreakdownMean, setTrainingRewardBreakdownMean] = useState({});
+  const [trainingAblationReport, setTrainingAblationReport] = useState(null);
+  const [trainingAblationStatus, setTrainingAblationStatus] = useState('idle');
   const [trainingGraphIndex, setTrainingGraphIndex] = useState(0);
+  const [trainingWorkspaceViewIndex, setTrainingWorkspaceViewIndex] = useState(0);
   const [trainingTimelineGraphIndex, setTrainingTimelineGraphIndex] = useState(0);
   const [selectedTrainingTimelineEpisode, setSelectedTrainingTimelineEpisode] = useState(null);
   const [trainingTimelineMode, setTrainingTimelineMode] = useState('episode');
@@ -187,12 +192,49 @@ function RolloutWindow({
         description: 'Recovered from rollout reward breakdown.',
         enabled: true,
         weight: 1,
+        expression: '',
+        is_custom: false,
       };
 
       return [...prev, { ...seededTerm, [field]: nextValue }];
     });
     setRewardConfigDirty(true);
     setRewardConfigStatus("Unsaved reward changes.");
+  }, []);
+
+  const addCustomRewardTerm = useCallback(() => {
+    setRewardConfig((prev) => {
+      let index = prev.filter((term) => term.is_custom).length + 1;
+      let key = `custom_term_${index}`;
+      while (prev.some((term) => term.key === key)) {
+        index += 1;
+        key = `custom_term_${index}`;
+      }
+      return [
+        ...prev,
+        {
+          key,
+          label: `Custom Term ${index}`,
+          description: 'User-defined reward term computed from the formula below.',
+          enabled: true,
+          weight: 1.0,
+          expression: '0',
+          is_custom: true,
+        },
+      ];
+    });
+    setRewardConfigDirty(true);
+    setRewardConfigStatus('Added custom reward term. Define its formula, then apply reward changes.');
+  }, []);
+
+  const removeRewardTerm = useCallback((termKey) => {
+    setRewardConfig((prev) => prev.filter((term) => term.key !== termKey));
+    setRewardConfigDirty(true);
+    setRewardConfigStatus('Removed custom reward term. Apply reward changes to persist.');
+  }, []);
+
+  const showSavedViewerRewardMessage = useCallback(() => {
+    setRewardConfigStatus('Saved rollout viewers are read-only. Edit reward terms from a live rollout window.');
   }, []);
 
   const computeBreakdownFromRawTerms = useCallback((terms, rawTerms) => {
@@ -821,6 +863,14 @@ function RolloutWindow({
     success: trainingEpisodes.filter((entry) => entry.episode_outcome === 'success').length,
     failure: trainingEpisodes.filter((entry) => entry.episode_outcome === 'failure').length,
   }), [trainingEpisodes]);
+  const trainingWorkspaceViews = useMemo(
+    () => ([
+      { key: 'reward_chart', title: 'Training Reward Chart' },
+      { key: 'temporal_breakdown', title: 'Training Temporal Breakdown' },
+    ]),
+    []
+  );
+  const currentTrainingWorkspaceView = trainingWorkspaceViews[trainingWorkspaceViewIndex] || trainingWorkspaceViews[0];
   const rolloutOutcomeCounts = useMemo(() => ({
     success: rollouts.filter((entry) => entry.episode_outcome === 'success').length,
     failure: rollouts.filter((entry) => entry.episode_outcome === 'failure').length,
@@ -865,12 +915,16 @@ function RolloutWindow({
         env_name: envName,
         terms: rewardConfig.map((term) => ({
           key: term.key,
+          label: term.label,
+          description: term.description,
           weight: Number(term.weight),
           enabled: Boolean(term.enabled),
+          expression: term.expression || '',
         })),
       });
       const nextTerms = response.data.terms || [];
       setRewardConfig(nextTerms);
+      setAvailableRewardVariables(response.data.available_variables || []);
       setTrainingEpisodes((prev) => applyRewardConfigToTrainingEpisodes(prev, nextTerms));
       const nextRollouts = applyRewardConfigToRollouts(rollouts, nextTerms);
       setRollouts(nextRollouts);
@@ -984,6 +1038,8 @@ function RolloutWindow({
       });
       setTrainingPath(path);
       setTrainingHyperparams(nextTrainingHyperparams);
+      setTrainingAblationReport(null);
+      setTrainingAblationStatus('idle');
       closePathPopup();
 
       toggleTrainPauseTogether();
@@ -1030,9 +1086,13 @@ function RolloutWindow({
     if (isSavedViewer) {
       setRewardConfig([]);
       setSupportsCustomReward(false);
+      setAvailableRewardVariables([]);
+      setRewardFormulaExamples([]);
       setRewardConfigDirty(false);
       setRewardConfigLoading(false);
       setRewardConfigStatus("Saved rollout viewer. Reward terms shown below come from the loaded JSON.");
+      setTrainingAblationReport(null);
+      setTrainingAblationStatus('idle');
       hydrateLoadedRollouts(initialRollouts);
     }
   }, [hydrateLoadedRollouts, initialRollouts, isSavedViewer]);
@@ -1212,6 +1272,8 @@ function RolloutWindow({
         if (cancelled) return;
         setRewardConfig(response.data.terms || []);
         setSupportsCustomReward(Boolean(response.data.supports_custom_reward));
+        setAvailableRewardVariables(response.data.available_variables || []);
+        setRewardFormulaExamples(response.data.formula_examples || []);
         setRewardConfigDirty(false);
         setRewardConfigStatus(
           response.data.supports_custom_reward
@@ -1221,6 +1283,8 @@ function RolloutWindow({
       } catch (error) {
         if (cancelled) return;
         console.error("Failed to fetch reward config:", error);
+        setAvailableRewardVariables([]);
+        setRewardFormulaExamples([]);
         setRewardConfigStatus("Failed to load reward settings.");
       } finally {
         if (!cancelled) {
@@ -1236,6 +1300,30 @@ function RolloutWindow({
   }, [envName, isSavedViewer, runId]);
 
   useEffect(() => {
+    if (isSavedViewer || !runId) return undefined;
+
+    let cancelled = false;
+    const fetchTrainingRunStatus = async () => {
+      try {
+        const response = await axios.get(`/training_runs/${runId}`);
+        if (cancelled) return;
+        setTrainingAblationReport(response.data?.reward_ablation || null);
+        setTrainingAblationStatus(response.data?.reward_ablation_status || 'idle');
+      } catch (error) {
+        if (cancelled) return;
+        console.error('Failed to fetch training run status:', error);
+      }
+    };
+
+    fetchTrainingRunStatus();
+    const interval = setInterval(fetchTrainingRunStatus, trainMode ? 2500 : 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [isSavedViewer, runId, trainMode]);
+
+  useEffect(() => {
     if (!isActive) return;
 
     onSidebarStateChange({
@@ -1245,11 +1333,15 @@ function RolloutWindow({
       rewardConfigLoading,
       rewardConfigStatus,
       supportsCustomReward,
+      availableRewardVariables,
+      rewardFormulaExamples,
       latestTrainingBreakdown: trainingRewardBreakdown,
       latestTrainingMeanBreakdown: trainingRewardBreakdownMean,
       latestRolloutBreakdown: rolloutRewardBreakdown,
       rewardLogs,
-      onTermChange: updateRewardTerm,
+      onTermChange: isSavedViewer ? showSavedViewerRewardMessage : updateRewardTerm,
+      onAddCustomTerm: isSavedViewer ? showSavedViewerRewardMessage : addCustomRewardTerm,
+      onRemoveTerm: isSavedViewer ? showSavedViewerRewardMessage : removeRewardTerm,
       onSaveConfig: saveRewardConfig,
     });
   }, [
@@ -1261,11 +1353,17 @@ function RolloutWindow({
     rewardConfigLoading,
     rewardConfigStatus,
     supportsCustomReward,
+    availableRewardVariables,
+    rewardFormulaExamples,
     trainingRewardBreakdown,
     trainingRewardBreakdownMean,
     rolloutRewardBreakdown,
     rewardLogs,
     updateRewardTerm,
+    addCustomRewardTerm,
+    removeRewardTerm,
+    showSavedViewerRewardMessage,
+    isSavedViewer,
     saveRewardConfig,
   ]);
   /* Here we are adding envName to the dependency array of useEffect, so useEffect will rerun when envName changes*/
@@ -1808,6 +1906,75 @@ function RolloutWindow({
       <div
         style={{
           ...sectionPanelStyle,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '0.75rem',
+          flexWrap: 'wrap',
+        }}
+      >
+        <button
+          onClick={() => setTrainingWorkspaceViewIndex((prev) => (prev - 1 + trainingWorkspaceViews.length) % trainingWorkspaceViews.length)}
+          style={{
+            width: '36px',
+            height: '36px',
+            borderRadius: '999px',
+            border: '1px solid #cbd5e1',
+            backgroundColor: 'white',
+            color: '#334155',
+            fontWeight: 700,
+          }}
+          aria-label="Show previous training panel"
+        >
+          {'<'}
+        </button>
+        <div style={{ textAlign: 'center', flex: '1 1 240px' }}>
+          <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#334155' }}>{currentTrainingWorkspaceView.title}</div>
+          <div style={{ fontSize: '0.82rem', color: '#64748b' }}>
+            {trainingWorkspaceViewIndex + 1} / {trainingWorkspaceViews.length}
+          </div>
+        </div>
+        <select
+          value={String(trainingWorkspaceViewIndex)}
+          onChange={(event) => setTrainingWorkspaceViewIndex(Number(event.target.value))}
+          style={{
+            minWidth: '240px',
+            padding: '0.45rem 0.6rem',
+            borderRadius: '8px',
+            border: '1px solid #cbd5e1',
+            backgroundColor: 'white',
+            color: '#334155',
+            fontSize: '0.92rem',
+          }}
+          aria-label="Choose training workspace view"
+        >
+          {trainingWorkspaceViews.map((view, index) => (
+            <option key={view.key} value={index}>
+              {view.title}
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={() => setTrainingWorkspaceViewIndex((prev) => (prev + 1) % trainingWorkspaceViews.length)}
+          style={{
+            width: '36px',
+            height: '36px',
+            borderRadius: '999px',
+            border: '1px solid #cbd5e1',
+            backgroundColor: 'white',
+            color: '#334155',
+            fontWeight: 700,
+          }}
+          aria-label="Show next training panel"
+        >
+          {'>'}
+        </button>
+      </div>
+    )}
+    {trainMode && currentTrainingWorkspaceView.key === 'reward_chart' && (
+      <div
+        style={{
+          ...sectionPanelStyle,
           width: '100%',
           maxWidth: '100%',
           minWidth: 0,
@@ -1934,7 +2101,7 @@ function RolloutWindow({
         </div>
       </div>
     )}
-    {trainMode && (
+    {trainMode && currentTrainingWorkspaceView.key === 'temporal_breakdown' && (
       <div style={{ ...sectionPanelStyle, marginTop: '1rem' }}>
         <h3 style={{ fontSize: '1.2rem', color: '#0f766e', marginTop: 0 }}>Training Episode Temporal Breakdown</h3>
         <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
@@ -2112,6 +2279,76 @@ function RolloutWindow({
             }}
           />
         </div>
+      </div>
+    )}
+    {!isSavedViewer && (trainingAblationReport || trainingAblationStatus === 'running' || trainingAblationStatus === 'error') && (
+      <div style={{ ...sectionPanelStyle, marginTop: '1rem' }}>
+        <h3 style={{ fontSize: '1.2rem', color: '#7c3aed', marginTop: 0 }}>Post-Training Reward Ablation</h3>
+        <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
+          Re-scores one fixed batch of deterministic evaluation trajectories under native reward only, native plus each enabled term, and the full active reward configuration.
+        </div>
+        {trainingAblationStatus === 'running' && (
+          <div style={{ color: '#475569', fontSize: '0.9rem' }}>
+            Computing reward ablation study from the finished policy...
+          </div>
+        )}
+        {trainingAblationStatus === 'error' && (
+          <div style={{ color: '#b91c1c', fontSize: '0.9rem' }}>
+            {trainingAblationReport?.error || 'Reward ablation study failed.'}
+          </div>
+        )}
+        {Array.isArray(trainingAblationReport?.rows) && trainingAblationReport.rows.length > 0 && (
+          <>
+            <div style={{ color: '#64748b', fontSize: '0.82rem', marginBottom: '0.9rem' }}>
+              Averaged over {trainingAblationReport.eval_episodes || 3} deterministic eval episodes using the same rollout samples for every reward config.
+            </div>
+            <div style={{ display: 'grid', gap: '0.7rem' }}>
+              {trainingAblationReport.rows.map((row) => {
+                const rewards = trainingAblationReport.rows.map((entry) => Number(entry.avg_eval_reward || 0));
+                const maxReward = Math.max(...rewards, 1);
+                const widthPct = Math.max(6, (Number(row.avg_eval_reward || 0) / maxReward) * 100);
+                return (
+                  <div
+                    key={row.label}
+                    style={{
+                      border: '1px solid rgba(148, 163, 184, 0.18)',
+                      borderRadius: '12px',
+                      padding: '0.8rem',
+                      backgroundColor: 'rgba(255,255,255,0.58)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <div style={{ fontWeight: 700, color: '#334155' }}>{row.label}</div>
+                      <div style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace', color: '#0f172a' }}>
+                        Avg Eval Reward: {Number(row.avg_eval_reward || 0).toFixed(2)}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        marginTop: '0.55rem',
+                        height: '12px',
+                        backgroundColor: '#e2e8f0',
+                        borderRadius: '999px',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${widthPct}%`,
+                          height: '100%',
+                          background: 'linear-gradient(90deg, #6366f1, #22c55e)',
+                        }}
+                      />
+                    </div>
+                    <div style={{ marginTop: '0.4rem', fontSize: '0.78rem', color: '#64748b' }}>
+                      Terms: {(row.term_keys || []).join(', ')}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
       </div>
     )}
     {trainMode && (

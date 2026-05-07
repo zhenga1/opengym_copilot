@@ -10,11 +10,15 @@ const emptySidebarState = {
   rewardConfigLoading: false,
   rewardConfigStatus: 'Create or select a rollout to inspect reward terms.',
   supportsCustomReward: true,
+  availableRewardVariables: [],
+  rewardFormulaExamples: [],
   latestTrainingBreakdown: {},
   latestTrainingMeanBreakdown: {},
   latestRolloutBreakdown: {},
   rewardLogs: [],
   onTermChange: () => {},
+  onAddCustomTerm: () => {},
+  onRemoveTerm: () => {},
   onSaveConfig: () => {},
 };
 

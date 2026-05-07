@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 import asyncio
 import gymnasium as gym
 from pydantic import BaseModel
@@ -19,6 +19,8 @@ from train_backend_reward_tuning.reward_shaping import (
     normalize_reward_terms,
     reward_monitor_keys,
     reward_template_for_env,
+    reward_expression_variable_names,
+    validate_reward_terms,
 )
 
 try:
@@ -116,6 +118,9 @@ class RewardTermPayload(BaseModel):
     key: str
     weight: float
     enabled: bool = True
+    label: str | None = None
+    description: str | None = None
+    expression: str | None = None
 
 
 class RewardConfigUpdateRequest(BaseModel):
@@ -144,6 +149,67 @@ MODEL_SIZE_TO_NET_ARCH = {
     "medium": [128, 128],
     "large": [256, 256],
 }
+reward_variable_cache: dict[str, list[dict[str, str]]] = {}
+
+
+def reward_variable_specs_for_env(env_name: str) -> list[dict[str, str]]:
+    cached = reward_variable_cache.get(env_name)
+    if cached is not None:
+        return cached
+
+    env = gym.make(env_name)
+    try:
+        obs_space = env.observation_space
+        action_space = env.action_space
+
+        obs_size = int(np.prod(obs_space.shape)) if getattr(obs_space, "shape", None) else 1
+        if getattr(action_space, "shape", None):
+            action_size = int(np.prod(action_space.shape))
+        else:
+            action_size = 1
+
+        raw_term_keys = [term["key"] for term in reward_template_for_env(env_name)]
+        variable_names = reward_expression_variable_names(
+            obs_size,
+            action_size,
+            raw_term_keys=raw_term_keys,
+        )
+        specs: list[dict[str, str]] = []
+        for variable_name in variable_names:
+            if variable_name == "native":
+                specs.append({
+                    "name": variable_name,
+                    "source": "reward",
+                    "description": "Native reward returned by the environment.",
+                })
+            elif variable_name.startswith("obs_"):
+                specs.append({
+                    "name": variable_name,
+                    "source": "observation",
+                    "description": f"Flattened observation component {variable_name.split('_', 1)[1]}.",
+                })
+            elif variable_name.startswith("action_"):
+                specs.append({
+                    "name": variable_name,
+                    "source": "action",
+                    "description": f"Current action component {variable_name.split('_', 1)[1]}.",
+                })
+            elif variable_name.startswith("prev_action_"):
+                specs.append({
+                    "name": variable_name,
+                    "source": "action",
+                    "description": f"Previous action component {variable_name.split('_', 1)[1]}.",
+                })
+            else:
+                specs.append({
+                    "name": variable_name,
+                    "source": "reward_term",
+                    "description": f"Built-in raw reward feature '{variable_name}'.",
+                })
+        reward_variable_cache[env_name] = specs
+        return specs
+    finally:
+        env.close()
 
 
 def normalize_training_hyperparams(params: dict | None) -> dict:
@@ -190,7 +256,7 @@ def build_learning_rate_schedule(initial_lr: float, strategy: str):
 
 def get_reward_terms_for_run(run_id: str | None, env_name: str) -> list[dict]:
     if not run_id:
-        return reward_template_for_env(env_name)
+        return normalize_reward_terms(env_name, reward_template_for_env(env_name))
 
     current = reward_configs_by_run.get(run_id)
     if current is None or current.get("env_name") != env_name:
@@ -200,13 +266,21 @@ def get_reward_terms_for_run(run_id: str | None, env_name: str) -> list[dict]:
         }
 
     stored_terms = reward_configs_by_run[run_id]["terms"]
-    normalized = normalize_reward_terms(env_name, stored_terms)
+    normalized = validate_reward_terms(
+        env_name,
+        stored_terms,
+        available_variable_names=[spec["name"] for spec in reward_variable_specs_for_env(env_name)],
+    )
     reward_configs_by_run[run_id]["terms"] = normalized
     return normalized
 
 
 def set_reward_terms_for_run(run_id: str, env_name: str, terms: list[dict]) -> list[dict]:
-    normalized = normalize_reward_terms(env_name, terms)
+    normalized = validate_reward_terms(
+        env_name,
+        terms,
+        available_variable_names=[spec["name"] for spec in reward_variable_specs_for_env(env_name)],
+    )
     reward_configs_by_run[run_id] = {"env_name": env_name, "terms": normalized}
     return normalized
 
@@ -218,19 +292,27 @@ def reward_weights_for_run(run_id: str | None, env_name: str) -> dict[str, float
     }
 
 
-def make_reward_wrapped_env(env_name: str, run_id: str | None, render_mode: str | None = None):
+def make_reward_wrapped_env(
+    env_name: str,
+    run_id: str | None,
+    render_mode: str | None = None,
+    reward_terms_override: list[dict] | None = None,
+):
     env_kwargs = {"render_mode": render_mode} if render_mode else {}
     env = gym.make(env_name, **env_kwargs)
     return RewardShapingWrapper(
         env,
         env_name=env_name,
-        config_provider=lambda: get_reward_terms_for_run(run_id, env_name),
+        config_provider=lambda: reward_terms_override if reward_terms_override is not None else get_reward_terms_for_run(run_id, env_name),
     )
 
 
 def make_training_env_factory(env_name: str, run_id: str | None):
     ensure_sb3_available()
-    info_keywords = reward_monitor_keys(env_name)
+    current_terms = get_reward_terms_for_run(run_id, env_name)
+    info_keywords = tuple(
+        [f"reward_{term['key']}" for term in current_terms] + ["reward_total"]
+    )
 
     def _factory():
         env = make_reward_wrapped_env(env_name, run_id=run_id, render_mode=None)
@@ -239,11 +321,129 @@ def make_training_env_factory(env_name: str, run_id: str | None):
     return _factory
 
 
+def build_reward_ablation_configs(env_name: str, terms: list[dict]) -> list[dict[str, Any]]:
+    normalized_terms = normalize_reward_terms(env_name, terms)
+    native_term = next((term for term in normalized_terms if term["key"] == "native"), None)
+    if native_term is None:
+        native_term = {
+            "key": "native",
+            "label": "Native Reward",
+            "description": "Original environment reward.",
+            "weight": 1.0,
+            "enabled": True,
+            "expression": "",
+            "is_custom": False,
+        }
+
+    active_terms = [term for term in normalized_terms if term.get("enabled", True)]
+    extra_terms = [term for term in active_terms if term["key"] != "native"]
+    configs: list[dict[str, Any]] = []
+
+    def _native_only_terms() -> list[dict]:
+        return [dict(native_term, enabled=True, weight=float(native_term.get("weight", 1.0)))]
+
+    configs.append({
+        "label": "Native only",
+        "terms": _native_only_terms(),
+        "term_keys": ["native"],
+    })
+
+    for term in extra_terms:
+        configs.append({
+            "label": f"Native + {term['label']}",
+            "terms": _native_only_terms() + [dict(term)],
+            "term_keys": ["native", term["key"]],
+        })
+
+    configs.append({
+        "label": "All enabled terms",
+        "terms": [dict(term) for term in active_terms] or _native_only_terms(),
+        "term_keys": [term["key"] for term in active_terms] or ["native"],
+    })
+    return configs
+
+
+def collect_policy_eval_trajectories(model: Any, env_name: str, episodes: int = 3) -> list[dict[str, Any]]:
+    eval_env = make_reward_wrapped_env(
+        env_name,
+        run_id=None,
+        render_mode=None,
+        reward_terms_override=[{
+            "key": "native",
+            "label": "Native Reward",
+            "description": "Original environment reward.",
+            "weight": 1.0,
+            "enabled": True,
+            "expression": "",
+            "is_custom": False,
+        }],
+    )
+    trajectories: list[dict[str, Any]] = []
+    try:
+        for _ in range(max(1, episodes)):
+            obs, _ = eval_env.reset()
+            done = False
+            native_total = 0.0
+            steps = 0
+            reward_history: list[dict[str, Any]] = []
+            while not done and steps < 2000:
+                action, _ = model.predict(obs, deterministic=True)
+                obs, reward, terminated, truncated, info = eval_env.step(action)
+                raw_terms = {key: float(value) for key, value in info.get("reward_raw_terms", {}).items()}
+                reward_history.append({
+                    "step": steps + 1,
+                    "reward_raw_terms": raw_terms,
+                })
+                native_total += float(raw_terms.get("native", reward))
+                done = bool(terminated or truncated)
+                steps += 1
+            trajectories.append({
+                "reward_history": reward_history,
+                "native_total": native_total,
+            })
+    finally:
+        eval_env.close()
+
+    return trajectories
+
+
+def rescore_trajectories_with_reward_terms(trajectories: list[dict[str, Any]], terms: list[dict]) -> dict[str, float]:
+    normalized_terms = [
+        {
+            "key": term["key"],
+            "weight": float(term.get("weight", 0.0)),
+            "enabled": bool(term.get("enabled", True)),
+        }
+        for term in terms
+    ]
+    shaped_returns: list[float] = []
+    native_returns: list[float] = []
+
+    for trajectory in trajectories:
+        shaped_total = 0.0
+        native_total = float(trajectory.get("native_total", 0.0))
+        for step_entry in trajectory.get("reward_history", []):
+            raw_terms = step_entry.get("reward_raw_terms", {}) or {}
+            for term in normalized_terms:
+                raw_value = float(raw_terms.get(term["key"], 0.0))
+                if term.get("enabled", True):
+                    shaped_total += float(term.get("weight", 0.0)) * raw_value
+        shaped_returns.append(shaped_total)
+        native_returns.append(native_total)
+
+    return {
+        "avg_eval_reward": float(np.mean(shaped_returns)) if shaped_returns else 0.0,
+        "avg_native_reward": float(np.mean(native_returns)) if native_returns else 0.0,
+    }
+
+
 #@app.post("/start")
 def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_steps:int = 1000, reset_num_timesteps = False, callback: Any = None,
                    ws_manager=None, frame_fn=None, every_n_steps:int = 100, model: Any = None):
     ensure_sb3_available()
     RUNS_TRAINING_STATUS.setdefault(run_id, {"status": "running", "model_path": None, "error": None})
+    RUNS_TRAINING_STATUS[run_id]["reward_ablation"] = None
+    RUNS_TRAINING_STATUS[run_id]["reward_ablation_status"] = "idle"
     preview_model = None
     eval_env = None
     training_hyperparams = get_training_hyperparams_for_run(run_id)
@@ -334,16 +534,19 @@ def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_step
         def _evaluate_once(self):
             if self.target_model is None or self.eval_env is None or self.status_dict is None:
                 return
-            obs, _ = self.eval_env.reset()
-            total_reward = 0.0
-            for _ in range(1000):
-                with training_preview_model_locks[self.run_id]:
-                    action, _ = self.target_model.predict(obs, deterministic=True)
-                obs, reward, terminated, truncated, _ = self.eval_env.step(action)
-                total_reward += float(reward)
-                if terminated or truncated:
-                    break
-            self.status_dict[self.run_id]["eval_reward"] = float(total_reward)
+            totals: list[float] = []
+            for _ in range(3):
+                obs, _ = self.eval_env.reset()
+                total_reward = 0.0
+                for _ in range(1000):
+                    with training_preview_model_locks[self.run_id]:
+                        action, _ = self.target_model.predict(obs, deterministic=True)
+                    obs, reward, terminated, truncated, _ = self.eval_env.step(action)
+                    total_reward += float(reward)
+                    if terminated or truncated:
+                        break
+                totals.append(total_reward)
+            self.status_dict[self.run_id]["eval_reward"] = float(np.mean(totals)) if totals else 0.0
 
         def _on_step(self) -> bool:
             if self.target_model is None:
@@ -394,6 +597,33 @@ def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_step
             RUNS_TRAINING_STATUS[run_id]["hyperparams"] = training_hyperparams
             model.learn(total_timesteps=train_steps, reset_num_timesteps=reset_num_timesteps, callback=callbacks_list)
             stop_requested = bool(RUNS_TRAINING_STATUS[run_id].get("stop", False))
+            RUNS_TRAINING_STATUS[run_id]["reward_ablation_status"] = "running"
+            try:
+                ablation_terms = get_reward_terms_for_run(run_id, env_name)
+                ablation_configs = build_reward_ablation_configs(env_name, ablation_terms)
+                ablation_trajectories = collect_policy_eval_trajectories(model, env_name, episodes=3)
+                ablation_rows = []
+                for config in ablation_configs:
+                    results = rescore_trajectories_with_reward_terms(ablation_trajectories, config["terms"])
+                    ablation_rows.append({
+                        "label": config["label"],
+                        "term_keys": config["term_keys"],
+                        **results,
+                    })
+                RUNS_TRAINING_STATUS[run_id]["reward_ablation"] = {
+                    "env_name": env_name,
+                    "eval_episodes": len(ablation_trajectories),
+                    "trajectory_mode": "fixed_counterfactual_rescoring",
+                    "rows": ablation_rows,
+                }
+                RUNS_TRAINING_STATUS[run_id]["reward_ablation_status"] = "done"
+            except Exception as exc:
+                RUNS_TRAINING_STATUS[run_id]["reward_ablation"] = {
+                    "env_name": env_name,
+                    "error": str(exc),
+                    "rows": [],
+                }
+                RUNS_TRAINING_STATUS[run_id]["reward_ablation_status"] = "error"
             train_model_actual_path = ""
             if run_id not in trained_model_paths:
                 train_model_actual_path = default_model_path
@@ -458,21 +688,31 @@ def get_reward_config(run_id: str, env_name: str):
         "env_name": env_name,
         "terms": terms,
         "supports_custom_reward": len(terms) > 1,
+        "available_variables": reward_variable_specs_for_env(env_name),
+        "formula_examples": [
+            "0.5 * obs_2 * obs_2",
+            "-abs(obs_3)",
+            "clip(native + 0.1 * survival_bonus, -10, 10)",
+        ],
     }
 
 
 @app.post("/reward_config")
 def update_reward_config(req: RewardConfigUpdateRequest):
-    terms = set_reward_terms_for_run(
-        run_id=req.run_id,
-        env_name=req.env_name,
-        terms=[term.model_dump() for term in req.terms],
-    )
+    try:
+        terms = set_reward_terms_for_run(
+            run_id=req.run_id,
+            env_name=req.env_name,
+            terms=[term.model_dump() for term in req.terms],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
         "status": "updated",
         "run_id": req.run_id,
         "env_name": req.env_name,
         "terms": terms,
+        "available_variables": reward_variable_specs_for_env(req.env_name),
     }
 
 
