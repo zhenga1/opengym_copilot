@@ -1035,10 +1035,14 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
     #env_name = query or "CartPole-v1"
     
     def render_env(env):#mode="rgb_array"):
-        frame = env.render()
-        _, buffer = cv2.imencode('.jpg', frame)
-        #print(buffer.shape)
-        return base64.b64encode(buffer).decode("utf-8")
+        try: 
+            frame = env.render()
+            _, buffer = cv2.imencode('.jpg', frame)
+            #print(buffer.shape)
+            return base64.b64encode(buffer).decode("utf-8")
+        except Exception as e:
+            print("Error rendering environment: ", e)
+            return None
 
     try:
         
