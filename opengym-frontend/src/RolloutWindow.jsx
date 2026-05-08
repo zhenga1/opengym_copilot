@@ -52,6 +52,7 @@ function RolloutWindow({
   const [trainingRewardBreakdownMean, setTrainingRewardBreakdownMean] = useState({});
   const [trainingAblationReport, setTrainingAblationReport] = useState(null);
   const [trainingAblationStatus, setTrainingAblationStatus] = useState('idle');
+  const [trainingInsights, setTrainingInsights] = useState(null);
   const [trainingGraphIndex, setTrainingGraphIndex] = useState(0);
   const [trainingWorkspaceViewIndex, setTrainingWorkspaceViewIndex] = useState(0);
   const [trainingTimelineGraphIndex, setTrainingTimelineGraphIndex] = useState(0);
@@ -66,6 +67,7 @@ function RolloutWindow({
   const [rolloutTimelineOutcomeFilter, setRolloutTimelineOutcomeFilter] = useState('all');
   const [rolloutWorkspaceViewIndex, setRolloutWorkspaceViewIndex] = useState(0);
   const [rolloutRewardBreakdown, setRolloutRewardBreakdown] = useState({});
+  const [rolloutInsights, setRolloutInsights] = useState(null);
   const [latestRolloutRawTerms, setLatestRolloutRawTerms] = useState({});
   const [rewardLogs, setRewardLogs] = useState([]);
 
@@ -1043,6 +1045,7 @@ function RolloutWindow({
       setTrainingHyperparams(nextTrainingHyperparams);
       setTrainingAblationReport(null);
       setTrainingAblationStatus('idle');
+      setTrainingInsights(null);
       closePathPopup();
 
       toggleTrainPauseTogether();
@@ -1096,6 +1099,8 @@ function RolloutWindow({
       setRewardConfigStatus("Saved rollout viewer. Reward terms shown below come from the loaded JSON.");
       setTrainingAblationReport(null);
       setTrainingAblationStatus('idle');
+      setTrainingInsights(null);
+      setRolloutInsights(null);
       hydrateLoadedRollouts(initialRollouts);
     }
   }, [hydrateLoadedRollouts, initialRollouts, isSavedViewer]);
@@ -1312,6 +1317,8 @@ function RolloutWindow({
         if (cancelled) return;
         setTrainingAblationReport(response.data?.reward_ablation || null);
         setTrainingAblationStatus(response.data?.reward_ablation_status || 'idle');
+        setTrainingInsights(response.data?.training_insights || null);
+        setRolloutInsights(response.data?.rollout_insights || null);
       } catch (error) {
         if (cancelled) return;
         console.error('Failed to fetch training run status:', error);
@@ -1738,6 +1745,52 @@ function RolloutWindow({
     alignItems: 'center',
     gap: '0.45rem',
   });
+  const renderInsightCards = (report, emptyLabel) => {
+    const summary = report?.summary || {};
+    const cards = Array.isArray(report?.insights) ? report.insights : [];
+    if (cards.length === 0) {
+      return (
+        <div style={{ color: '#64748b', fontSize: '0.9rem' }}>
+          {emptyLabel}
+        </div>
+      );
+    }
+    return (
+      <div style={{ display: 'grid', gap: '0.75rem' }}>
+        <div style={{ color: '#64748b', fontSize: '0.82rem' }}>
+          Analyzed {summary.episodes_analyzed || 0} episodes with {summary.success_count || 0} successes and {summary.failure_count || 0} failures.
+          {summary.success_rate !== null && summary.success_rate !== undefined ? ` Success rate: ${(summary.success_rate * 100).toFixed(0)}%.` : ''}
+        </div>
+        {cards.map((insight, index) => (
+          <div
+            key={`${insight.category || 'insight'}-${index}`}
+            style={{
+              border: '1px solid rgba(148, 163, 184, 0.22)',
+              borderRadius: '12px',
+              padding: '0.85rem 0.9rem',
+              backgroundColor: 'rgba(255,255,255,0.62)',
+              textAlign: 'left',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ fontWeight: 800, color: '#334155' }}>{insight.title}</div>
+              <div style={{ fontSize: '0.76rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                {insight.priority || 'info'} • confidence {Math.round((insight.confidence || 0) * 100)}%
+              </div>
+            </div>
+            <div style={{ color: '#475569', fontSize: '0.88rem', marginTop: '0.35rem', lineHeight: 1.5 }}>
+              {insight.body}
+            </div>
+            {insight.evidence && (
+              <div style={{ marginTop: '0.45rem', fontSize: '0.76rem', color: '#64748b', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
+                {Object.entries(insight.evidence).map(([key, value]) => `${key}: ${value}`).join(' | ')}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  };
   return (
   <div
     style={{
@@ -2289,6 +2342,15 @@ function RolloutWindow({
         </div>
       </div>
     )}
+    {!isSavedViewer && trainingInsights && (
+      <div style={{ ...sectionPanelStyle, marginTop: '1rem' }}>
+        <h3 style={{ fontSize: '1.2rem', color: '#0f766e', marginTop: 0 }}>Deterministic Training Insights</h3>
+        <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
+          Outcome-focused summaries derived from recent training episodes, using reward-term contrasts and terminal-window comparisons.
+        </div>
+        {renderInsightCards(trainingInsights, 'Training insights will appear after enough completed episodes are available.')}
+      </div>
+    )}
     {!isSavedViewer && (trainingAblationReport || trainingAblationStatus === 'running' || trainingAblationStatus === 'error') && (
       <div style={{ ...sectionPanelStyle, marginTop: '1rem' }}>
         <h3 style={{ fontSize: '1.2rem', color: '#7c3aed', marginTop: 0 }}>Post-Training Reward Ablation</h3>
@@ -2577,6 +2639,15 @@ function RolloutWindow({
           </div>
         </div>
       </div>
+      {!isSavedViewer && rolloutInsights && (
+        <div style={{ ...sectionPanelStyle, marginTop: '1rem' }}>
+          <h3 style={{ fontSize: '1.2rem', color: '#2563eb', marginTop: 0 }}>Deterministic Rollout Insights</h3>
+          <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
+            Recent rollout episodes are analyzed for terms that separate success from failure and for late-episode failure signatures.
+          </div>
+          {renderInsightCards(rolloutInsights, 'Rollout insights will appear after enough recent rollout episodes have been observed.')}
+        </div>
+      )}
       <div
         style={{
           ...sectionPanelStyle,
