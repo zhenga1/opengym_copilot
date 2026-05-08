@@ -77,8 +77,18 @@ function RolloutWindow({
   // the FPS of rollout, default is 20FPS (delay = 1/20 = 0.05 seconds)
   const [rolloutSpeed, setRolloutSpeed] = useState(20);
   const [showSavePopup, setShowSavePopup] = useState(false);
-  const setShowSavePopupToTrue = () => setShowSavePopup(true);
-  const closeShowSavePopup = () => setShowSavePopup(false);
+  const setShowSavePopupToTrue = () => {
+    setSavePopupMode('manual');
+    setPendingModelSwitch(null);
+    setShowSavePopup(true);
+  };
+  const closeShowSavePopup = () => {
+    setSavePopupMode('manual');
+    setPendingModelSwitch(null);
+    setShowSavePopup(false);
+  };
+  const [savePopupMode, setSavePopupMode] = useState('manual');
+  const [pendingModelSwitch, setPendingModelSwitch] = useState(null);
 
   const isPausedRef = useRef(false);
   const [sessionId, setSessionId] = useState(null);
@@ -86,6 +96,7 @@ function RolloutWindow({
   const [saving_rollouts, setSavingRollouts] = useState(false);
   const [runId, setRunId] = useState(null);
   const intervalRef = useRef(null);
+  const rolloutEpisodeOffsetRef = useRef(null);
 
   const socketRef = useRef(null);
   const retryRef = useRef(null);
@@ -132,6 +143,7 @@ function RolloutWindow({
     setEnvName(e.target.value)
   }
 
+  // This is for the load rollouts section
   const hydrateLoadedRollouts = useCallback((loadedRollouts) => {
     const safeRollouts = Array.isArray(loadedRollouts) ? loadedRollouts : [];
     const earliestEpisode = safeRollouts.reduce((minEpisode, rollout) => {
@@ -178,6 +190,25 @@ function RolloutWindow({
       }))
     );
   }, [rewardLogLimit, viewerLabel]);
+
+  const clearLiveRolloutState = useCallback(() => {
+    // Clear the live rollout state and reset the rollout UI
+    rolloutEpisodeOffsetRef.current = null;
+    setRollouts([]);
+    setFrames([]);
+    setCapturedEpisodeFramesByEpisode({});
+    setSelectedVisualizationEpisode(null);
+    setCurrentFrame(0);
+    setIsPlaying(false);
+    setEpisodeInfo({ episode: 0, reward: 0 });
+    setEpisodeNumForSimulation(0);
+    setRolloutRewardBreakdown({});
+    setLatestRolloutRawTerms({});
+    setSelectedTimelineEpisode(null);
+    setSelectedTimelineStep(null);
+    setRewardLogs([]);
+    setRolloutInsights(null);
+  }, []);
 
   const updateRewardTerm = useCallback((termKey, field, value, fallbackTerm = null) => {
     setRewardConfig((prev) => {
@@ -1441,30 +1472,41 @@ function RolloutWindow({
             });
           } else {
             console.log("Received Episode data: ", data.type, data);
+            // set the episode info to the value of data.episode
+            const rawEpisodeNumber = Number(data.episode ?? 0);
+            if (rolloutEpisodeOffsetRef.current === null || rolloutEpisodeOffsetRef.current === undefined) {
+              rolloutEpisodeOffsetRef.current = rawEpisodeNumber;
+            }
+            const rolloutEpisodeNumber = rawEpisodeNumber - rolloutEpisodeOffsetRef.current;
+            const rawSimFrameEpisodeNumber = data.sim_frame_episode_number;
+            const simFrameEpisodeNumber =
+              rawSimFrameEpisodeNumber !== null && rawSimFrameEpisodeNumber !== undefined
+                ? Number(rawSimFrameEpisodeNumber) - rolloutEpisodeOffsetRef.current
+                : null;
             // if data.type is not session
             if(data.ep_frames.length > 0){
               setFrames(data.ep_frames);        // store all frames
-              if (data.sim_frame_episode_number !== null && data.sim_frame_episode_number !== undefined) {
+              if (simFrameEpisodeNumber !== null && simFrameEpisodeNumber !== undefined) {
                 setCapturedEpisodeFramesByEpisode((prev) => ({
                   ...prev,
-                  [data.sim_frame_episode_number]: data.ep_frames,
+                  [simFrameEpisodeNumber]: data.ep_frames,
                 }));
                 setSelectedVisualizationEpisode((prev) =>
-                  prev === null || prev === undefined ? data.sim_frame_episode_number : prev
+                  prev === null || prev === undefined ? simFrameEpisodeNumber : prev
                 );
               }
             }
             // console.log("Episode: ", data.episode, "   Reward: ", data.reward); // DEBUG:FRONTEND
             // console.log("Frames received length: ", data.ep_frames.length); // DEBUG:FRONTEND
             // console.log("Data sim frame episode number: ", data.sim_frame_episode_number); // DEBUG:FRONTEND
-            if(data.sim_frame_episode_number) {
-              setEpisodeNumForSimulation(data.sim_frame_episode_number);
+            if(simFrameEpisodeNumber !== null && simFrameEpisodeNumber !== undefined) {
+              setEpisodeNumForSimulation(simFrameEpisodeNumber);
             }
             //setIsPlaying(true); <- playback controlled by isPlaying var           // start playback automatically
             // don't need all the other information
             const newData = {
               reward: data.reward,
-              episode: data.episode,
+              episode: rolloutEpisodeNumber,
               reward_breakdown: data.reward_breakdown || {},
               reward_raw_terms: data.reward_raw_terms || {},
               reward_history: data.reward_history || [],
@@ -1475,13 +1517,13 @@ function RolloutWindow({
               truncated: Boolean(data.truncated),
             };
             if (!trainMode) {
-              setEpisodeInfo({ episode: data.episode, reward: data.reward });
+              setEpisodeInfo({ episode: rolloutEpisodeNumber, reward: data.reward });
               setRolloutRewardBreakdown(data.reward_breakdown || {});
               setLatestRolloutRawTerms(data.reward_raw_terms || {});
               setRollouts((prev) => [newData, ...prev]);
               appendRewardLog({
                 source: 'rollout',
-                label: `Episode ${data.episode}`,
+                label: `Episode ${rolloutEpisodeNumber}`,
                 total: data.reward,
                 breakdown: data.reward_breakdown || {},
                 at: new Date().toLocaleTimeString(),
@@ -1591,6 +1633,42 @@ function RolloutWindow({
     const f = e.target.files?.[0] || null;
     setFile(f);
   };
+  const applyModelSelection = useCallback(async (modelName) => {
+    if (!runId) {
+      console.warn("Run ID not set yet, cannot load model");
+      return;
+    }
+    setLoading(true);
+    try {
+      await apiClient.post("/load_model", { run_id: runId, model_name: modelName });
+      setIsUsingNone(!modelName);
+      clearLiveRolloutState();
+    } finally {
+      setLoading(false);
+    }
+  }, [clearLiveRolloutState, runId]);
+
+  const openModelSwitchSavePrompt = useCallback((modelName) => {
+    setPendingModelSwitch({ modelName });
+    setSavePopupMode('model-switch');
+    setShowSavePopup(true);
+  }, []);
+
+  const cancelPendingModelSwitch = useCallback(() => {
+    setPendingModelSwitch(null);
+    setSavePopupMode('manual');
+    setShowSavePopup(false);
+  }, []);
+
+  const continueModelSwitchWithoutSaving = useCallback(async () => {
+    if (!pendingModelSwitch) return;
+    const modelName = pendingModelSwitch.modelName;
+    setPendingModelSwitch(null);
+    setSavePopupMode('manual');
+    setShowSavePopup(false);
+    await applyModelSelection(modelName);
+  }, [applyModelSelection, pendingModelSwitch]);
+
   const useNone = async () => {
     setLoading(true);
     setIsUsingNone(true);
@@ -1610,17 +1688,12 @@ function RolloutWindow({
       console.warn("Run ID not set yet, cannot load model");
       return;
     }
-    setIsUsingNone(false);
-    if (!selectedServerModel) return useNone();
-    setLoading(true);
-    try {
-      await apiClient.post("/load_model", {
-        run_id: runId,
-        model_name: selectedServerModel,
-      });
-    } finally {
-      setLoading(false);
+    const nextModelName = selectedServerModel || "";
+    if (rollouts.length > 0) {
+      openModelSwitchSavePrompt(nextModelName);
+      return;
     }
+    await applyModelSelection(nextModelName);
   };
 
   const handleSave = async (filename) => {
@@ -1646,6 +1719,12 @@ function RolloutWindow({
     } finally {
       setSavingRollouts(false);
       setShowSavePopup(false);
+      const pendingModelName = pendingModelSwitch?.modelName;
+      setPendingModelSwitch(null);
+      setSavePopupMode('manual');
+      if (pendingModelName !== undefined && pendingModelName !== null) {
+        await applyModelSelection(pendingModelName);
+      }
     }
   };
 
@@ -1917,7 +1996,15 @@ function RolloutWindow({
         runId={runId}
         isOpen={showSavePopup}
         onConfirm={handleSave}
-        onClose={closeShowSavePopup}
+        onClose={savePopupMode === 'model-switch' ? cancelPendingModelSwitch : closeShowSavePopup}
+        onSkip={savePopupMode === 'model-switch' ? continueModelSwitchWithoutSaving : null}
+        showSkip={savePopupMode === 'model-switch'}
+        title={savePopupMode === 'model-switch' ? 'Save Current Rollout Before Model Switch' : 'Save Rollouts'}
+        message={savePopupMode === 'model-switch'
+          ? 'You are about to start a fresh rollout run with the selected model. Save the current rollout history first, or continue without saving.'
+          : ''}
+        confirmLabel={savePopupMode === 'model-switch' ? 'Save And Switch Model' : 'Save'}
+        skipLabel="Switch Without Saving"
       />
 
       <label htmlFor="envSelect" style={{ fontWeight: 600 }}>Environment:</label>
