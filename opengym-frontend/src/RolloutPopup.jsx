@@ -1,6 +1,17 @@
 import React, { useState, useEffect } from "react";
 
-const SaveRolloutPopup = ({ runId, isOpen, onConfirm, onClose }) => {
+const SaveRolloutPopup = ({
+  runId,
+  isOpen,
+  onConfirm,
+  onClose,
+  onSkip = null,
+  title = "Save Rollouts",
+  message = "",
+  confirmLabel = "Save",
+  skipLabel = "Continue Without Saving",
+  showSkip = false,
+}) => {
   const [filename, setFilename] = useState("rollouts_.json");
 
   // Reset default when reopened
@@ -43,7 +54,12 @@ const SaveRolloutPopup = ({ runId, isOpen, onConfirm, onClose }) => {
           boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
         }}
       >
-        <h3 style={{ marginBottom: "1rem" }}>Save Rollouts</h3>
+        <h3 style={{ marginBottom: "1rem" }}>{title}</h3>
+        {message ? (
+          <div style={{ marginBottom: "0.9rem", color: "#475569", fontSize: "0.92rem", lineHeight: 1.45 }}>
+            {message}
+          </div>
+        ) : null}
 
         <label htmlFor="filename" style={{ fontWeight: 600 }}>
           Filename:
@@ -63,7 +79,7 @@ const SaveRolloutPopup = ({ runId, isOpen, onConfirm, onClose }) => {
           }}
         />
 
-        <div style={{ display: "flex", justifyContent: "center", gap: "1rem" }}>
+        <div style={{ display: "flex", justifyContent: "center", gap: "0.75rem", flexWrap: "wrap" }}>
           <button
             onClick={onClose}
             style={{
@@ -76,6 +92,22 @@ const SaveRolloutPopup = ({ runId, isOpen, onConfirm, onClose }) => {
           >
             Cancel
           </button>
+          {showSkip && onSkip ? (
+            <button
+              onClick={onSkip}
+              style={{
+                padding: "6px 12px",
+                borderRadius: "4px",
+                border: "1px solid #cbd5e1",
+                backgroundColor: "white",
+                color: "#334155",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              {skipLabel}
+            </button>
+          ) : null}
           <button
             onClick={handleConfirm}
             style={{
@@ -88,7 +120,7 @@ const SaveRolloutPopup = ({ runId, isOpen, onConfirm, onClose }) => {
               cursor: "pointer",
             }}
           >
-            Save
+            {confirmLabel}
           </button>
         </div>
       </div>

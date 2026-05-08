@@ -3,6 +3,7 @@
 from stable_baselines3.common.callbacks import BaseCallback, CallbackList
 import time
 import numpy as np
+from deterministic_insights import build_episode_insights
 
 class TrainingProgressCallback(BaseCallback):
     """
@@ -49,6 +50,7 @@ class TrainingProgressCallback(BaseCallback):
         status.setdefault("reward_breakdown_mean", {})
         status.setdefault("latest_training_episode_history", [])
         status.setdefault("recent_training_episodes", [])
+        status.setdefault("training_insights", {})
         status.setdefault("fps", None)
 
     @staticmethod
@@ -134,6 +136,11 @@ class TrainingProgressCallback(BaseCallback):
             "recent_training_episodes": (new_training_episodes + status.get("recent_training_episodes", []))[:25] if new_training_episodes else status.get("recent_training_episodes", []),
             "fps": fps,
         })
+        if new_training_episodes:
+            status["training_insights"] = build_episode_insights(
+                status.get("recent_training_episodes", []),
+                source="training",
+            )
         
         # print(f"Preparing to send training progress callback with reward {reward_last} and mean reward {reward_mean}")
         # print(f"Current steps done {steps_done}, steps last emit {self._last_emit}, every_n_steps {self.every_n_steps}")

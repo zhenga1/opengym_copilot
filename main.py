@@ -26,6 +26,7 @@ from train_backend_reward_tuning.reward_shaping import (
     reward_expression_variable_names,
     validate_reward_terms,
 )
+from deterministic_insights import build_episode_insights
 
 try:
     from stable_baselines3 import PPO
@@ -316,6 +317,35 @@ def get_training_hyperparams_for_run(run_id: str | None) -> dict:
     return training_hyperparams_by_run[run_id]
 
 
+def ensure_run_status(run_id: str | None, env_name: str | None = None) -> dict:
+    if not run_id:
+        return {}
+    status = RUNS_TRAINING_STATUS.setdefault(run_id, {"status": "idle"})
+    status.setdefault("env_name", env_name)
+    status.setdefault("recent_training_episodes", [])
+    status.setdefault("recent_rollout_episodes", [])
+    status.setdefault("training_insights", {})
+    status.setdefault("rollout_insights", {})
+    if env_name:
+        status["env_name"] = env_name
+    return status
+
+
+def append_recent_episode(run_id: str | None, episode_payload: dict[str, Any], source: str, env_name: str | None = None) -> None:
+    status = ensure_run_status(run_id, env_name=env_name)
+    if not status:
+        return
+    key = "recent_training_episodes" if source == "training" else "recent_rollout_episodes"
+    insight_key = "training_insights" if source == "training" else "rollout_insights"
+    episodes = [episode_payload, *status.get(key, [])][:25]
+    status[key] = episodes
+    status[insight_key] = build_episode_insights(
+        episodes,
+        source=source,
+        env_name=status.get("env_name"),
+    )
+
+
 def build_learning_rate_schedule(initial_lr: float, strategy: str):
     strategy = strategy.lower()
     if strategy == "linear":
@@ -512,7 +542,10 @@ def rescore_trajectories_with_reward_terms(trajectories: list[dict[str, Any]], t
 def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_steps:int = 1000, reset_num_timesteps = False, callback: Any = None,
                    ws_manager=None, frame_fn=None, every_n_steps:int = 100, model: Any = None):
     ensure_sb3_available()
-    RUNS_TRAINING_STATUS.setdefault(run_id, {"status": "running", "model_path": None, "error": None})
+    ensure_run_status(run_id, env_name=env_name)
+    RUNS_TRAINING_STATUS[run_id].setdefault("model_path", None)
+    RUNS_TRAINING_STATUS[run_id].setdefault("error", None)
+    RUNS_TRAINING_STATUS[run_id]["status"] = "running"
     RUNS_TRAINING_STATUS[run_id]["reward_ablation"] = None
     RUNS_TRAINING_STATUS[run_id]["reward_ablation_status"] = "idle"
     preview_model = None
@@ -745,7 +778,22 @@ def change_rollout_speed(rollReq:RolloutSpeedRequest):
 
 @app.get("/training_runs/{run_id}")
 def get_run(run_id: str):
-    return RUNS_TRAINING_STATUS.get(run_id, {"status": "unknown"})
+    status = RUNS_TRAINING_STATUS.get(run_id)
+    if status is None:
+        return {"status": "unknown"}
+    if status.get("recent_training_episodes") and not status.get("training_insights"):
+        status["training_insights"] = build_episode_insights(
+            status.get("recent_training_episodes", []),
+            source="training",
+            env_name=status.get("env_name"),
+        )
+    if status.get("recent_rollout_episodes") and not status.get("rollout_insights"):
+        status["rollout_insights"] = build_episode_insights(
+            status.get("recent_rollout_episodes", []),
+            source="rollout",
+            env_name=status.get("env_name"),
+        )
+    return status
 
 
 @app.get("/reward_config")
@@ -1014,6 +1062,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
     train_mode = train_mode_str.lower() == "true"   # ✅ real boolean
     train_steps = query.get("train_steps", [1000])[0]
     train_steps = int(train_steps)
+    ensure_run_status(run_id, env_name=env_name)
 
     
     client = await ws_manager.register(websocket, topic=topic, run_id=run_id)
@@ -1035,10 +1084,14 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
     #env_name = query or "CartPole-v1"
     
     def render_env(env):#mode="rgb_array"):
-        frame = env.render()
-        _, buffer = cv2.imencode('.jpg', frame)
-        #print(buffer.shape)
-        return base64.b64encode(buffer).decode("utf-8")
+        try: 
+            frame = env.render()
+            _, buffer = cv2.imencode('.jpg', frame)
+            #print(buffer.shape)
+            return base64.b64encode(buffer).decode("utf-8")
+        except Exception as e:
+            print("Error rendering environment: ", e)
+            return None
 
     try:
         
@@ -1148,6 +1201,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                     "reward_weights": reward_weights_for_run(run_id, env_name),
                     #"done": done
                 }
+                append_recent_episode(run_id, data, source="rollout", env_name=env_name)
                 #print("Rollout data sent with reward: ", float(ep_reward));
 
                 # Send JSON over WebSocket
