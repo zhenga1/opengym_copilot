@@ -48,11 +48,13 @@ function RolloutWindow({
   const [supportsCustomReward, setSupportsCustomReward] = useState(false);
   const [availableRewardVariables, setAvailableRewardVariables] = useState([]);
   const [rewardFormulaExamples, setRewardFormulaExamples] = useState([]);
+  const [rewardSourceLinks, setRewardSourceLinks] = useState([]);
   const [trainingRewardBreakdown, setTrainingRewardBreakdown] = useState({});
   const [trainingRewardBreakdownMean, setTrainingRewardBreakdownMean] = useState({});
   const [trainingAblationReport, setTrainingAblationReport] = useState(null);
   const [trainingAblationStatus, setTrainingAblationStatus] = useState('idle');
   const [trainingInsights, setTrainingInsights] = useState(null);
+  const [showTrainingInsights, setShowTrainingInsights] = useState(false);
   const [trainingGraphIndex, setTrainingGraphIndex] = useState(0);
   const [trainingWorkspaceViewIndex, setTrainingWorkspaceViewIndex] = useState(0);
   const [trainingTimelineGraphIndex, setTrainingTimelineGraphIndex] = useState(0);
@@ -66,6 +68,7 @@ function RolloutWindow({
   const [rolloutTimelineMode, setRolloutTimelineMode] = useState('episode');
   const [rolloutTimelineOutcomeFilter, setRolloutTimelineOutcomeFilter] = useState('all');
   const [rolloutWorkspaceViewIndex, setRolloutWorkspaceViewIndex] = useState(0);
+  const [showRolloutInsights, setShowRolloutInsights] = useState(false);
   const [rolloutRewardBreakdown, setRolloutRewardBreakdown] = useState({});
   const [rolloutInsights, setRolloutInsights] = useState(null);
   const [latestRolloutRawTerms, setLatestRolloutRawTerms] = useState({});
@@ -270,6 +273,17 @@ function RolloutWindow({
 
   const showSavedViewerRewardMessage = useCallback(() => {
     setRewardConfigStatus('Saved rollout viewers are read-only. Edit reward terms from a live rollout window.');
+  }, []);
+
+  const formatRewardTermLabel = useCallback((label) => {
+    if (!label) return 'Reward Term';
+    if (label === 'total_reward') return 'Total Reward';
+    if (label.startsWith('obs_')) return `Observation ${label.slice(4)}`;
+    if (label.startsWith('action_')) return `Action ${label.slice(7)}`;
+    if (label.startsWith('prev_action_')) return `Previous Action ${label.slice(12)}`;
+    return label
+      .replaceAll('_', ' ')
+      .replace(/\b\w/g, (char) => char.toUpperCase());
   }, []);
 
   const computeBreakdownFromRawTerms = useCallback((terms, rawTerms) => {
@@ -693,6 +707,7 @@ function RolloutWindow({
     labels: [],
     datasets: [],
   };
+  const shouldShowTrainingTimelineKey = currentTrainingTimelineGraph.datasets.length > 1;
   const selectedTrainingTimelineSummary = useMemo(
     () => summarizeEpisodeOutcome(selectedTrainingTimelineTarget),
     [selectedTrainingTimelineTarget, summarizeEpisodeOutcome]
@@ -883,6 +898,7 @@ function RolloutWindow({
     labels: [],
     datasets: [],
   };
+  const shouldShowRolloutTimelineKey = currentTimelineGraph.datasets.length > 1;
   const selectedRolloutTimelineSummary = useMemo(
     () => summarizeEpisodeOutcome(selectedTimelineTarget),
     [selectedTimelineTarget, summarizeEpisodeOutcome]
@@ -960,6 +976,7 @@ function RolloutWindow({
       const nextTerms = response.data.terms || [];
       setRewardConfig(nextTerms);
       setAvailableRewardVariables(response.data.available_variables || []);
+      setRewardSourceLinks(response.data.reward_source_links || []);
       setTrainingEpisodes((prev) => applyRewardConfigToTrainingEpisodes(prev, nextTerms));
       const nextRollouts = applyRewardConfigToRollouts(rollouts, nextTerms);
       setRollouts(nextRollouts);
@@ -1077,6 +1094,7 @@ function RolloutWindow({
       setTrainingAblationReport(null);
       setTrainingAblationStatus('idle');
       setTrainingInsights(null);
+      setShowTrainingInsights(false);
       closePathPopup();
 
       toggleTrainPauseTogether();
@@ -1125,6 +1143,7 @@ function RolloutWindow({
       setSupportsCustomReward(false);
       setAvailableRewardVariables([]);
       setRewardFormulaExamples([]);
+      setRewardSourceLinks([]);
       setRewardConfigDirty(false);
       setRewardConfigLoading(false);
       setRewardConfigStatus("Saved rollout viewer. Reward terms shown below come from the loaded JSON.");
@@ -1132,6 +1151,8 @@ function RolloutWindow({
       setTrainingAblationStatus('idle');
       setTrainingInsights(null);
       setRolloutInsights(null);
+      setShowTrainingInsights(false);
+      setShowRolloutInsights(false);
       hydrateLoadedRollouts(initialRollouts);
     }
   }, [hydrateLoadedRollouts, initialRollouts, isSavedViewer]);
@@ -1313,6 +1334,7 @@ function RolloutWindow({
         setSupportsCustomReward(Boolean(response.data.supports_custom_reward));
         setAvailableRewardVariables(response.data.available_variables || []);
         setRewardFormulaExamples(response.data.formula_examples || []);
+        setRewardSourceLinks(response.data.reward_source_links || []);
         setRewardConfigDirty(false);
         setRewardConfigStatus(
           response.data.supports_custom_reward
@@ -1324,6 +1346,7 @@ function RolloutWindow({
         console.error("Failed to fetch reward config:", error);
         setAvailableRewardVariables([]);
         setRewardFormulaExamples([]);
+        setRewardSourceLinks([]);
         setRewardConfigStatus("Failed to load reward settings.");
       } finally {
         if (!cancelled) {
@@ -1376,6 +1399,7 @@ function RolloutWindow({
       supportsCustomReward,
       availableRewardVariables,
       rewardFormulaExamples,
+      rewardSourceLinks,
       latestTrainingBreakdown: trainingRewardBreakdown,
       latestTrainingMeanBreakdown: trainingRewardBreakdownMean,
       latestRolloutBreakdown: rolloutRewardBreakdown,
@@ -1396,6 +1420,7 @@ function RolloutWindow({
     supportsCustomReward,
     availableRewardVariables,
     rewardFormulaExamples,
+    rewardSourceLinks,
     trainingRewardBreakdown,
     trainingRewardBreakdownMean,
     rolloutRewardBreakdown,
@@ -2102,6 +2127,22 @@ function RolloutWindow({
             </option>
           ))}
         </select>
+        {!isSavedViewer && (
+          <button
+            onClick={() => setShowTrainingInsights((prev) => !prev)}
+            style={{
+              padding: '0.5rem 0.9rem',
+              borderRadius: '999px',
+              border: '1px solid rgba(15, 118, 110, 0.22)',
+              backgroundColor: showTrainingInsights ? '#0f766e' : 'white',
+              color: showTrainingInsights ? 'white' : '#0f766e',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            {showTrainingInsights ? 'Hide Insights' : 'Show Insights'}
+          </button>
+        )}
         <button
           onClick={() => setTrainingWorkspaceViewIndex((prev) => (prev + 1) % trainingWorkspaceViews.length)}
           style={{
@@ -2355,6 +2396,47 @@ function RolloutWindow({
               : 'Select a completed training episode to inspect timestep rewards'}
           </div>
         </div>
+        {shouldShowTrainingTimelineKey && (
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: '0.55rem 0.9rem',
+              justifyContent: 'center',
+              marginBottom: '0.85rem',
+              padding: '0.65rem 0.75rem',
+              backgroundColor: 'rgba(255,255,255,0.55)',
+              border: '1px solid rgba(148, 163, 184, 0.18)',
+              borderRadius: '12px',
+            }}
+          >
+            {currentTrainingTimelineGraph.datasets.map((dataset) => (
+              <div
+                key={`training-key-${dataset.label}`}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.45rem',
+                  color: '#334155',
+                  fontSize: '0.82rem',
+                  fontWeight: 600,
+                }}
+              >
+                <span
+                  style={{
+                    width: '12px',
+                    height: '12px',
+                    borderRadius: '999px',
+                    backgroundColor: dataset.borderColor,
+                    border: '1px solid rgba(15, 23, 42, 0.18)',
+                    flex: '0 0 auto',
+                  }}
+                />
+                <span>{formatRewardTermLabel(dataset.label)}</span>
+              </div>
+            ))}
+          </div>
+        )}
         <div
           style={{
             marginBottom: '0.9rem',
@@ -2429,7 +2511,7 @@ function RolloutWindow({
         </div>
       </div>
     )}
-    {!isSavedViewer && trainingInsights && (
+    {!isSavedViewer && showTrainingInsights && trainingInsights && (
       <div style={{ ...sectionPanelStyle, marginTop: '1rem' }}>
         <h3 style={{ fontSize: '1.2rem', color: '#0f766e', marginTop: 0 }}>Deterministic Training Insights</h3>
         <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
@@ -2726,15 +2808,6 @@ function RolloutWindow({
           </div>
         </div>
       </div>
-      {!isSavedViewer && rolloutInsights && (
-        <div style={{ ...sectionPanelStyle, marginTop: '1rem' }}>
-          <h3 style={{ fontSize: '1.2rem', color: '#2563eb', marginTop: 0 }}>Deterministic Rollout Insights</h3>
-          <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
-            Recent rollout episodes are analyzed for terms that separate success from failure and for late-episode failure signatures.
-          </div>
-          {renderInsightCards(rolloutInsights, 'Rollout insights will appear after enough recent rollout episodes have been observed.')}
-        </div>
-      )}
       <div
         style={{
           ...sectionPanelStyle,
@@ -2786,6 +2859,22 @@ function RolloutWindow({
             </option>
           ))}
         </select>
+        {!isSavedViewer && (
+          <button
+            onClick={() => setShowRolloutInsights((prev) => !prev)}
+            style={{
+              padding: '0.5rem 0.9rem',
+              borderRadius: '999px',
+              border: '1px solid rgba(37, 99, 235, 0.22)',
+              backgroundColor: showRolloutInsights ? '#2563eb' : 'white',
+              color: showRolloutInsights ? 'white' : '#2563eb',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            {showRolloutInsights ? 'Hide Insights' : 'Show Insights'}
+          </button>
+        )}
         <button
           onClick={() => setRolloutWorkspaceViewIndex((prev) => (prev + 1) % rolloutWorkspaceViews.length)}
           style={{
@@ -2807,27 +2896,72 @@ function RolloutWindow({
       {currentRolloutWorkspaceView.key === 'visualization' && (
       <>
       <div style={sectionPanelStyle}>
-      <p style={{ fontSize: '1rem', marginTop: 0 }}>
-        Simulating per every {" "}
-        <select 
-          value={stepInterval}
-          onChange={(e) => changeNumberOfSteps(e.target.value)}
-          disabled={isSavedViewer}
-          style={{
-            padding: "4px",
-            borderRadius: "4px",
-            border: "1px solid #d1d5db",
-            marginLeft: "0.25rem",
-          }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '0.75rem',
+          flexWrap: 'wrap',
+          marginBottom: '0.9rem',
+        }}
+      >
+        <div style={{ textAlign: 'left', flex: '1 1 260px' }}>
+          <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#334155' }}>Rollout Visualization</div>
+          <div style={{ color: '#64748b', fontSize: '0.82rem', marginTop: '0.15rem' }}>
+            Control capture cadence, playback speed, and rollout insight visibility from this header.
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <label htmlFor="visualizationStepInterval" style={{ fontWeight: 600, color: '#334155' }}>Every</label>
+          <select
+            id="visualizationStepInterval"
+            value={stepInterval}
+            onChange={(e) => changeNumberOfSteps(e.target.value)}
+            disabled={isSavedViewer}
+            style={{
+              padding: "0.4rem 0.55rem",
+              borderRadius: "8px",
+              border: "1px solid #d1d5db",
+              backgroundColor: 'white',
+            }}
+          >
             <option value={1}>1</option>
             <option value={2}>2</option>
             <option value={5}>5</option>
             <option value={8}>8</option>
             <option value={12}>12</option>
             <option value={18}>18</option>
-        </select> {" "}
-        steps
-      </p>
+          </select>
+          <span style={{ color: '#64748b', fontSize: '0.85rem' }}>episodes</span>
+          <label htmlFor="visualizationReplaySpeed" style={{ fontWeight: 600, color: '#334155', marginLeft: '0.25rem' }}>Playback</label>
+          <input
+            id="visualizationReplaySpeed"
+            type="number"
+            min="10"
+            max="500"
+            step="10"
+            value={replayInterval}
+            onChange={(e) => setReplayInterval(Number(e.target.value))}
+            style={{
+              width: '78px',
+              padding: '0.4rem 0.45rem',
+              border: '1px solid #d1d5db',
+              borderRadius: '8px',
+            }}
+          />
+          <span style={{ color: '#64748b', fontSize: '0.85rem' }}>ms/frame</span>
+        </div>
+      </div>
+      {showRolloutInsights && !isSavedViewer && (
+        <div style={{ ...sectionPanelStyle, marginTop: 0, marginBottom: '0.9rem' }}>
+          <h3 style={{ fontSize: '1.2rem', color: '#2563eb', marginTop: 0 }}>Deterministic Rollout Insights</h3>
+          <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
+            Recent rollout episodes are analyzed for terms that separate success from failure and for late-episode failure signatures.
+          </div>
+          {renderInsightCards(rolloutInsights, 'Rollout insights will appear after enough recent rollout episodes have been observed.')}
+        </div>
+      )}
       <p style={{ fontSize: '1rem' }}>
         Simulating Episode <strong style={{ color: '#0ea5e9' }}>{selectedVisualizationEpisode ?? episodeNumForSimulation}</strong>
       </p>
@@ -2865,6 +2999,8 @@ function RolloutWindow({
       </div>
       </div>
 
+      {false && (
+      <>
       {/* Playback Speed Slider */}
       <div style={{ ...sectionPanelStyle, marginTop: '1rem', textAlign: 'center' }}>
       <label htmlFor="replaySpeed" style={{ fontWeight: 600 }}>
@@ -2896,6 +3032,8 @@ function RolloutWindow({
         }}
       />
       </div>
+      </>
+      )}
       {/*<RolloutSlideshow/>*/}
       {visualizationFrames && visualizationFrames.length > 0 && (
       <div style={{ ...sectionPanelStyle, marginTop: '1rem', textAlign: 'center' }}>
@@ -3172,6 +3310,47 @@ function RolloutWindow({
             : 'Select an episode to inspect timestep rewards'}
         </div>
       </div>
+      {shouldShowRolloutTimelineKey && (
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '0.55rem 0.9rem',
+            justifyContent: 'center',
+            marginBottom: '0.85rem',
+            padding: '0.65rem 0.75rem',
+            backgroundColor: 'rgba(255,255,255,0.55)',
+            border: '1px solid rgba(148, 163, 184, 0.18)',
+            borderRadius: '12px',
+          }}
+        >
+          {currentTimelineGraph.datasets.map((dataset) => (
+            <div
+              key={`rollout-key-${dataset.label}`}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.45rem',
+                color: '#334155',
+                fontSize: '0.82rem',
+                fontWeight: 600,
+              }}
+            >
+              <span
+                style={{
+                  width: '12px',
+                  height: '12px',
+                  borderRadius: '999px',
+                  backgroundColor: dataset.borderColor,
+                  border: '1px solid rgba(15, 23, 42, 0.18)',
+                  flex: '0 0 auto',
+                }}
+              />
+              <span>{formatRewardTermLabel(dataset.label)}</span>
+            </div>
+          ))}
+        </div>
+      )}
       <div
         style={{
           marginBottom: '0.9rem',
