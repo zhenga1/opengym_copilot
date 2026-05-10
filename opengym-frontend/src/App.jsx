@@ -12,6 +12,7 @@ const emptySidebarState = {
   supportsCustomReward: true,
   availableRewardVariables: [],
   rewardFormulaExamples: [],
+  rewardSourceLinks: [],
   latestTrainingBreakdown: {},
   latestTrainingMeanBreakdown: {},
   latestRolloutBreakdown: {},

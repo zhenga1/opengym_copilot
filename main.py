@@ -810,6 +810,16 @@ def get_reward_config(run_id: str, env_name: str):
             "-abs(obs_3)",
             "clip(native + 0.1 * survival_bonus, -10, 10)",
         ],
+        "reward_source_links": [
+            {
+                "label": "Open Reward Templates",
+                "path": str((BASE_DIR / "train_backend_reward_tuning" / "reward_templates.py").resolve()),
+            },
+            {
+                "label": "Open Reward Shaping Wrapper",
+                "path": str((BASE_DIR / "train_backend_reward_tuning" / "reward_shaping.py").resolve()),
+            },
+        ],
     }
 
 
@@ -829,6 +839,16 @@ def update_reward_config(req: RewardConfigUpdateRequest):
         "env_name": req.env_name,
         "terms": terms,
         "available_variables": reward_variable_specs_for_env(req.env_name),
+        "reward_source_links": [
+            {
+                "label": "Open Reward Templates",
+                "path": str((BASE_DIR / "train_backend_reward_tuning" / "reward_templates.py").resolve()),
+            },
+            {
+                "label": "Open Reward Shaping Wrapper",
+                "path": str((BASE_DIR / "train_backend_reward_tuning" / "reward_shaping.py").resolve()),
+            },
+        ],
     }
 
 

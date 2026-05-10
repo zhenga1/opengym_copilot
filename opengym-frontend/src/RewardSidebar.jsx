@@ -9,6 +9,7 @@ function RewardSidebar({
   supportsCustomReward,
   availableRewardVariables,
   rewardFormulaExamples,
+  rewardSourceLinks,
   latestTrainingBreakdown,
   latestTrainingMeanBreakdown,
   latestRolloutBreakdown,
@@ -22,6 +23,7 @@ function RewardSidebar({
   const safeRewardLogs = Array.isArray(rewardLogs) ? rewardLogs : [];
   const safeRewardVariables = Array.isArray(availableRewardVariables) ? availableRewardVariables : [];
   const safeFormulaExamples = Array.isArray(rewardFormulaExamples) ? rewardFormulaExamples : [];
+  const safeRewardSourceLinks = Array.isArray(rewardSourceLinks) ? rewardSourceLinks : [];
   const rolloutEntries = Object.entries(latestRolloutBreakdown || {}).filter(([key, value]) => key !== 'total' && Number.isFinite(value));
   const trainingEntries = Object.entries(latestTrainingBreakdown || {}).filter(([key, value]) => key !== 'total' && Number.isFinite(value));
   const fallbackEntries = rolloutEntries.length > 0 ? rolloutEntries : trainingEntries;
@@ -210,6 +212,27 @@ function RewardSidebar({
         <div>
           <div style={{ fontSize: '1.1rem', fontWeight: 800 }}>Reward Sidebar</div>
           <div style={{ color: '#93c5fd', fontSize: '0.9rem', marginTop: '0.25rem' }}>{envName}</div>
+          {safeRewardSourceLinks.length > 0 && (
+            <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', marginTop: '0.45rem' }}>
+              {safeRewardSourceLinks.map((link) => (
+                <a
+                  key={link.path}
+                  href={link.path}
+                  style={{
+                    fontSize: '0.75rem',
+                    color: '#bae6fd',
+                    textDecoration: 'none',
+                    padding: '0.2rem 0.5rem',
+                    border: '1px solid rgba(186, 230, 253, 0.25)',
+                    borderRadius: '999px',
+                    backgroundColor: 'rgba(14, 116, 144, 0.18)',
+                  }}
+                >
+                  {link.label}
+                </a>
+              ))}
+            </div>
+          )}
         </div>
         <div style={{ color: '#94a3b8', fontSize: '0.78rem' }}>{isDragging ? 'dragging' : 'drag me'}</div>
       </div>
