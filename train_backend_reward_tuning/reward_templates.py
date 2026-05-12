@@ -6,130 +6,138 @@ from typing import Any
 import numpy as np
 
 
-def _term(key: str, label: str, description: str, weight: float, enabled: bool = True) -> dict[str, Any]:
+def _term(
+    key: str,
+    label: str,
+    description: str,
+    weight: float,
+    enabled: bool = True,
+    expression: str = "",
+) -> dict[str, Any]:
     return {
         "key": key,
         "label": label,
         "description": description,
         "weight": float(weight),
         "enabled": enabled,
+        "expression": str(expression or "").strip(),
     }
 
 
 DEFAULT_REWARD_TEMPLATE = [
-    _term("native", "Native Reward", "Original reward returned by the Gym environment.", 1.0),
-    _term("action_magnitude_penalty", "Action Magnitude Penalty", "Penalty on large actions to reduce control effort.", 0.0),
-    _term("action_change_penalty", "Action Change Penalty", "Penalty on abrupt action changes between steps.", 0.0),
+    _term("native", "Native Reward", "Original reward returned by the Gym environment.", 1.0, expression="native_reward"),
+    _term("action_magnitude_penalty", "Action Magnitude Penalty", "Penalty on large actions to reduce control effort.", 0.0, expression="-square(action_0)"),
+    _term("action_change_penalty", "Action Change Penalty", "Penalty on abrupt action changes between steps.", 0.0, expression="-abs(action_0 - prev_action_0)"),
 ]
 
 _CARTPOLE_TEMPLATE = [
-    _term("native", "Native Reward", "Original CartPole reward from Gym.", 1.0),
-    _term("survival_bonus", "Survival Bonus", "Extra reward for each stable step.", 0.2),
-    _term("cart_position_penalty", "Cart Position Penalty", "Penalty for moving away from the track center.", 0.6),
-    _term("cart_velocity_penalty", "Cart Velocity Penalty", "Penalty for large cart velocity.", 0.05),
-    _term("pole_angle_penalty", "Pole Angle Penalty", "Penalty for pole tilt.", 1.0),
-    _term("pole_velocity_penalty", "Pole Velocity Penalty", "Penalty for fast pole rotation.", 0.1),
-    _term("action_change_penalty", "Action Change Penalty", "Penalty for rapidly flipping actions.", 0.05),
+    _term("native", "Native Reward", "Original CartPole reward from Gym.", 1.0, expression="native_reward"),
+    _term("survival_bonus", "Survival Bonus", "Extra reward for each stable step.", 0.2, expression="1.0"),
+    _term("cart_position_penalty", "Cart Position Penalty", "Penalty for moving away from the track center.", 0.6, expression="-square(cart_position)"),
+    _term("cart_velocity_penalty", "Cart Velocity Penalty", "Penalty for large cart velocity.", 0.05, expression="-square(cart_velocity)"),
+    _term("pole_angle_penalty", "Pole Angle Penalty", "Penalty for pole tilt.", 1.0, expression="-square(pole_angle)"),
+    _term("pole_velocity_penalty", "Pole Velocity Penalty", "Penalty for fast pole rotation.", 0.1, expression="-square(pole_velocity)"),
+    _term("action_change_penalty", "Action Change Penalty", "Penalty for rapidly flipping actions.", 0.05, expression="-abs(action - prev_action)"),
 ]
 
 _MOUNTAIN_CAR_TEMPLATE = [
-    _term("native", "Native Reward", "Original MountainCar reward from Gym.", 1.0),
-    _term("hill_progress_bonus", "Hill Progress Bonus", "Reward for moving toward the right hill and goal.", 1.0),
-    _term("speed_bonus", "Speed Bonus", "Reward for building momentum.", 0.25),
-    _term("goal_side_bonus", "Goal Side Bonus", "Reward for spending time on the goal side of the valley.", 0.5),
-    _term("action_change_penalty", "Action Change Penalty", "Penalty for rapidly alternating throttle direction.", 0.05),
+    _term("native", "Native Reward", "Original MountainCar reward from Gym.", 1.0, expression="native_reward"),
+    _term("hill_progress_bonus", "Hill Progress Bonus", "Reward for moving toward the right hill and goal.", 1.0, expression="position + 0.5"),
+    _term("speed_bonus", "Speed Bonus", "Reward for building momentum.", 0.25, expression="abs(velocity)"),
+    _term("goal_side_bonus", "Goal Side Bonus", "Reward for spending time on the goal side of the valley.", 0.5, expression="max(position, 0.0)"),
+    _term("action_change_penalty", "Action Change Penalty", "Penalty for rapidly alternating throttle direction.", 0.05, expression="-abs(action - prev_action)"),
 ]
 
 _MOUNTAIN_CAR_CONTINUOUS_TEMPLATE = [
-    _term("native", "Native Reward", "Original continuous MountainCar reward.", 1.0),
-    _term("hill_progress_bonus", "Hill Progress Bonus", "Reward for climbing toward the flag.", 1.0),
-    _term("speed_bonus", "Speed Bonus", "Reward for useful momentum.", 0.2),
-    _term("throttle_penalty", "Throttle Penalty", "Penalty on large continuous throttle.", 0.1),
-    _term("action_change_penalty", "Action Change Penalty", "Penalty on sudden throttle changes.", 0.05),
+    _term("native", "Native Reward", "Original continuous MountainCar reward.", 1.0, expression="native_reward"),
+    _term("hill_progress_bonus", "Hill Progress Bonus", "Reward for climbing toward the flag.", 1.0, expression="position + 0.5"),
+    _term("speed_bonus", "Speed Bonus", "Reward for useful momentum.", 0.2, expression="abs(velocity)"),
+    _term("throttle_penalty", "Throttle Penalty", "Penalty on large continuous throttle.", 0.1, expression="-square(action)"),
+    _term("action_change_penalty", "Action Change Penalty", "Penalty on sudden throttle changes.", 0.05, expression="-abs(action - prev_action)"),
 ]
 
 _ACROBOT_TEMPLATE = [
-    _term("native", "Native Reward", "Original Acrobot reward from Gym.", 1.0),
-    _term("tip_height_bonus", "Tip Height Bonus", "Reward for raising the tip upward.", 1.2),
-    _term("swing_momentum_bonus", "Swing Momentum Bonus", "Reward for useful angular motion.", 0.15),
-    _term("joint_velocity_penalty", "Joint Velocity Penalty", "Penalty on excessive joint speed.", 0.08),
-    _term("action_change_penalty", "Action Change Penalty", "Penalty for chattering torque commands.", 0.05),
+    _term("native", "Native Reward", "Original Acrobot reward from Gym.", 1.0, expression="native_reward"),
+    _term("tip_height_bonus", "Tip Height Bonus", "Reward for raising the tip upward.", 1.2, expression="-cos_theta1 - cos_theta1 * cos_theta2 + sin_theta1 * sin_theta2"),
+    _term("swing_momentum_bonus", "Swing Momentum Bonus", "Reward for useful angular motion.", 0.15, expression="abs(joint1_velocity) + abs(joint2_velocity)"),
+    _term("joint_velocity_penalty", "Joint Velocity Penalty", "Penalty on excessive joint speed.", 0.08, expression="-square(joint1_velocity) - square(joint2_velocity)"),
+    _term("action_change_penalty", "Action Change Penalty", "Penalty for chattering torque commands.", 0.05, expression="-abs(action - prev_action)"),
 ]
 
 _PENDULUM_TEMPLATE = [
-    _term("native", "Native Reward", "Original Pendulum reward from Gym.", 1.0),
-    _term("upright_bonus", "Upright Bonus", "Reward for keeping the pendulum upright.", 1.0),
-    _term("angular_velocity_penalty", "Angular Velocity Penalty", "Penalty for spinning too fast.", 0.1),
-    _term("torque_penalty", "Torque Penalty", "Penalty on high torque usage.", 0.08),
-    _term("action_change_penalty", "Action Change Penalty", "Penalty for abrupt torque swings.", 0.04),
+    _term("native", "Native Reward", "Original Pendulum reward from Gym.", 1.0, expression="native_reward"),
+    _term("upright_bonus", "Upright Bonus", "Reward for keeping the pendulum upright.", 1.0, expression="x"),
+    _term("angular_velocity_penalty", "Angular Velocity Penalty", "Penalty for spinning too fast.", 0.1, expression="-square(angular_velocity)"),
+    _term("torque_penalty", "Torque Penalty", "Penalty on high torque usage.", 0.08, expression="-square(action)"),
+    _term("action_change_penalty", "Action Change Penalty", "Penalty for abrupt torque swings.", 0.04, expression="-abs(action - prev_action)"),
 ]
 
 _LUNAR_LANDER_TEMPLATE = [
-    _term("native", "Native Reward", "Original LunarLander reward from Gym.", 1.0),
-    _term("centering_penalty", "Centering Penalty", "Penalty for horizontal drift from pad center.", 0.35),
-    _term("landing_speed_penalty", "Landing Speed Penalty", "Penalty for large landing velocity.", 0.3),
-    _term("angle_penalty", "Angle Penalty", "Penalty for tilted body angle.", 0.25),
-    _term("leg_contact_bonus", "Leg Contact Bonus", "Reward for stable ground contact.", 0.4),
-    _term("fuel_penalty", "Fuel Penalty", "Penalty on large engine commands.", 0.08),
+    _term("native", "Native Reward", "Original LunarLander reward from Gym.", 1.0, expression="native_reward"),
+    _term("centering_penalty", "Centering Penalty", "Penalty for horizontal drift from pad center.", 0.35, expression="-square(x)"),
+    _term("landing_speed_penalty", "Landing Speed Penalty", "Penalty for large landing velocity.", 0.3, expression="-square(x_velocity) - square(y_velocity)"),
+    _term("angle_penalty", "Angle Penalty", "Penalty for tilted body angle.", 0.25, expression="-square(angle)"),
+    _term("leg_contact_bonus", "Leg Contact Bonus", "Reward for stable ground contact.", 0.4, expression="left_leg_contact + right_leg_contact"),
+    _term("fuel_penalty", "Fuel Penalty", "Penalty on large engine commands.", 0.08, expression="-square(action_0) - square(action_1)"),
 ]
 
 _LOCOMOTION_TEMPLATE = [
-    _term("native", "Native Reward", "Original locomotion reward from Gym.", 1.0),
-    _term("forward_bonus", "Forward Bonus", "Reward for forward movement.", 1.0),
-    _term("healthy_bonus", "Healthy Bonus", "Reward for staying alive or upright.", 0.5),
-    _term("control_penalty", "Control Penalty", "Penalty on large control effort.", 1.0),
-    _term("contact_penalty", "Contact Penalty", "Penalty on harsh contact or impacts.", 1.0),
-    _term("stability_penalty", "Stability Penalty", "Penalty for unstable posture or oscillation.", 0.08),
-    _term("action_change_penalty", "Action Change Penalty", "Penalty for abrupt control changes.", 0.04),
+    _term("native", "Native Reward", "Original locomotion reward from Gym.", 1.0, expression="native_reward"),
+    _term("forward_bonus", "Forward Bonus", "Reward for forward movement.", 1.0, expression="forward_bonus"),
+    _term("healthy_bonus", "Healthy Bonus", "Reward for staying alive or upright.", 0.5, expression="healthy_bonus"),
+    _term("control_penalty", "Control Penalty", "Penalty on large control effort.", 1.0, expression="control_penalty"),
+    _term("contact_penalty", "Contact Penalty", "Penalty on harsh contact or impacts.", 1.0, expression="contact_penalty"),
+    _term("stability_penalty", "Stability Penalty", "Penalty for unstable posture or oscillation.", 0.08, expression="stability_penalty"),
+    _term("action_change_penalty", "Action Change Penalty", "Penalty for abrupt control changes.", 0.04, expression="-abs(action_0 - prev_action_0)"),
 ]
 
 _HUMANOID_STANDUP_TEMPLATE = [
-    _term("native", "Native Reward", "Original HumanoidStandup reward from Gym.", 1.0),
-    _term("standup_bonus", "Standup Bonus", "Reward for lifting the torso upward.", 1.0),
-    _term("control_penalty", "Control Penalty", "Penalty on large actuator effort.", 1.0),
-    _term("contact_penalty", "Contact Penalty", "Penalty on hard impacts.", 1.0),
-    _term("balance_penalty", "Balance Penalty", "Penalty for unstable posture while standing.", 0.1),
-    _term("action_change_penalty", "Action Change Penalty", "Penalty for jerky control sequences.", 0.04),
+    _term("native", "Native Reward", "Original HumanoidStandup reward from Gym.", 1.0, expression="native_reward"),
+    _term("standup_bonus", "Standup Bonus", "Reward for lifting the torso upward.", 1.0, expression="standup_bonus"),
+    _term("control_penalty", "Control Penalty", "Penalty on large actuator effort.", 1.0, expression="control_penalty"),
+    _term("contact_penalty", "Contact Penalty", "Penalty on hard impacts.", 1.0, expression="contact_penalty"),
+    _term("balance_penalty", "Balance Penalty", "Penalty for unstable posture while standing.", 0.1, expression="balance_penalty"),
+    _term("action_change_penalty", "Action Change Penalty", "Penalty for jerky control sequences.", 0.04, expression="-abs(action_0 - prev_action_0)"),
 ]
 
 _REACHER_TEMPLATE = [
-    _term("native", "Native Reward", "Original Reacher reward from Gym.", 1.0),
-    _term("target_proximity_bonus", "Target Proximity Bonus", "Reward for moving the fingertip closer to the target.", 1.0),
-    _term("distance_penalty", "Distance Penalty", "Penalty for target distance.", 1.0),
-    _term("control_penalty", "Control Penalty", "Penalty on control effort.", 1.0),
-    _term("action_change_penalty", "Action Change Penalty", "Penalty for abrupt motor changes.", 0.05),
+    _term("native", "Native Reward", "Original Reacher reward from Gym.", 1.0, expression="native_reward"),
+    _term("target_proximity_bonus", "Target Proximity Bonus", "Reward for moving the fingertip closer to the target.", 1.0, expression="sqrt(square(fingertip_delta_x) + square(fingertip_delta_y) + square(fingertip_delta_z)) * -1"),
+    _term("distance_penalty", "Distance Penalty", "Penalty for target distance.", 1.0, expression="-target_proximity_bonus"),
+    _term("control_penalty", "Control Penalty", "Penalty on control effort.", 1.0, expression="-square(action_0) - square(action_1)"),
+    _term("action_change_penalty", "Action Change Penalty", "Penalty for abrupt motor changes.", 0.05, expression="-abs(action_0 - prev_action_0) - abs(action_1 - prev_action_1)"),
 ]
 
 _PUSHER_TEMPLATE = [
-    _term("native", "Native Reward", "Original Pusher reward from Gym.", 1.0),
-    _term("object_to_goal_bonus", "Object To Goal Bonus", "Reward for moving the object toward the goal.", 1.0),
-    _term("hand_to_object_bonus", "Hand To Object Bonus", "Reward for keeping the hand near the object.", 0.5),
-    _term("control_penalty", "Control Penalty", "Penalty on large control effort.", 1.0),
-    _term("action_change_penalty", "Action Change Penalty", "Penalty for abrupt motor changes.", 0.05),
+    _term("native", "Native Reward", "Original Pusher reward from Gym.", 1.0, expression="native_reward"),
+    _term("object_to_goal_bonus", "Object To Goal Bonus", "Reward for moving the object toward the goal.", 1.0, expression="object_to_goal_bonus"),
+    _term("hand_to_object_bonus", "Hand To Object Bonus", "Reward for keeping the hand near the object.", 0.5, expression="hand_to_object_bonus"),
+    _term("control_penalty", "Control Penalty", "Penalty on large control effort.", 1.0, expression="control_penalty"),
+    _term("action_change_penalty", "Action Change Penalty", "Penalty for abrupt motor changes.", 0.05, expression="-abs(action_0 - prev_action_0)"),
 ]
 
 _INVERTED_PENDULUM_TEMPLATE = [
-    _term("native", "Native Reward", "Original InvertedPendulum reward from Gym.", 1.0),
-    _term("upright_bonus", "Upright Bonus", "Reward for keeping the pendulum vertical.", 1.0),
-    _term("cart_center_penalty", "Cart Center Penalty", "Penalty for moving the cart away from center.", 0.2),
-    _term("angular_velocity_penalty", "Angular Velocity Penalty", "Penalty for fast pendulum rotation.", 0.15),
-    _term("action_magnitude_penalty", "Action Magnitude Penalty", "Penalty on strong control pushes.", 0.08),
+    _term("native", "Native Reward", "Original InvertedPendulum reward from Gym.", 1.0, expression="native_reward"),
+    _term("upright_bonus", "Upright Bonus", "Reward for keeping the pendulum vertical.", 1.0, expression="-abs(pole_angle)"),
+    _term("cart_center_penalty", "Cart Center Penalty", "Penalty for moving the cart away from center.", 0.2, expression="-square(cart_position)"),
+    _term("angular_velocity_penalty", "Angular Velocity Penalty", "Penalty for fast pendulum rotation.", 0.15, expression="-square(pole_velocity)"),
+    _term("action_magnitude_penalty", "Action Magnitude Penalty", "Penalty on strong control pushes.", 0.08, expression="-square(action)"),
 ]
 
 _INVERTED_DOUBLE_PENDULUM_TEMPLATE = [
-    _term("native", "Native Reward", "Original InvertedDoublePendulum reward from Gym.", 1.0),
-    _term("upright_bonus", "Upright Bonus", "Reward for keeping the double pendulum upright.", 1.0),
-    _term("cart_center_penalty", "Cart Center Penalty", "Penalty for cart displacement.", 0.2),
-    _term("joint_velocity_penalty", "Joint Velocity Penalty", "Penalty for fast joint rotation.", 0.12),
-    _term("action_magnitude_penalty", "Action Magnitude Penalty", "Penalty on large control pushes.", 0.08),
+    _term("native", "Native Reward", "Original InvertedDoublePendulum reward from Gym.", 1.0, expression="native_reward"),
+    _term("upright_bonus", "Upright Bonus", "Reward for keeping the double pendulum upright.", 1.0, expression="pole_angle_1"),
+    _term("cart_center_penalty", "Cart Center Penalty", "Penalty for cart displacement.", 0.2, expression="-square(cart_position)"),
+    _term("joint_velocity_penalty", "Joint Velocity Penalty", "Penalty for fast joint rotation.", 0.12, expression="-square(pole_velocity_1) - square(pole_velocity_2)"),
+    _term("action_magnitude_penalty", "Action Magnitude Penalty", "Penalty on large control pushes.", 0.08, expression="-square(action)"),
 ]
 
 _CAR_RACING_TEMPLATE = [
-    _term("native", "Native Reward", "Original CarRacing reward from Gym.", 1.0),
-    _term("throttle_bonus", "Throttle Bonus", "Reward for applying forward throttle.", 0.15),
-    _term("steering_penalty", "Steering Penalty", "Penalty for aggressive steering.", 0.08),
-    _term("brake_penalty", "Brake Penalty", "Penalty for excessive braking.", 0.1),
-    _term("action_change_penalty", "Action Change Penalty", "Penalty for abrupt control changes.", 0.05),
+    _term("native", "Native Reward", "Original CarRacing reward from Gym.", 1.0, expression="native_reward"),
+    _term("throttle_bonus", "Throttle Bonus", "Reward for applying forward throttle.", 0.15, expression="action_1"),
+    _term("steering_penalty", "Steering Penalty", "Penalty for aggressive steering.", 0.08, expression="-abs(action_0)"),
+    _term("brake_penalty", "Brake Penalty", "Penalty for excessive braking.", 0.1, expression="-action_2"),
+    _term("action_change_penalty", "Action Change Penalty", "Penalty for abrupt control changes.", 0.05, expression="-abs(action_0 - prev_action_0) - abs(action_1 - prev_action_1) - abs(action_2 - prev_action_2)"),
 ]
 
 

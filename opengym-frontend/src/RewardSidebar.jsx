@@ -353,25 +353,27 @@ function RewardSidebar({
                               }}
                             />
                           </div>
-                          <div style={{ marginTop: '0.55rem' }}>
-                            <div style={{ color: '#cbd5e1', fontSize: '0.8rem', marginBottom: '0.25rem' }}>Expression</div>
-                            <textarea
-                              value={term.expression || ''}
-                              onChange={(event) => onTermChange(term.key, 'expression', event.target.value, term)}
-                              rows={3}
-                              style={{
-                                width: '100%',
-                                padding: '0.5rem 0.6rem',
-                                borderRadius: '8px',
-                                border: '1px solid rgba(148, 163, 184, 0.3)',
-                                backgroundColor: 'rgba(15, 23, 42, 0.65)',
-                                color: '#f8fafc',
-                                resize: 'vertical',
-                              }}
-                            />
-                          </div>
                         </>
                       )}
+                      <div style={{ marginTop: '0.55rem' }}>
+                        <div style={{ color: '#cbd5e1', fontSize: '0.8rem', marginBottom: '0.25rem' }}>Expression</div>
+                        <textarea
+                          value={term.expression || ''}
+                          onChange={(event) => onTermChange(term.key, 'expression', event.target.value, term)}
+                          rows={3}
+                          style={{
+                            width: '100%',
+                            padding: '0.5rem 0.6rem',
+                            borderRadius: '8px',
+                            border: '1px solid rgba(148, 163, 184, 0.3)',
+                            backgroundColor: 'rgba(15, 23, 42, 0.65)',
+                            color: '#f8fafc',
+                            resize: 'vertical',
+                            fontFamily: 'ui-monospace, SFMono-Regular, monospace',
+                            fontSize: '0.8rem',
+                          }}
+                        />
+                      </div>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.55rem' }}>
                         <span style={{ fontSize: '0.8rem', color: '#cbd5e1' }}>Weight</span>
                         <input
@@ -470,12 +472,24 @@ function RewardSidebar({
                           textAlign: 'left',
                         }}
                       >
-                        <div style={{ fontSize: '0.78rem', color: '#e2e8f0', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
-                          {variable.name}
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.45rem', flexWrap: 'wrap' }}>
+                          <div style={{ fontSize: '0.78rem', color: '#e2e8f0', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
+                            {variable.name}
+                          </div>
+                          {variable.display_name && variable.display_name !== variable.name && (
+                            <div style={{ fontSize: '0.72rem', color: '#7dd3fc', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
+                              {variable.display_name}
+                            </div>
+                          )}
                         </div>
                         <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
                           {variable.description}
                         </div>
+                        {Array.isArray(variable.aliases) && variable.aliases.length > 0 && (
+                          <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: '0.16rem' }}>
+                            Aliases: {variable.aliases.join(', ')}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>

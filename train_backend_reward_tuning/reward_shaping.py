@@ -82,6 +82,7 @@ def reward_expression_context(
     previous_action,
     native_reward: float,
     raw_terms: dict[str, float] | None = None,
+    env_name: str | None = None,
 ) -> dict[str, float]:
     context: dict[str, float] = {
         "native": float(native_reward),
@@ -100,6 +101,21 @@ def reward_expression_context(
         context[f"action_{index}"] = float(value)
     for index, value in enumerate(flat_prev_action):
         context[f"prev_action_{index}"] = float(value)
+
+    if env_name:
+        for spec in reward_expression_variable_specs(
+            env_name=env_name,
+            obs_size=int(flat_obs.size),
+            action_size=int(flat_action.size or 1),
+            raw_term_keys=list((raw_terms or {}).keys()),
+        ):
+            canonical_name = spec["name"]
+            canonical_value = context.get(canonical_name)
+            if canonical_value is None:
+                continue
+            for alias_name in spec.get("aliases", []):
+                if alias_name not in context:
+                    context[alias_name] = float(canonical_value)
 
     return context
 
@@ -137,18 +153,411 @@ def reward_expression_variable_names(
     obs_size: int,
     action_size: int,
     *,
+    env_name: str | None = None,
     include_previous_action: bool = True,
     raw_term_keys: list[str] | None = None,
 ) -> list[str]:
-    variable_names = ["native"]
-    variable_names.extend([f"obs_{index}" for index in range(max(0, obs_size))])
-    variable_names.extend([f"action_{index}" for index in range(max(1, action_size))])
+    variable_names: list[str] = []
+    for spec in reward_expression_variable_specs(
+        env_name=env_name,
+        obs_size=obs_size,
+        action_size=action_size,
+        include_previous_action=include_previous_action,
+        raw_term_keys=raw_term_keys,
+    ):
+        variable_names.append(spec["name"])
+        variable_names.extend(spec.get("aliases", []))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for variable_name in variable_names:
+        if variable_name not in seen:
+            seen.add(variable_name)
+            deduped.append(variable_name)
+    return deduped
+
+
+def reward_expression_variable_specs(
+    env_name: str | None,
+    obs_size: int,
+    action_size: int,
+    *,
+    include_previous_action: bool = True,
+    raw_term_keys: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = [
+        {
+            "name": "native",
+            "source": "reward",
+            "display_name": "native_reward",
+            "description": "Native reward returned by the environment.",
+            "aliases": ["native_reward"],
+        }
+    ]
+    obs_specs = _reward_observation_specs(env_name or "", obs_size)
+    for index in range(max(0, obs_size)):
+        obs_spec = obs_specs.get(index)
+        if obs_spec is not None:
+            alias_values = [obs_spec.get("display_name"), *obs_spec.get("aliases", [])]
+            deduped_aliases: list[str] = []
+            for alias_name in alias_values:
+                alias_value = str(alias_name or "").strip()
+                if alias_value and alias_value != obs_spec["name"] and alias_value not in deduped_aliases:
+                    deduped_aliases.append(alias_value)
+            obs_spec["aliases"] = deduped_aliases
+            specs.append(obs_spec)
+            continue
+        specs.append(
+            {
+                "name": f"obs_{index}",
+                "source": "observation",
+                "display_name": f"observation_{index}",
+                "description": f"Flattened observation component {index}.",
+                "aliases": [f"observation_{index}"],
+            }
+        )
+
+    for index in range(max(1, action_size)):
+        action_aliases = [f"current_action_{index}"]
+        if action_size == 1 and index == 0:
+            action_aliases.extend(["action", "current_action"])
+        specs.append(
+            {
+                "name": f"action_{index}",
+                "source": "action",
+                "display_name": action_aliases[0],
+                "description": f"Current action component {index}.",
+                "aliases": [action_aliases[0], *action_aliases[1:]],
+            }
+        )
     if include_previous_action:
-        variable_names.extend([f"prev_action_{index}" for index in range(max(1, action_size))])
+        for index in range(max(1, action_size)):
+            previous_aliases = [f"previous_action_{index}"]
+            if action_size == 1 and index == 0:
+                previous_aliases.extend(["prev_action", "previous_action"])
+            specs.append(
+                {
+                    "name": f"prev_action_{index}",
+                    "source": "action",
+                    "display_name": previous_aliases[0],
+                    "description": f"Previous action component {index}.",
+                    "aliases": [previous_aliases[0], *previous_aliases[1:]],
+                }
+            )
     for key in raw_term_keys or []:
-        if key != "native":
-            variable_names.append(key)
-    return variable_names
+        if key == "native":
+            continue
+        specs.append(
+            {
+                "name": key,
+                "source": "reward_term",
+                "display_name": key,
+                "description": f"Built-in raw reward feature '{key}'.",
+                "aliases": [],
+            }
+        )
+    return specs
+
+
+def _reward_observation_specs(env_name: str, obs_size: int) -> dict[int, dict[str, Any]]:
+    prefix = (env_name or "").split("/", 1)[-1].split("-", 1)[0].lower()
+
+    def make_spec(index: int, display_name: str, description: str, *aliases: str) -> tuple[int, dict[str, Any]]:
+        clean_aliases: list[str] = []
+        for alias_name in aliases:
+            alias_value = str(alias_name).strip()
+            if alias_value and alias_value not in clean_aliases:
+                clean_aliases.append(alias_value)
+        return (
+            index,
+            {
+                "name": f"obs_{index}",
+                "source": "observation",
+                "display_name": display_name,
+                "description": description,
+                "aliases": clean_aliases,
+            },
+        )
+
+    entries: list[tuple[int, dict[str, Any]]] = []
+    if prefix == "cartpole":
+        entries = [
+            make_spec(0, "cart_position", "Cart position along the track.", "x", "cart_x"),
+            make_spec(1, "cart_velocity", "Cart velocity along the track.", "x_dot", "cart_x_velocity"),
+            make_spec(2, "pole_angle", "Pole angle in radians; left/right sway target lives here.", "theta"),
+            make_spec(3, "pole_velocity", "Pole angular velocity in radians per second.", "theta_dot", "pole_angular_velocity"),
+        ]
+    elif prefix in {"mountaincar", "mountaincarcontinuous"}:
+        entries = [
+            make_spec(0, "position", "Car position along the hill.", "x"),
+            make_spec(1, "velocity", "Car velocity along the hill.", "x_dot"),
+        ]
+    elif prefix == "pendulum":
+        entries = [
+            make_spec(0, "x", "Pendulum x component; equals cos(theta).", "cos_theta"),
+            make_spec(1, "y", "Pendulum y component; equals sin(theta).", "sin_theta"),
+            make_spec(2, "angular_velocity", "Pendulum angular velocity.", "theta_dot"),
+        ]
+    elif prefix == "acrobot":
+        entries = [
+            make_spec(0, "cos_theta1", "Cosine of the first joint angle.", "link1_x"),
+            make_spec(1, "sin_theta1", "Sine of the first joint angle.", "link1_y"),
+            make_spec(2, "cos_theta2", "Cosine of the second joint angle.", "link2_x"),
+            make_spec(3, "sin_theta2", "Sine of the second joint angle.", "link2_y"),
+            make_spec(4, "joint1_velocity", "Angular velocity of the first joint.", "theta1_dot"),
+            make_spec(5, "joint2_velocity", "Angular velocity of the second joint.", "theta2_dot"),
+        ]
+    elif prefix == "lunarlander":
+        entries = [
+            make_spec(0, "x", "Lander horizontal position.", "horizontal_position"),
+            make_spec(1, "y", "Lander vertical position.", "vertical_position"),
+            make_spec(2, "x_velocity", "Lander horizontal velocity.", "vx"),
+            make_spec(3, "y_velocity", "Lander vertical velocity.", "vy"),
+            make_spec(4, "angle", "Lander rotation angle in radians.", "theta"),
+            make_spec(5, "angular_velocity", "Lander angular velocity.", "theta_dot"),
+            make_spec(6, "left_leg_contact", "Left leg contact flag."),
+            make_spec(7, "right_leg_contact", "Right leg contact flag."),
+        ]
+    elif prefix == "invertedpendulum":
+        entries = [
+            make_spec(0, "cart_position", "Cart position along the rail.", "x", "cart_x"),
+            make_spec(1, "pole_angle", "Pendulum angle in radians.", "theta"),
+            make_spec(2, "cart_velocity", "Cart velocity along the rail.", "x_dot", "cart_x_velocity"),
+            make_spec(3, "pole_velocity", "Pendulum angular velocity.", "theta_dot", "pole_angular_velocity"),
+        ]
+    elif prefix == "inverteddoublependulum":
+        entries = [
+            make_spec(0, "cart_position", "Cart position along the rail.", "x", "cart_x"),
+            make_spec(1, "pole_angle_1", "First pendulum angle in radians.", "theta1"),
+            make_spec(2, "pole_angle_2", "Second pendulum angle in radians.", "theta2"),
+            make_spec(3, "cart_velocity", "Cart velocity along the rail.", "x_dot", "cart_x_velocity"),
+            make_spec(4, "pole_velocity_1", "First pendulum angular velocity.", "theta1_dot"),
+            make_spec(5, "pole_velocity_2", "Second pendulum angular velocity.", "theta2_dot"),
+        ]
+    elif prefix == "reacher":
+        entries = [
+            make_spec(0, "cos_theta1", "Cosine of the first arm joint angle."),
+            make_spec(1, "cos_theta2", "Cosine of the second arm joint angle."),
+            make_spec(2, "sin_theta1", "Sine of the first arm joint angle."),
+            make_spec(3, "sin_theta2", "Sine of the second arm joint angle."),
+            make_spec(4, "target_x", "Target x position."),
+            make_spec(5, "target_y", "Target y position."),
+            make_spec(6, "joint1_velocity", "First arm joint velocity.", "theta1_dot"),
+            make_spec(7, "joint2_velocity", "Second arm joint velocity.", "theta2_dot"),
+            make_spec(8, "fingertip_delta_x", "Fingertip minus target x offset."),
+            make_spec(9, "fingertip_delta_y", "Fingertip minus target y offset."),
+            make_spec(10, "fingertip_delta_z", "Fingertip minus target z offset."),
+        ]
+    elif prefix == "halfcheetah":
+        entries = _build_named_specs(
+            [
+                ("z", "Root body height."),
+                ("torso_pitch", "Root torso pitch angle."),
+                ("back_thigh_angle", "Back thigh joint angle."),
+                ("back_shin_angle", "Back shin joint angle."),
+                ("back_foot_angle", "Back foot joint angle."),
+                ("front_thigh_angle", "Front thigh joint angle."),
+                ("front_shin_angle", "Front shin joint angle."),
+                ("front_foot_angle", "Front foot joint angle."),
+            ],
+            [
+                ("x_velocity", "Forward velocity."),
+                ("z_velocity", "Vertical velocity."),
+                ("pitch_velocity", "Torso pitch angular velocity."),
+                ("back_thigh_velocity", "Back thigh joint velocity."),
+                ("back_shin_velocity", "Back shin joint velocity."),
+                ("back_foot_velocity", "Back foot joint velocity."),
+                ("front_thigh_velocity", "Front thigh joint velocity."),
+                ("front_shin_velocity", "Front shin joint velocity."),
+                ("front_foot_velocity", "Front foot joint velocity."),
+            ],
+        )
+    elif prefix == "hopper":
+        entries = _build_named_specs(
+            [
+                ("z", "Torso height."),
+                ("torso_angle", "Torso pitch angle."),
+                ("thigh_angle", "Thigh joint angle."),
+                ("leg_angle", "Leg joint angle."),
+                ("foot_angle", "Foot joint angle."),
+            ],
+            [
+                ("x_velocity", "Forward velocity."),
+                ("z_velocity", "Vertical velocity."),
+                ("torso_angular_velocity", "Torso angular velocity."),
+                ("thigh_velocity", "Thigh joint velocity."),
+                ("leg_velocity", "Leg joint velocity."),
+                ("foot_velocity", "Foot joint velocity."),
+            ],
+        )
+    elif prefix == "walker2d":
+        entries = _build_named_specs(
+            [
+                ("z", "Torso height."),
+                ("torso_angle", "Torso pitch angle."),
+                ("right_thigh_angle", "Right thigh joint angle."),
+                ("right_leg_angle", "Right leg joint angle."),
+                ("right_foot_angle", "Right foot joint angle."),
+                ("left_thigh_angle", "Left thigh joint angle."),
+                ("left_leg_angle", "Left leg joint angle."),
+                ("left_foot_angle", "Left foot joint angle."),
+            ],
+            [
+                ("x_velocity", "Forward velocity."),
+                ("z_velocity", "Vertical velocity."),
+                ("torso_angular_velocity", "Torso angular velocity."),
+                ("right_thigh_velocity", "Right thigh joint velocity."),
+                ("right_leg_velocity", "Right leg joint velocity."),
+                ("right_foot_velocity", "Right foot joint velocity."),
+                ("left_thigh_velocity", "Left thigh joint velocity."),
+                ("left_leg_velocity", "Left leg joint velocity."),
+                ("left_foot_velocity", "Left foot joint velocity."),
+            ],
+        )
+    elif prefix == "swimmer":
+        entries = _build_named_specs(
+            [
+                ("joint_angle_0", "First body joint angle."),
+                ("joint_angle_1", "Second body joint angle."),
+                ("joint_angle_2", "Third body joint angle."),
+                ("joint_angle_3", "Fourth body joint angle."),
+                ("joint_angle_4", "Fifth body joint angle."),
+            ],
+            [
+                ("x_velocity", "Forward velocity."),
+                ("y_velocity", "Sideways velocity."),
+                ("joint_velocity_0", "First joint velocity."),
+                ("joint_velocity_1", "Second joint velocity."),
+                ("joint_velocity_2", "Third joint velocity."),
+                ("joint_velocity_3", "Fourth joint velocity."),
+                ("joint_velocity_4", "Fifth joint velocity."),
+            ],
+        )
+    elif prefix == "ant":
+        entries = _build_named_specs(
+            [
+                ("z", "Root body height."),
+                ("quat_w", "Root body orientation quaternion w."),
+                ("quat_x", "Root body orientation quaternion x."),
+                ("quat_y", "Root body orientation quaternion y."),
+                ("quat_z", "Root body orientation quaternion z."),
+                ("joint_pos_0", "Ant joint position 0."),
+                ("joint_pos_1", "Ant joint position 1."),
+                ("joint_pos_2", "Ant joint position 2."),
+                ("joint_pos_3", "Ant joint position 3."),
+                ("joint_pos_4", "Ant joint position 4."),
+                ("joint_pos_5", "Ant joint position 5."),
+                ("joint_pos_6", "Ant joint position 6."),
+                ("joint_pos_7", "Ant joint position 7."),
+            ],
+            [
+                ("x_velocity", "Root body x velocity."),
+                ("y_velocity", "Root body y velocity."),
+                ("z_velocity", "Root body z velocity."),
+                ("roll_velocity", "Root body roll angular velocity."),
+                ("pitch_velocity", "Root body pitch angular velocity."),
+                ("yaw_velocity", "Root body yaw angular velocity."),
+                ("joint_velocity_0", "Ant joint velocity 0."),
+                ("joint_velocity_1", "Ant joint velocity 1."),
+                ("joint_velocity_2", "Ant joint velocity 2."),
+                ("joint_velocity_3", "Ant joint velocity 3."),
+                ("joint_velocity_4", "Ant joint velocity 4."),
+                ("joint_velocity_5", "Ant joint velocity 5."),
+                ("joint_velocity_6", "Ant joint velocity 6."),
+                ("joint_velocity_7", "Ant joint velocity 7."),
+            ],
+        )
+    elif prefix == "humanoid":
+        root_position_specs = [
+            ("z", "Root body height."),
+            ("quat_w", "Root body orientation quaternion w."),
+            ("quat_x", "Root body orientation quaternion x."),
+            ("quat_y", "Root body orientation quaternion y."),
+            ("quat_z", "Root body orientation quaternion z."),
+        ]
+        root_velocity_specs = [
+            ("x_velocity", "Root body x velocity."),
+            ("y_velocity", "Root body y velocity."),
+            ("z_velocity", "Root body z velocity."),
+            ("roll_velocity", "Root body roll angular velocity."),
+            ("pitch_velocity", "Root body pitch angular velocity."),
+            ("yaw_velocity", "Root body yaw angular velocity."),
+        ]
+        entries = _build_filled_specs(
+            obs_size,
+            root_position_specs,
+            root_velocity_specs,
+            extra_prefixes=("joint_pos", "joint_vel", "cinert", "cvel", "qfrc_actuator", "cfrc_ext"),
+        )
+
+    return dict(entries)
+
+
+def _build_named_specs(
+    position_specs: list[tuple[str, str]],
+    velocity_specs: list[tuple[str, str]],
+) -> list[tuple[int, dict[str, Any]]]:
+    entries: list[tuple[int, dict[str, Any]]] = []
+    for index, (display_name, description) in enumerate(position_specs):
+        entries.append(
+            (
+                index,
+                {
+                    "name": f"obs_{index}",
+                    "source": "observation",
+                    "display_name": display_name,
+                    "description": description,
+                    "aliases": [display_name],
+                },
+            )
+        )
+    offset = len(position_specs)
+    for index, (display_name, description) in enumerate(velocity_specs, start=offset):
+        entries.append(
+            (
+                index,
+                {
+                    "name": f"obs_{index}",
+                    "source": "observation",
+                    "display_name": display_name,
+                    "description": description,
+                    "aliases": [display_name],
+                },
+            )
+        )
+    return entries
+
+
+def _build_filled_specs(
+    obs_size: int,
+    position_specs: list[tuple[str, str]],
+    velocity_specs: list[tuple[str, str]],
+    *,
+    extra_prefixes: tuple[str, ...],
+) -> list[tuple[int, dict[str, Any]]]:
+    entries = _build_named_specs(position_specs, velocity_specs)
+    next_index = len(entries)
+    if next_index >= obs_size:
+        return entries[:obs_size]
+    prefix_index = 0
+    while next_index < obs_size:
+        prefix = extra_prefixes[min(prefix_index, len(extra_prefixes) - 1)]
+        display_name = f"{prefix}_{next_index - len(position_specs) - len(velocity_specs)}"
+        entries.append(
+            (
+                next_index,
+                {
+                    "name": f"obs_{next_index}",
+                    "source": "observation",
+                    "display_name": display_name,
+                    "description": f"Additional observation feature '{display_name}'.",
+                    "aliases": [display_name],
+                },
+            )
+        )
+        next_index += 1
+        if prefix_index < len(extra_prefixes) - 1 and (next_index - len(position_specs) - len(velocity_specs)) % 10 == 0:
+            prefix_index += 1
+    return entries
 
 
 def validate_reward_terms(
@@ -254,6 +663,7 @@ class RewardShapingWrapper(gym.Wrapper):
             previous_action=self._previous_action,
             native_reward=native_reward,
             raw_terms=raw_terms,
+            env_name=self.env_name,
         )
 
         for term in terms:
