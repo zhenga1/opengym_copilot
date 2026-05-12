@@ -22,8 +22,8 @@ from train_backend_reward_tuning.reward_shaping import (
     RewardShapingWrapper,
     normalize_reward_terms,
     reward_monitor_keys,
+    reward_expression_variable_specs,
     reward_template_for_env,
-    reward_expression_variable_names,
     validate_reward_terms,
 )
 from deterministic_insights import build_episode_insights
@@ -221,10 +221,10 @@ MODEL_SIZE_TO_NET_ARCH = {
     "medium": [128, 128],
     "large": [256, 256],
 }
-reward_variable_cache: dict[str, list[dict[str, str]]] = {}
+reward_variable_cache: dict[str, list[dict[str, Any]]] = {}
 
 
-def reward_variable_specs_for_env(env_name: str) -> list[dict[str, str]]:
+def reward_variable_specs_for_env(env_name: str) -> list[dict[str, Any]]:
     cached = reward_variable_cache.get(env_name)
     if cached is not None:
         return cached
@@ -241,47 +241,48 @@ def reward_variable_specs_for_env(env_name: str) -> list[dict[str, str]]:
             action_size = 1
 
         raw_term_keys = [term["key"] for term in reward_template_for_env(env_name)]
-        variable_names = reward_expression_variable_names(
-            obs_size,
-            action_size,
+        specs = reward_expression_variable_specs(
+            env_name=env_name,
+            obs_size=obs_size,
+            action_size=action_size,
             raw_term_keys=raw_term_keys,
         )
-        specs: list[dict[str, str]] = []
-        for variable_name in variable_names:
-            if variable_name == "native":
-                specs.append({
-                    "name": variable_name,
-                    "source": "reward",
-                    "description": "Native reward returned by the environment.",
-                })
-            elif variable_name.startswith("obs_"):
-                specs.append({
-                    "name": variable_name,
-                    "source": "observation",
-                    "description": f"Flattened observation component {variable_name.split('_', 1)[1]}.",
-                })
-            elif variable_name.startswith("action_"):
-                specs.append({
-                    "name": variable_name,
-                    "source": "action",
-                    "description": f"Current action component {variable_name.split('_', 1)[1]}.",
-                })
-            elif variable_name.startswith("prev_action_"):
-                specs.append({
-                    "name": variable_name,
-                    "source": "action",
-                    "description": f"Previous action component {variable_name.split('_', 1)[1]}.",
-                })
-            else:
-                specs.append({
-                    "name": variable_name,
-                    "source": "reward_term",
-                    "description": f"Built-in raw reward feature '{variable_name}'.",
-                })
         reward_variable_cache[env_name] = specs
         return specs
     finally:
         env.close()
+
+
+def reward_variable_names_for_env(env_name: str) -> list[str]:
+    variable_names: list[str] = []
+    seen: set[str] = set()
+    for spec in reward_variable_specs_for_env(env_name):
+        for variable_name in [spec["name"], *spec.get("aliases", [])]:
+            if variable_name and variable_name not in seen:
+                seen.add(variable_name)
+                variable_names.append(variable_name)
+    return variable_names
+
+
+def reward_formula_examples_for_env(env_name: str) -> list[str]:
+    prefix = env_name.split("/", 1)[-1].split("-", 1)[0].lower()
+    if prefix == "cartpole":
+        return [
+            "0.2 * sin(theta)",
+            "-0.05 * cart_velocity * cart_velocity",
+            "clip(native + 0.1 * survival_bonus - 0.2 * abs(pole_angle), -10, 10)",
+        ]
+    if prefix == "pendulum":
+        return [
+            "0.25 * y",
+            "-0.05 * angular_velocity * angular_velocity",
+            "clip(native + 0.2 * y - 0.05 * abs(theta_dot), -10, 10)",
+        ]
+    return [
+        "0.5 * observation_0 * observation_0",
+        "-abs(native_reward)",
+        "clip(native_reward, -10, 10)",
+    ]
 
 
 def normalize_training_hyperparams(params: dict | None) -> dict:
@@ -370,7 +371,7 @@ def get_reward_terms_for_run(run_id: str | None, env_name: str) -> list[dict]:
     normalized = validate_reward_terms(
         env_name,
         stored_terms,
-        available_variable_names=[spec["name"] for spec in reward_variable_specs_for_env(env_name)],
+        available_variable_names=reward_variable_names_for_env(env_name),
     )
     reward_configs_by_run[run_id]["terms"] = normalized
     return normalized
@@ -380,7 +381,7 @@ def set_reward_terms_for_run(run_id: str, env_name: str, terms: list[dict]) -> l
     normalized = validate_reward_terms(
         env_name,
         terms,
-        available_variable_names=[spec["name"] for spec in reward_variable_specs_for_env(env_name)],
+        available_variable_names=reward_variable_names_for_env(env_name),
     )
     reward_configs_by_run[run_id] = {"env_name": env_name, "terms": normalized}
     return normalized
@@ -805,11 +806,7 @@ def get_reward_config(run_id: str, env_name: str):
         "terms": terms,
         "supports_custom_reward": len(terms) > 1,
         "available_variables": reward_variable_specs_for_env(env_name),
-        "formula_examples": [
-            "0.5 * obs_2 * obs_2",
-            "-abs(obs_3)",
-            "clip(native + 0.1 * survival_bonus, -10, 10)",
-        ],
+        "formula_examples": reward_formula_examples_for_env(env_name),
         "reward_source_links": [
             {
                 "label": "Open Reward Templates",
@@ -839,6 +836,7 @@ def update_reward_config(req: RewardConfigUpdateRequest):
         "env_name": req.env_name,
         "terms": terms,
         "available_variables": reward_variable_specs_for_env(req.env_name),
+        "formula_examples": reward_formula_examples_for_env(req.env_name),
         "reward_source_links": [
             {
                 "label": "Open Reward Templates",
