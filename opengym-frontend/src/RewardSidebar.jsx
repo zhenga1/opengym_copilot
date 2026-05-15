@@ -10,6 +10,11 @@ function RewardSidebar({
   availableRewardVariables,
   rewardFormulaExamples,
   rewardSourceLinks,
+  taskGoal,
+  taskProposal,
+  taskProposalLoading,
+  taskProposalStatus,
+  taskProposalLiveStatus,
   latestTrainingBreakdown,
   latestTrainingMeanBreakdown,
   latestRolloutBreakdown,
@@ -18,6 +23,9 @@ function RewardSidebar({
   onAddCustomTerm,
   onRemoveTerm,
   onSaveConfig,
+  onTaskGoalChange,
+  onProposeTaskConfig,
+  onApplyTaskProposal,
 }) {
   const safeRewardConfig = Array.isArray(rewardConfig) ? rewardConfig : [];
   const safeRewardLogs = Array.isArray(rewardLogs) ? rewardLogs : [];
@@ -54,6 +62,7 @@ function RewardSidebar({
   const dragOffsetRef = useRef({ x: 0, y: 0 });
   const [openSections, setOpenSections] = useState({
     rewardTerms: true,
+    taskProposal: true,
     formulaHelp: false,
     latestTraining: true,
     trainingMean: false,
@@ -235,6 +244,180 @@ function RewardSidebar({
           )}
         </div>
         <div style={{ color: '#94a3b8', fontSize: '0.78rem' }}>{isDragging ? 'dragging' : 'drag me'}</div>
+      </div>
+
+      <div style={cardStyle}>
+        <button type="button" style={sectionHeaderStyle} onClick={() => toggleSection('taskProposal')}>
+          <span>LLM Task Config</span>
+          <span>{openSections.taskProposal ? '▾' : '▸'}</span>
+        </button>
+        {openSections.taskProposal && (
+          <>
+            <div style={{ color: '#94a3b8', fontSize: '0.8rem', marginTop: '0.55rem', lineHeight: 1.45 }}>
+              Describe the behavior you want in natural language. The backend will generate a structured task config proposal and runnable reward terms.
+            </div>
+            <textarea
+              value={taskGoal || ''}
+              onChange={(event) => onTaskGoalChange(event.target.value)}
+              rows={4}
+              placeholder="Example: make the cartpole sway left and right stably at 0.8 Hz while keeping the cart near center."
+              style={{
+                width: '100%',
+                marginTop: '0.65rem',
+                padding: '0.6rem 0.7rem',
+                borderRadius: '10px',
+                border: '1px solid rgba(148, 163, 184, 0.3)',
+                backgroundColor: 'rgba(15, 23, 42, 0.65)',
+                color: '#f8fafc',
+                resize: 'vertical',
+              }}
+            />
+            <div style={{ display: 'flex', gap: '0.55rem', marginTop: '0.7rem' }}>
+              <button
+                type="button"
+                onClick={onProposeTaskConfig}
+                disabled={taskProposalLoading}
+                style={{
+                  flex: 1,
+                  padding: '0.65rem 0.8rem',
+                  borderRadius: '10px',
+                  border: 'none',
+                  backgroundColor: '#6366f1',
+                  color: '#eef2ff',
+                  fontWeight: 700,
+                  cursor: taskProposalLoading ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {taskProposalLoading ? 'Generating...' : 'Generate Proposal'}
+              </button>
+              <button
+                type="button"
+                onClick={onApplyTaskProposal}
+                disabled={taskProposalLoading || !taskProposal}
+                style={{
+                  flex: 1,
+                  padding: '0.65rem 0.8rem',
+                  borderRadius: '10px',
+                  border: '1px solid rgba(56, 189, 248, 0.35)',
+                  backgroundColor: taskProposal ? 'rgba(14, 165, 233, 0.18)' : 'rgba(51, 65, 85, 0.65)',
+                  color: taskProposal ? '#bae6fd' : '#94a3b8',
+                  fontWeight: 700,
+                  cursor: taskProposalLoading || !taskProposal ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Apply Proposal
+              </button>
+            </div>
+            <div style={{ marginTop: '0.55rem', color: '#94a3b8', fontSize: '0.8rem' }}>{taskProposalStatus}</div>
+            {taskProposalLiveStatus && (
+              <div
+                style={{
+                  marginTop: '0.55rem',
+                  padding: '0.55rem 0.65rem',
+                  borderRadius: '10px',
+                  backgroundColor: 'rgba(15, 23, 42, 0.5)',
+                  border: '1px solid rgba(148, 163, 184, 0.12)',
+                  textAlign: 'left',
+                }}
+              >
+                <div style={{ fontSize: '0.72rem', color: '#cbd5e1' }}>
+                  Status: <span style={{ color: '#7dd3fc', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{taskProposalLiveStatus.status || 'unknown'}</span>
+                </div>
+                {taskProposalLiveStatus.model && (
+                  <div style={{ fontSize: '0.72rem', color: '#cbd5e1', marginTop: '0.18rem' }}>
+                    Model: <span style={{ color: '#7dd3fc', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{taskProposalLiveStatus.model}</span>
+                  </div>
+                )}
+                {taskProposalLiveStatus.base_url && (
+                  <div style={{ fontSize: '0.72rem', color: '#cbd5e1', marginTop: '0.18rem' }}>
+                    Endpoint: <span style={{ color: '#7dd3fc', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{taskProposalLiveStatus.base_url}</span>
+                  </div>
+                )}
+                <div style={{ fontSize: '0.72rem', color: '#cbd5e1', marginTop: '0.18rem' }}>
+                  Attempt: <span style={{ color: '#7dd3fc', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{taskProposalLiveStatus.attempt || 0}</span>
+                  {' · '}
+                  Elapsed: <span style={{ color: '#7dd3fc', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{Number(taskProposalLiveStatus.elapsed_sec || 0).toFixed(1)}s</span>
+                </div>
+              </div>
+            )}
+            {taskProposal && (
+              <div style={{ marginTop: '0.8rem', borderTop: '1px solid rgba(148, 163, 184, 0.12)', paddingTop: '0.75rem', textAlign: 'left' }}>
+                <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#e2e8f0' }}>
+                  Proposed By: {taskProposal.provider || 'proposal'} {taskProposal.model ? `(${taskProposal.model})` : ''}
+                </div>
+                {taskProposal.rationale && (
+                  <div style={{ marginTop: '0.45rem', color: '#cbd5e1', fontSize: '0.78rem', lineHeight: 1.45 }}>
+                    {taskProposal.rationale}
+                  </div>
+                )}
+                {taskProposal.success_metric && (
+                  <div style={{ marginTop: '0.55rem', color: '#93c5fd', fontSize: '0.76rem' }}>
+                    Success Metric: {taskProposal.success_metric}
+                  </div>
+                )}
+                {Array.isArray(taskProposal.task_params) && taskProposal.task_params.length > 0 && (
+                  <div style={{ marginTop: '0.7rem' }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0' }}>Task Parameters</div>
+                    {taskProposal.task_params.map((param) => (
+                      <div key={param.key} style={{ marginTop: '0.35rem', fontSize: '0.74rem', color: '#cbd5e1' }}>
+                        <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace', color: '#7dd3fc' }}>{param.key}</span>
+                        {' = '}
+                        <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{String(param.value)}</span>
+                        <div style={{ color: '#94a3b8', marginTop: '0.08rem' }}>{param.description}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {Array.isArray(taskProposal.derived_signals) && taskProposal.derived_signals.length > 0 && (
+                  <div style={{ marginTop: '0.75rem' }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0' }}>Derived Signals</div>
+                    {taskProposal.derived_signals.map((signal) => (
+                      <div key={signal.key} style={{ marginTop: '0.35rem' }}>
+                        <div style={{ fontSize: '0.74rem', color: '#7dd3fc', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
+                          {signal.key}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: '#cbd5e1', fontFamily: 'ui-monospace, SFMono-Regular, monospace', marginTop: '0.08rem' }}>
+                          {signal.expression}
+                        </div>
+                        <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '0.08rem' }}>
+                          {signal.description}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {Array.isArray(taskProposal.reward_terms) && taskProposal.reward_terms.length > 0 && (
+                  <div style={{ marginTop: '0.75rem' }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0' }}>Proposed Reward Terms</div>
+                    {taskProposal.reward_terms.map((term) => (
+                      <div key={term.key} style={{ marginTop: '0.4rem' }}>
+                        <div style={{ fontSize: '0.74rem', color: '#e2e8f0' }}>
+                          {term.label || term.key}
+                          <span style={{ marginLeft: '0.45rem', color: '#7dd3fc', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
+                            w={Number(term.weight || 0).toFixed(2)}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: '#cbd5e1', fontFamily: 'ui-monospace, SFMono-Regular, monospace', marginTop: '0.08rem' }}>
+                          {term.expression}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {Array.isArray(taskProposal.warnings) && taskProposal.warnings.length > 0 && (
+                  <div style={{ marginTop: '0.75rem' }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#fca5a5' }}>Warnings</div>
+                    {taskProposal.warnings.map((warning, index) => (
+                      <div key={`${warning}-${index}`} style={{ marginTop: '0.25rem', fontSize: '0.72rem', color: '#fecaca', lineHeight: 1.4 }}>
+                        {warning}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       <div style={cardStyle}>

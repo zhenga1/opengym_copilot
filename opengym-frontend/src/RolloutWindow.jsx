@@ -49,6 +49,11 @@ function RolloutWindow({
   const [availableRewardVariables, setAvailableRewardVariables] = useState([]);
   const [rewardFormulaExamples, setRewardFormulaExamples] = useState([]);
   const [rewardSourceLinks, setRewardSourceLinks] = useState([]);
+  const [taskGoal, setTaskGoal] = useState('');
+  const [taskProposal, setTaskProposal] = useState(null);
+  const [taskProposalLoading, setTaskProposalLoading] = useState(false);
+  const [taskProposalStatus, setTaskProposalStatus] = useState('Describe a task goal, then generate a proposal.');
+  const [taskProposalLiveStatus, setTaskProposalLiveStatus] = useState(null);
   const [trainingRewardBreakdown, setTrainingRewardBreakdown] = useState({});
   const [trainingRewardBreakdownMean, setTrainingRewardBreakdownMean] = useState({});
   const [trainingAblationReport, setTrainingAblationReport] = useState(null);
@@ -273,6 +278,94 @@ function RolloutWindow({
 
   const showSavedViewerRewardMessage = useCallback(() => {
     setRewardConfigStatus('Saved rollout viewers are read-only. Edit reward terms from a live rollout window.');
+  }, []);
+
+  const showSavedViewerTaskMessage = useCallback(() => {
+    setTaskProposalStatus('Saved rollout viewers are read-only. Generate and apply task configs from a live rollout window.');
+  }, []);
+
+  const normalizeTaskProposal = useCallback((proposal) => {
+    if (!proposal || typeof proposal !== 'object') return null;
+    const normalizedTaskParams = Array.isArray(proposal.task_params)
+      ? proposal.task_params.map((param) => ({
+          key: String(param?.key || ''),
+          value: param?.value,
+          description:
+            typeof param?.description === 'string'
+              ? param.description
+              : typeof param?.description?.description === 'string'
+                ? param.description.description
+                : typeof param?.description?.expression === 'string'
+                  ? param.description.expression
+                  : '',
+        }))
+      : [];
+    const normalizedDerivedSignals = Array.isArray(proposal.derived_signals)
+      ? proposal.derived_signals.map((signal) => ({
+          key: String(signal?.key || ''),
+          expression:
+            typeof signal?.expression === 'string'
+              ? signal.expression
+              : typeof signal?.expression?.expression === 'string'
+                ? signal.expression.expression
+                : '',
+          description:
+            typeof signal?.description === 'string'
+              ? signal.description
+              : typeof signal?.description?.description === 'string'
+                ? signal.description.description
+                : typeof signal?.description?.expression === 'string'
+                  ? signal.description.expression
+                  : '',
+        }))
+      : [];
+    const normalizedRewardTerms = Array.isArray(proposal.reward_terms)
+      ? proposal.reward_terms.map((term) => ({
+          ...term,
+          key: String(term?.key || ''),
+          label: String(term?.label || term?.key || ''),
+          description:
+            typeof term?.description === 'string'
+              ? term.description
+              : typeof term?.description?.description === 'string'
+                ? term.description.description
+                : typeof term?.description?.expression === 'string'
+                  ? term.description.expression
+                  : '',
+          expression:
+            typeof term?.expression === 'string'
+              ? term.expression
+              : typeof term?.expression?.expression === 'string'
+                ? term.expression.expression
+                : '',
+        }))
+      : [];
+    return {
+      ...proposal,
+      goal: typeof proposal.goal === 'string' ? proposal.goal : '',
+      success_metric:
+        typeof proposal.success_metric === 'string'
+          ? proposal.success_metric
+          : typeof proposal.success_metric?.description === 'string'
+            ? proposal.success_metric.description
+            : typeof proposal.success_metric?.expression === 'string'
+              ? proposal.success_metric.expression
+              : '',
+      rationale:
+        typeof proposal.rationale === 'string'
+          ? proposal.rationale
+          : typeof proposal.rationale?.description === 'string'
+            ? proposal.rationale.description
+            : typeof proposal.rationale?.expression === 'string'
+              ? proposal.rationale.expression
+              : '',
+      warnings: Array.isArray(proposal.warnings)
+        ? proposal.warnings.map((warning) => String(warning))
+        : [],
+      task_params: normalizedTaskParams,
+      derived_signals: normalizedDerivedSignals,
+      reward_terms: normalizedRewardTerms,
+    };
   }, []);
 
   const formatRewardTermLabel = useCallback((label) => {
@@ -1005,6 +1098,159 @@ function RolloutWindow({
       setRewardConfigLoading(false);
     }
   }, [applyRewardConfigToRollouts, applyRewardConfigToTrainingEpisodes, computeBreakdownFromRawTerms, envName, isSavedViewer, latestRolloutRawTerms, rewardConfig, rollouts, runId]);
+
+  const proposeTaskConfig = useCallback(async () => {
+    if (isSavedViewer) {
+      showSavedViewerTaskMessage();
+      return;
+    }
+    const trimmedGoal = String(taskGoal || '').trim();
+    if (!trimmedGoal) {
+      setTaskProposalStatus('Enter a natural-language task goal first.');
+      return;
+    }
+    if (!runId) {
+      setTaskProposalStatus('Run ID not ready yet. Wait a moment and try again.');
+      return;
+    }
+    setTaskProposalLoading(true);
+    setTaskProposalLiveStatus(null);
+    setTaskProposalStatus('Submitting task-config proposal request...');
+    try {
+      const response = await apiClient.post('/propose_task_config', {
+        run_id: runId,
+        env_name: envName,
+        goal: trimmedGoal,
+      });
+      setTaskProposal(normalizeTaskProposal(response.data));
+      setTaskProposalLiveStatus(null);
+      const provider = response.data?.provider || 'proposal';
+      setTaskProposalStatus(`Generated ${provider} task config proposal. Review it, then apply if it looks right.`);
+    } catch (error) {
+      console.error('Failed to propose task config:', error);
+      const backendMessage =
+        error?.response?.data?.detail ||
+        error?.response?.data?.error ||
+        error?.message ||
+        'Failed to generate task config proposal.';
+      setTaskProposalStatus(String(backendMessage));
+    } finally {
+      setTaskProposalLoading(false);
+    }
+  }, [envName, isSavedViewer, normalizeTaskProposal, runId, showSavedViewerTaskMessage, taskGoal]);
+
+  useEffect(() => {
+    if (isSavedViewer || !runId || !taskProposalLoading) return undefined;
+    let cancelled = false;
+
+    const pollStatus = async () => {
+      try {
+        const response = await apiClient.get(`/task_config_status/${runId}`);
+        if (cancelled) return;
+        setTaskProposalLiveStatus(response.data || null);
+        if (response.data?.message) {
+          const attemptText = response.data?.attempt ? ` [attempt ${response.data.attempt}]` : '';
+          const elapsedText = Number.isFinite(response.data?.elapsed_sec) ? ` (${Number(response.data.elapsed_sec).toFixed(1)}s)` : '';
+          setTaskProposalStatus(`${response.data.message}${attemptText}${elapsedText}`);
+        }
+      } catch (error) {
+        if (cancelled) return;
+      }
+    };
+
+    pollStatus();
+    const interval = setInterval(pollStatus, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [isSavedViewer, runId, taskProposalLoading]);
+
+  const applyTaskProposal = useCallback(async () => {
+    if (isSavedViewer) {
+      showSavedViewerTaskMessage();
+      return;
+    }
+    if (!taskProposal) {
+      setTaskProposalStatus('No task proposal available yet.');
+      return;
+    }
+    if (!runId) {
+      setTaskProposalStatus('Run ID not ready yet. Wait a moment and try again.');
+      return;
+    }
+    setTaskProposalLoading(true);
+    try {
+      const response = await apiClient.post('/apply_task_config', {
+        run_id: runId,
+        env_name: envName,
+        goal: taskProposal.goal || taskGoal,
+        task_params: taskProposal.task_params || [],
+        derived_signals: taskProposal.derived_signals || [],
+        reward_terms: (taskProposal.reward_terms || []).map((term) => ({
+          key: term.key,
+          label: term.label,
+          description: term.description,
+          weight: Number(term.weight),
+          enabled: Boolean(term.enabled),
+          expression: term.expression || '',
+        })),
+        success_metric: taskProposal.success_metric || '',
+        rationale: taskProposal.rationale || '',
+        warnings: taskProposal.warnings || [],
+        provider: taskProposal.provider || 'manual',
+        model: taskProposal.model || '',
+      });
+      const nextTerms = response.data.terms || [];
+      setRewardConfig(nextTerms);
+      setAvailableRewardVariables(response.data.available_variables || []);
+      setRewardFormulaExamples(response.data.formula_examples || []);
+      setRewardSourceLinks(response.data.reward_source_links || []);
+      setTrainingEpisodes((prev) => applyRewardConfigToTrainingEpisodes(prev, nextTerms));
+      const nextRollouts = applyRewardConfigToRollouts(rollouts, nextTerms);
+      setRollouts(nextRollouts);
+      const nextBreakdown = computeBreakdownFromRawTerms(nextTerms, latestRolloutRawTerms);
+      if (nextRollouts.length > 0) {
+        setEpisodeInfo((prev) => ({ ...prev, reward: nextRollouts[0].reward ?? prev.reward }));
+        setRolloutRewardBreakdown(nextRollouts[0].reward_breakdown || {});
+      } else if (nextBreakdown) {
+        setEpisodeInfo((prev) => ({ ...prev, reward: nextBreakdown.total }));
+        setRolloutRewardBreakdown(nextBreakdown);
+      }
+      setRewardConfigDirty(false);
+      setRewardConfigStatus('Task proposal applied live.');
+      setTaskGoal(response.data?.task_config?.goal || taskProposal.goal || taskGoal);
+      setTaskProposal((prev) => normalizeTaskProposal({
+        ...(prev || {}),
+        reward_terms: nextTerms,
+        ...(response.data?.task_config || {}),
+      }));
+      setTaskProposalStatus('Task proposal applied. Training and rollout now use the proposed reward config.');
+    } catch (error) {
+      console.error('Failed to apply task proposal:', error);
+      const backendMessage =
+        error?.response?.data?.detail ||
+        error?.response?.data?.error ||
+        error?.message ||
+        'Failed to apply task config proposal.';
+      setTaskProposalStatus(String(backendMessage));
+    } finally {
+      setTaskProposalLoading(false);
+    }
+  }, [
+    applyRewardConfigToRollouts,
+    applyRewardConfigToTrainingEpisodes,
+    computeBreakdownFromRawTerms,
+    envName,
+    isSavedViewer,
+    latestRolloutRawTerms,
+    rollouts,
+    runId,
+    showSavedViewerTaskMessage,
+    normalizeTaskProposal,
+    taskGoal,
+    taskProposal,
+  ]);
   // This effectively flips the showPopup
   // showPopup = true => showPopup = false, and vice versa
   const togglePopup = () => {
@@ -1144,6 +1390,10 @@ function RolloutWindow({
       setAvailableRewardVariables([]);
       setRewardFormulaExamples([]);
       setRewardSourceLinks([]);
+      setTaskGoal('');
+      setTaskProposal(null);
+      setTaskProposalLoading(false);
+      setTaskProposalStatus('Saved rollout viewer. Task config proposals are only available in live rollout windows.');
       setRewardConfigDirty(false);
       setRewardConfigLoading(false);
       setRewardConfigStatus("Saved rollout viewer. Reward terms shown below come from the loaded JSON.");
@@ -1335,11 +1585,17 @@ function RolloutWindow({
         setAvailableRewardVariables(response.data.available_variables || []);
         setRewardFormulaExamples(response.data.formula_examples || []);
         setRewardSourceLinks(response.data.reward_source_links || []);
+        setTaskGoal(response.data.task_config?.goal || '');
         setRewardConfigDirty(false);
         setRewardConfigStatus(
           response.data.supports_custom_reward
             ? "Editing applies to rollout and training live."
             : "Only native Gym reward is available for this environment right now."
+        );
+        setTaskProposalStatus(
+          response.data.task_config?.goal
+            ? 'Task goal restored for this run. Generate a new proposal or apply updated reward edits.'
+            : 'Describe a task goal, then generate a proposal.'
         );
       } catch (error) {
         if (cancelled) return;
@@ -1347,7 +1603,10 @@ function RolloutWindow({
         setAvailableRewardVariables([]);
         setRewardFormulaExamples([]);
         setRewardSourceLinks([]);
+        setTaskGoal('');
+        setTaskProposal(null);
         setRewardConfigStatus("Failed to load reward settings.");
+        setTaskProposalStatus('Failed to load task config state.');
       } finally {
         if (!cancelled) {
           setRewardConfigLoading(false);
@@ -1400,6 +1659,11 @@ function RolloutWindow({
       availableRewardVariables,
       rewardFormulaExamples,
       rewardSourceLinks,
+      taskGoal,
+      taskProposal,
+      taskProposalLoading,
+      taskProposalStatus,
+      taskProposalLiveStatus,
       latestTrainingBreakdown: trainingRewardBreakdown,
       latestTrainingMeanBreakdown: trainingRewardBreakdownMean,
       latestRolloutBreakdown: rolloutRewardBreakdown,
@@ -1408,6 +1672,9 @@ function RolloutWindow({
       onAddCustomTerm: isSavedViewer ? showSavedViewerRewardMessage : addCustomRewardTerm,
       onRemoveTerm: isSavedViewer ? showSavedViewerRewardMessage : removeRewardTerm,
       onSaveConfig: saveRewardConfig,
+      onTaskGoalChange: isSavedViewer ? showSavedViewerTaskMessage : setTaskGoal,
+      onProposeTaskConfig: proposeTaskConfig,
+      onApplyTaskProposal: applyTaskProposal,
     });
   }, [
     isActive,
@@ -1421,6 +1688,11 @@ function RolloutWindow({
     availableRewardVariables,
     rewardFormulaExamples,
     rewardSourceLinks,
+    taskGoal,
+    taskProposal,
+    taskProposalLoading,
+    taskProposalStatus,
+    taskProposalLiveStatus,
     trainingRewardBreakdown,
     trainingRewardBreakdownMean,
     rolloutRewardBreakdown,
@@ -1429,8 +1701,11 @@ function RolloutWindow({
     addCustomRewardTerm,
     removeRewardTerm,
     showSavedViewerRewardMessage,
+    showSavedViewerTaskMessage,
     isSavedViewer,
     saveRewardConfig,
+    proposeTaskConfig,
+    applyTaskProposal,
   ]);
   /* Here we are adding envName to the dependency array of useEffect, so useEffect will rerun when envName changes*/
   useEffect(() => {

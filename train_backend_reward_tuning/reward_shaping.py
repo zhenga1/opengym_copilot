@@ -83,9 +83,14 @@ def reward_expression_context(
     native_reward: float,
     raw_terms: dict[str, float] | None = None,
     env_name: str | None = None,
+    step: int = 0,
+    time_sec: float = 0.0,
 ) -> dict[str, float]:
     context: dict[str, float] = {
         "native": float(native_reward),
+        "native_reward": float(native_reward),
+        "step": float(step),
+        "time_sec": float(time_sec),
     }
     for key, value in (raw_terms or {}).items():
         if _REWARD_KEY_PATTERN.match(key):
@@ -149,6 +154,36 @@ def evaluate_reward_expression(expression: str, context: dict[str, float]) -> fl
     return float(eval(code, {"__builtins__": {}}, scope))
 
 
+def enrich_reward_context_with_task_config(
+    context: dict[str, float],
+    task_config: dict[str, Any] | None,
+) -> dict[str, float]:
+    current = dict(context)
+    if not task_config:
+        return current
+
+    for param in task_config.get("task_params", []) or []:
+        key = str(param.get("key") or "").strip()
+        if not key or not _REWARD_KEY_PATTERN.match(key):
+            continue
+        try:
+            current[key] = float(param.get("value", 0.0))
+        except (TypeError, ValueError):
+            current[key] = 0.0
+
+    for signal in task_config.get("derived_signals", []) or []:
+        key = str(signal.get("key") or "").strip()
+        expression = str(signal.get("expression") or "").strip()
+        if not key or not expression or not _REWARD_KEY_PATTERN.match(key):
+            continue
+        try:
+            current[key] = evaluate_reward_expression(expression, current)
+        except ValueError:
+            current[key] = 0.0
+
+    return current
+
+
 def reward_expression_variable_names(
     obs_size: int,
     action_size: int,
@@ -185,6 +220,20 @@ def reward_expression_variable_specs(
     raw_term_keys: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     specs: list[dict[str, Any]] = [
+        {
+            "name": "step",
+            "source": "runtime",
+            "display_name": "step",
+            "description": "Current episode timestep starting at 1.",
+            "aliases": [],
+        },
+        {
+            "name": "time_sec",
+            "source": "runtime",
+            "display_name": "time_sec",
+            "description": "Approximate elapsed episode time in seconds.",
+            "aliases": [],
+        },
         {
             "name": "native",
             "source": "reward",
@@ -628,11 +677,20 @@ class RewardShapingWrapper(gym.Wrapper):
         env: gym.Env,
         env_name: str,
         config_provider: Callable[[], list[dict[str, Any]]],
+        task_config_provider: Callable[[], dict[str, Any] | None] | None = None,
     ) -> None:
         super().__init__(env)
         self.env_name = env_name
         self.config_provider = config_provider
+        self.task_config_provider = task_config_provider or (lambda: None)
         self._previous_action = None
+        self._episode_step = 0
+        env_unwrapped = getattr(self.env, "unwrapped", self.env)
+        base_dt = getattr(env_unwrapped, "dt", None)
+        if base_dt is None:
+            tau = getattr(env_unwrapped, "tau", None)
+            base_dt = tau if tau is not None else 1.0
+        self._step_duration = float(base_dt)
         self._reset_episode_sums()
 
     def _reset_episode_sums(self) -> None:
@@ -643,11 +701,13 @@ class RewardShapingWrapper(gym.Wrapper):
 
     def reset(self, **kwargs):
         self._previous_action = None
+        self._episode_step = 0
         self._reset_episode_sums()
         return self.env.reset(**kwargs)
 
     def step(self, action):
         obs, native_reward, terminated, truncated, info = self.env.step(action)
+        self._episode_step += 1
         raw_terms = raw_reward_terms_for_env(
             env_name=self.env_name,
             obs=obs,
@@ -664,6 +724,12 @@ class RewardShapingWrapper(gym.Wrapper):
             native_reward=native_reward,
             raw_terms=raw_terms,
             env_name=self.env_name,
+            step=self._episode_step,
+            time_sec=self._episode_step * self._step_duration,
+        )
+        expression_context = enrich_reward_context_with_task_config(
+            expression_context,
+            self.task_config_provider(),
         )
 
         for term in terms:
@@ -699,6 +765,7 @@ class RewardShapingWrapper(gym.Wrapper):
         self._episode_reward_history.append(
             {
                 "step": len(self._episode_reward_history) + 1,
+                "time_sec": float(self._episode_step * self._step_duration),
                 "reward": float(total_reward),
                 "reward_breakdown": {"total": float(total_reward), **reward_breakdown},
                 "reward_raw_terms": {key: float(value) for key, value in raw_terms.items()},
