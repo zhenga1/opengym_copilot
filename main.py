@@ -30,6 +30,8 @@ except ModuleNotFoundError:
 
 from train_backend_reward_tuning.reward_shaping import (
     RewardShapingWrapper,
+    enrich_reward_context_with_task_config,
+    evaluate_reward_expression,
     normalize_reward_terms,
     reward_monitor_keys,
     reward_expression_variable_specs,
@@ -378,6 +380,43 @@ def set_task_config_for_run(run_id: str, env_name: str, config: dict[str, Any]) 
     }
     task_configs_by_run[run_id] = normalized
     return normalized
+
+
+def validate_task_config_for_run(config: dict[str, Any], env_name: str, run_id: str | None = None) -> dict[str, Any]:
+    base_names = reward_variable_names_for_env(env_name)
+    param_names: list[str] = []
+    seen_param_names: set[str] = set()
+    for param in config.get("task_params", []) or []:
+        key = str(param.get("key") or "").strip()
+        if not key:
+            continue
+        if key in seen_param_names:
+            raise ValueError(f"Duplicate task parameter '{key}'.")
+        seen_param_names.add(key)
+        param_names.append(key)
+
+    derived_names: list[str] = []
+    seen_signal_names: set[str] = set()
+    zero_context = {name: 0.0 for name in [*base_names, *param_names]}
+    for signal in config.get("derived_signals", []) or []:
+        key = str(signal.get("key") or "").strip()
+        expression = str(signal.get("expression") or "").strip()
+        if not key:
+            continue
+        if key in seen_signal_names:
+            raise ValueError(f"Duplicate derived signal '{key}'.")
+        seen_signal_names.add(key)
+        if expression:
+            evaluate_reward_expression(expression, zero_context)
+        zero_context[key] = 0.0
+        derived_names.append(key)
+
+    validate_reward_terms(
+        env_name,
+        config.get("reward_terms") or [],
+        available_variable_names=[*base_names, *param_names, *derived_names],
+    )
+    return config
 
 
 def task_variable_specs_for_run(run_id: str | None, env_name: str) -> list[dict[str, Any]]:
@@ -920,6 +959,7 @@ def make_reward_wrapped_env(
     run_id: str | None,
     render_mode: str | None = None,
     reward_terms_override: list[dict] | None = None,
+    task_config_override: dict[str, Any] | None = None,
 ):
     env_kwargs = {"render_mode": render_mode} if render_mode else {}
     env = gym.make(env_name, **env_kwargs)
@@ -927,6 +967,7 @@ def make_reward_wrapped_env(
         env,
         env_name=env_name,
         config_provider=lambda: reward_terms_override if reward_terms_override is not None else get_reward_terms_for_run(run_id, env_name),
+        task_config_provider=lambda: task_config_override if task_config_override is not None else get_task_config_for_run(run_id, env_name),
     )
 
 
@@ -1409,25 +1450,28 @@ def get_task_config_status(run_id: str):
 
 @app.post("/apply_task_config")
 def apply_task_config(req: TaskConfigApplyRequest):
-    task_config = set_task_config_for_run(
-        req.run_id,
-        req.env_name,
-        {
-            "goal": req.goal or "",
-            "task_params": req.task_params,
-            "derived_signals": req.derived_signals,
-            "success_metric": req.success_metric or "",
-            "rationale": req.rationale or "",
-            "warnings": req.warnings,
-            "provider": req.provider or "manual",
-            "model": req.model or "",
-        },
-    )
+    proposed_config = {
+        "goal": req.goal or "",
+        "task_params": req.task_params,
+        "derived_signals": req.derived_signals,
+        "reward_terms": [term.model_dump() for term in req.reward_terms],
+        "success_metric": req.success_metric or "",
+        "rationale": req.rationale or "",
+        "warnings": req.warnings,
+        "provider": req.provider or "manual",
+        "model": req.model or "",
+    }
     try:
+        validate_task_config_for_run(proposed_config, req.env_name, run_id=req.run_id)
+        task_config = set_task_config_for_run(
+            req.run_id,
+            req.env_name,
+            proposed_config,
+        )
         terms = set_reward_terms_for_run(
             run_id=req.run_id,
             env_name=req.env_name,
-            terms=[term.model_dump() for term in req.reward_terms],
+            terms=proposed_config["reward_terms"],
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

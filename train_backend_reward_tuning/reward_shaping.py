@@ -154,6 +154,36 @@ def evaluate_reward_expression(expression: str, context: dict[str, float]) -> fl
     return float(eval(code, {"__builtins__": {}}, scope))
 
 
+def enrich_reward_context_with_task_config(
+    context: dict[str, float],
+    task_config: dict[str, Any] | None,
+) -> dict[str, float]:
+    current = dict(context)
+    if not task_config:
+        return current
+
+    for param in task_config.get("task_params", []) or []:
+        key = str(param.get("key") or "").strip()
+        if not key or not _REWARD_KEY_PATTERN.match(key):
+            continue
+        try:
+            current[key] = float(param.get("value", 0.0))
+        except (TypeError, ValueError):
+            current[key] = 0.0
+
+    for signal in task_config.get("derived_signals", []) or []:
+        key = str(signal.get("key") or "").strip()
+        expression = str(signal.get("expression") or "").strip()
+        if not key or not expression or not _REWARD_KEY_PATTERN.match(key):
+            continue
+        try:
+            current[key] = evaluate_reward_expression(expression, current)
+        except ValueError:
+            current[key] = 0.0
+
+    return current
+
+
 def reward_expression_variable_names(
     obs_size: int,
     action_size: int,
@@ -647,10 +677,12 @@ class RewardShapingWrapper(gym.Wrapper):
         env: gym.Env,
         env_name: str,
         config_provider: Callable[[], list[dict[str, Any]]],
+        task_config_provider: Callable[[], dict[str, Any] | None] | None = None,
     ) -> None:
         super().__init__(env)
         self.env_name = env_name
         self.config_provider = config_provider
+        self.task_config_provider = task_config_provider or (lambda: None)
         self._previous_action = None
         self._episode_step = 0
         env_unwrapped = getattr(self.env, "unwrapped", self.env)
@@ -694,6 +726,10 @@ class RewardShapingWrapper(gym.Wrapper):
             env_name=self.env_name,
             step=self._episode_step,
             time_sec=self._episode_step * self._step_duration,
+        )
+        expression_context = enrich_reward_context_with_task_config(
+            expression_context,
+            self.task_config_provider(),
         )
 
         for term in terms:

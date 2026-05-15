@@ -284,6 +284,90 @@ function RolloutWindow({
     setTaskProposalStatus('Saved rollout viewers are read-only. Generate and apply task configs from a live rollout window.');
   }, []);
 
+  const normalizeTaskProposal = useCallback((proposal) => {
+    if (!proposal || typeof proposal !== 'object') return null;
+    const normalizedTaskParams = Array.isArray(proposal.task_params)
+      ? proposal.task_params.map((param) => ({
+          key: String(param?.key || ''),
+          value: param?.value,
+          description:
+            typeof param?.description === 'string'
+              ? param.description
+              : typeof param?.description?.description === 'string'
+                ? param.description.description
+                : typeof param?.description?.expression === 'string'
+                  ? param.description.expression
+                  : '',
+        }))
+      : [];
+    const normalizedDerivedSignals = Array.isArray(proposal.derived_signals)
+      ? proposal.derived_signals.map((signal) => ({
+          key: String(signal?.key || ''),
+          expression:
+            typeof signal?.expression === 'string'
+              ? signal.expression
+              : typeof signal?.expression?.expression === 'string'
+                ? signal.expression.expression
+                : '',
+          description:
+            typeof signal?.description === 'string'
+              ? signal.description
+              : typeof signal?.description?.description === 'string'
+                ? signal.description.description
+                : typeof signal?.description?.expression === 'string'
+                  ? signal.description.expression
+                  : '',
+        }))
+      : [];
+    const normalizedRewardTerms = Array.isArray(proposal.reward_terms)
+      ? proposal.reward_terms.map((term) => ({
+          ...term,
+          key: String(term?.key || ''),
+          label: String(term?.label || term?.key || ''),
+          description:
+            typeof term?.description === 'string'
+              ? term.description
+              : typeof term?.description?.description === 'string'
+                ? term.description.description
+                : typeof term?.description?.expression === 'string'
+                  ? term.description.expression
+                  : '',
+          expression:
+            typeof term?.expression === 'string'
+              ? term.expression
+              : typeof term?.expression?.expression === 'string'
+                ? term.expression.expression
+                : '',
+        }))
+      : [];
+    return {
+      ...proposal,
+      goal: typeof proposal.goal === 'string' ? proposal.goal : '',
+      success_metric:
+        typeof proposal.success_metric === 'string'
+          ? proposal.success_metric
+          : typeof proposal.success_metric?.description === 'string'
+            ? proposal.success_metric.description
+            : typeof proposal.success_metric?.expression === 'string'
+              ? proposal.success_metric.expression
+              : '',
+      rationale:
+        typeof proposal.rationale === 'string'
+          ? proposal.rationale
+          : typeof proposal.rationale?.description === 'string'
+            ? proposal.rationale.description
+            : typeof proposal.rationale?.expression === 'string'
+              ? proposal.rationale.expression
+              : '',
+      warnings: Array.isArray(proposal.warnings)
+        ? proposal.warnings.map((warning) => String(warning))
+        : [],
+      task_params: normalizedTaskParams,
+      derived_signals: normalizedDerivedSignals,
+      reward_terms: normalizedRewardTerms,
+    };
+  }, []);
+
   const formatRewardTermLabel = useCallback((label) => {
     if (!label) return 'Reward Term';
     if (label === 'total_reward') return 'Total Reward';
@@ -1038,7 +1122,7 @@ function RolloutWindow({
         env_name: envName,
         goal: trimmedGoal,
       });
-      setTaskProposal(response.data || null);
+      setTaskProposal(normalizeTaskProposal(response.data));
       setTaskProposalLiveStatus(null);
       const provider = response.data?.provider || 'proposal';
       setTaskProposalStatus(`Generated ${provider} task config proposal. Review it, then apply if it looks right.`);
@@ -1053,7 +1137,7 @@ function RolloutWindow({
     } finally {
       setTaskProposalLoading(false);
     }
-  }, [envName, isSavedViewer, runId, showSavedViewerTaskMessage, taskGoal]);
+  }, [envName, isSavedViewer, normalizeTaskProposal, runId, showSavedViewerTaskMessage, taskGoal]);
 
   useEffect(() => {
     if (isSavedViewer || !runId || !taskProposalLoading) return undefined;
@@ -1136,7 +1220,7 @@ function RolloutWindow({
       setRewardConfigDirty(false);
       setRewardConfigStatus('Task proposal applied live.');
       setTaskGoal(response.data?.task_config?.goal || taskProposal.goal || taskGoal);
-      setTaskProposal((prev) => ({
+      setTaskProposal((prev) => normalizeTaskProposal({
         ...(prev || {}),
         reward_terms: nextTerms,
         ...(response.data?.task_config || {}),
@@ -1163,6 +1247,7 @@ function RolloutWindow({
     rollouts,
     runId,
     showSavedViewerTaskMessage,
+    normalizeTaskProposal,
     taskGoal,
     taskProposal,
   ]);
