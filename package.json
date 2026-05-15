@@ -1,0 +1,12 @@
+{
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "scripts": {
+    "backend": "conda run -n openai_gym uvicorn main:app --reload",
+    "frontend": "cd opengym-frontend && npm run dev",
+    "start": "concurrently \"npm run backend\" \"npm run frontend\"",
+    "kill": "npx kill-port 8000 5173",
+    "restart": "npm run kill && npm run start"
+  }
+}
