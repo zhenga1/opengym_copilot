@@ -13,6 +13,11 @@ const emptySidebarState = {
   availableRewardVariables: [],
   rewardFormulaExamples: [],
   rewardSourceLinks: [],
+  taskGoal: '',
+  taskProposal: null,
+  taskProposalLoading: false,
+  taskProposalStatus: 'Describe a task goal, then generate a proposal.',
+  taskProposalLiveStatus: null,
   latestTrainingBreakdown: {},
   latestTrainingMeanBreakdown: {},
   latestRolloutBreakdown: {},
@@ -21,6 +26,9 @@ const emptySidebarState = {
   onAddCustomTerm: () => {},
   onRemoveTerm: () => {},
   onSaveConfig: () => {},
+  onTaskGoalChange: () => {},
+  onProposeTaskConfig: () => {},
+  onApplyTaskProposal: () => {},
 };
 
 function App() {

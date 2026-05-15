@@ -23,6 +23,9 @@ export default defineConfig({
     '/stop_training': backendTarget,
     '/unique_run_id': backendTarget,
     '/reward_config': backendTarget,
+    '/propose_task_config': backendTarget,
+    '/apply_task_config': backendTarget,
+    '/task_config_status': backendTarget,
     "/training_runs": {
         target: backendTarget,
         changeOrigin: true,

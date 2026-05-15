@@ -83,9 +83,14 @@ def reward_expression_context(
     native_reward: float,
     raw_terms: dict[str, float] | None = None,
     env_name: str | None = None,
+    step: int = 0,
+    time_sec: float = 0.0,
 ) -> dict[str, float]:
     context: dict[str, float] = {
         "native": float(native_reward),
+        "native_reward": float(native_reward),
+        "step": float(step),
+        "time_sec": float(time_sec),
     }
     for key, value in (raw_terms or {}).items():
         if _REWARD_KEY_PATTERN.match(key):
@@ -185,6 +190,20 @@ def reward_expression_variable_specs(
     raw_term_keys: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     specs: list[dict[str, Any]] = [
+        {
+            "name": "step",
+            "source": "runtime",
+            "display_name": "step",
+            "description": "Current episode timestep starting at 1.",
+            "aliases": [],
+        },
+        {
+            "name": "time_sec",
+            "source": "runtime",
+            "display_name": "time_sec",
+            "description": "Approximate elapsed episode time in seconds.",
+            "aliases": [],
+        },
         {
             "name": "native",
             "source": "reward",
@@ -633,6 +652,13 @@ class RewardShapingWrapper(gym.Wrapper):
         self.env_name = env_name
         self.config_provider = config_provider
         self._previous_action = None
+        self._episode_step = 0
+        env_unwrapped = getattr(self.env, "unwrapped", self.env)
+        base_dt = getattr(env_unwrapped, "dt", None)
+        if base_dt is None:
+            tau = getattr(env_unwrapped, "tau", None)
+            base_dt = tau if tau is not None else 1.0
+        self._step_duration = float(base_dt)
         self._reset_episode_sums()
 
     def _reset_episode_sums(self) -> None:
@@ -643,11 +669,13 @@ class RewardShapingWrapper(gym.Wrapper):
 
     def reset(self, **kwargs):
         self._previous_action = None
+        self._episode_step = 0
         self._reset_episode_sums()
         return self.env.reset(**kwargs)
 
     def step(self, action):
         obs, native_reward, terminated, truncated, info = self.env.step(action)
+        self._episode_step += 1
         raw_terms = raw_reward_terms_for_env(
             env_name=self.env_name,
             obs=obs,
@@ -664,6 +692,8 @@ class RewardShapingWrapper(gym.Wrapper):
             native_reward=native_reward,
             raw_terms=raw_terms,
             env_name=self.env_name,
+            step=self._episode_step,
+            time_sec=self._episode_step * self._step_duration,
         )
 
         for term in terms:
@@ -699,6 +729,7 @@ class RewardShapingWrapper(gym.Wrapper):
         self._episode_reward_history.append(
             {
                 "step": len(self._episode_reward_history) + 1,
+                "time_sec": float(self._episode_step * self._step_duration),
                 "reward": float(total_reward),
                 "reward_breakdown": {"total": float(total_reward), **reward_breakdown},
                 "reward_raw_terms": {key: float(value) for key, value in raw_terms.items()},
