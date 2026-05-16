@@ -223,9 +223,9 @@ function RewardSidebar({
           <div style={{ color: '#93c5fd', fontSize: '0.9rem', marginTop: '0.25rem' }}>{envName}</div>
           {safeRewardSourceLinks.length > 0 && (
             <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', marginTop: '0.45rem' }}>
-              {safeRewardSourceLinks.map((link) => (
+              {safeRewardSourceLinks.map((link, index) => (
                 <a
-                  key={link.path}
+                  key={link.path || link.label || `reward-source-${index}`}
                   href={link.path}
                   style={{
                     fontSize: '0.75rem',
@@ -358,8 +358,8 @@ function RewardSidebar({
                 {Array.isArray(taskProposal.task_params) && taskProposal.task_params.length > 0 && (
                   <div style={{ marginTop: '0.7rem' }}>
                     <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0' }}>Task Parameters</div>
-                    {taskProposal.task_params.map((param) => (
-                      <div key={param.key} style={{ marginTop: '0.35rem', fontSize: '0.74rem', color: '#cbd5e1' }}>
+                    {taskProposal.task_params.map((param, index) => (
+                      <div key={param.key || `task-param-${index}`} style={{ marginTop: '0.35rem', fontSize: '0.74rem', color: '#cbd5e1' }}>
                         <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace', color: '#7dd3fc' }}>{param.key}</span>
                         {' = '}
                         <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{String(param.value)}</span>
@@ -371,8 +371,8 @@ function RewardSidebar({
                 {Array.isArray(taskProposal.derived_signals) && taskProposal.derived_signals.length > 0 && (
                   <div style={{ marginTop: '0.75rem' }}>
                     <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0' }}>Derived Signals</div>
-                    {taskProposal.derived_signals.map((signal) => (
-                      <div key={signal.key} style={{ marginTop: '0.35rem' }}>
+                    {taskProposal.derived_signals.map((signal, index) => (
+                      <div key={signal.key || `derived-signal-${index}`} style={{ marginTop: '0.35rem' }}>
                         <div style={{ fontSize: '0.74rem', color: '#7dd3fc', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
                           {signal.key}
                         </div>
@@ -389,8 +389,8 @@ function RewardSidebar({
                 {Array.isArray(taskProposal.reward_terms) && taskProposal.reward_terms.length > 0 && (
                   <div style={{ marginTop: '0.75rem' }}>
                     <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0' }}>Proposed Reward Terms</div>
-                    {taskProposal.reward_terms.map((term) => (
-                      <div key={term.key} style={{ marginTop: '0.4rem' }}>
+                    {taskProposal.reward_terms.map((term, index) => (
+                      <div key={term.key || `proposal-reward-term-${index}`} style={{ marginTop: '0.4rem' }}>
                         <div style={{ fontSize: '0.74rem', color: '#e2e8f0' }}>
                           {term.label || term.key}
                           <span style={{ marginLeft: '0.45rem', color: '#7dd3fc', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
@@ -630,9 +630,9 @@ function RewardSidebar({
                   </div>
                   {safeFormulaExamples.length > 0 && (
                     <div style={{ marginTop: '0.55rem' }}>
-                      {safeFormulaExamples.map((example) => (
+                      {safeFormulaExamples.map((example, index) => (
                         <div
-                          key={example}
+                          key={example || `formula-example-${index}`}
                           style={{
                             fontFamily: 'ui-monospace, SFMono-Regular, monospace',
                             fontSize: '0.75rem',
@@ -646,9 +646,9 @@ function RewardSidebar({
                     </div>
                   )}
                   <div style={{ marginTop: '0.55rem', maxHeight: '180px', overflowY: 'auto' }}>
-                    {safeRewardVariables.map((variable) => (
+                    {safeRewardVariables.map((variable, index) => (
                       <div
-                        key={variable.name}
+                        key={variable.name || variable.display_name || `reward-variable-${index}`}
                         style={{
                           borderTop: '1px solid rgba(148, 163, 184, 0.08)',
                           padding: '0.35rem 0',

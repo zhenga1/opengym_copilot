@@ -79,10 +79,11 @@ if load_dotenv is not None:
 DATA_DIR = Path(os.getenv("OPEN_GYM_DATA_DIR", str(BASE_DIR))).resolve()
 MODELS_DIR = (DATA_DIR / "models").resolve()
 ROLLOUTS_DIR = (DATA_DIR / "rollouts").resolve()
+REWARD_CONFIGS_DIR = (DATA_DIR / "reward_configs").resolve()
 PROGRESS_LOG_PATH = (DATA_DIR / "progress_bar.log").resolve()
 FRONTEND_DIST_DIR = (BASE_DIR / "opengym-frontend" / "dist").resolve()
 
-for path in (DATA_DIR, MODELS_DIR, ROLLOUTS_DIR):
+for path in (DATA_DIR, MODELS_DIR, ROLLOUTS_DIR, REWARD_CONFIGS_DIR):
     path.mkdir(parents=True, exist_ok=True)
 
 cors_origins_raw = os.getenv(
@@ -235,6 +236,19 @@ class TaskConfigApplyRequest(BaseModel):
     warnings: list[str] = []
     provider: str | None = None
     model: str | None = None
+
+
+class SaveRewardConfigRequest(BaseModel):
+    run_id: str
+    env_name: str
+    filename: str | None = None
+    source_type: str | None = None
+
+
+class LoadRewardConfigRequest(BaseModel):
+    run_id: str
+    env_name: str
+    filename: str
 
 
 def update_task_config_request_status(run_id: str | None, **fields: Any) -> None:
@@ -945,6 +959,65 @@ def set_reward_terms_for_run(run_id: str, env_name: str, terms: list[dict]) -> l
     )
     reward_configs_by_run[run_id] = {"env_name": env_name, "terms": normalized}
     return normalized
+
+
+def infer_reward_config_source_type(run_id: str | None, env_name: str) -> str:
+    task_config = get_task_config_for_run(run_id, env_name)
+    provider = str(task_config.get("provider") or "").strip().lower()
+    if provider == "heuristic":
+        return "heuristic"
+    if provider and provider not in {"none", "manual"}:
+        return "llm"
+    return "manual"
+
+
+def list_saved_reward_config_files(env_name: str | None = None) -> list[str]:
+    files = [path.name for path in REWARD_CONFIGS_DIR.iterdir() if path.is_file() and path.suffix == ".json"]
+    if not env_name:
+        return sorted(files)
+    prefix = re.sub(r"[^A-Za-z0-9_.-]+", "_", env_name.strip()) if env_name.strip() else ""
+    filtered = [name for name in files if name.startswith(f"{prefix}__") or f"__{prefix}__" in name or name.endswith(f"__{prefix}.json")]
+    return sorted(filtered)
+
+
+def build_reward_config_payload(run_id: str, env_name: str, *, source_type: str | None = None) -> dict[str, Any]:
+    task_config = get_task_config_for_run(run_id, env_name)
+    inferred_source_type = (source_type or infer_reward_config_source_type(run_id, env_name)).strip().lower() or "manual"
+    return {
+        "run_id": run_id,
+        "env_name": env_name,
+        "saved_at": datetime.now().isoformat(),
+        "source_type": inferred_source_type,
+        "terms": get_reward_terms_for_run(run_id, env_name),
+        "task_config": task_config,
+    }
+
+
+def save_reward_config_to_disk(run_id: str, env_name: str, *, filename: str | None = None, source_type: str | None = None) -> tuple[str, dict[str, Any]]:
+    safe_env_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", env_name.strip() or "env")
+    inferred_source_type = (source_type or infer_reward_config_source_type(run_id, env_name)).strip().lower() or "manual"
+    default_name = f"{safe_env_name}__{inferred_source_type}__reward_config.json"
+    resolved_name = sanitize_storage_name(filename or default_name, ".json")
+    payload = build_reward_config_payload(run_id, env_name, source_type=inferred_source_type)
+    with open(REWARD_CONFIGS_DIR / resolved_name, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    return resolved_name, payload
+
+
+def load_reward_config_from_disk(filename: str) -> dict[str, Any]:
+    safe_name = sanitize_storage_name(filename, ".json")
+    path = (REWARD_CONFIGS_DIR / safe_name).resolve()
+    try:
+        path.relative_to(REWARD_CONFIGS_DIR)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="reward config path must stay inside the managed reward_configs directory") from exc
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Saved reward config '{safe_name}' not found.")
+    with open(path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Saved reward config file is invalid.")
+    return payload
 
 
 def reward_weights_for_run(run_id: str | None, env_name: str) -> dict[str, float]:
