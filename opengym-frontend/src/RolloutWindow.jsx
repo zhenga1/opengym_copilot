@@ -49,6 +49,10 @@ function RolloutWindow({
   const [availableRewardVariables, setAvailableRewardVariables] = useState([]);
   const [rewardFormulaExamples, setRewardFormulaExamples] = useState([]);
   const [rewardSourceLinks, setRewardSourceLinks] = useState([]);
+  const [savedRewardConfigFiles, setSavedRewardConfigFiles] = useState([]);
+  const [selectedRewardConfigFile, setSelectedRewardConfigFile] = useState('');
+  const [rewardConfigSaveName, setRewardConfigSaveName] = useState('');
+  const [rewardConfigSaveSourceType, setRewardConfigSaveSourceType] = useState('manual');
   const [taskGoal, setTaskGoal] = useState('');
   const [taskProposal, setTaskProposal] = useState(null);
   const [taskProposalLoading, setTaskProposalLoading] = useState(false);
@@ -1070,6 +1074,8 @@ function RolloutWindow({
       setRewardConfig(nextTerms);
       setAvailableRewardVariables(response.data.available_variables || []);
       setRewardSourceLinks(response.data.reward_source_links || []);
+      setSavedRewardConfigFiles(response.data.saved_reward_configs || []);
+      setSelectedRewardConfigFile((prev) => (prev && (response.data.saved_reward_configs || []).includes(prev) ? prev : ((response.data.saved_reward_configs || [])[0] || '')));
       setTrainingEpisodes((prev) => applyRewardConfigToTrainingEpisodes(prev, nextTerms));
       const nextRollouts = applyRewardConfigToRollouts(rollouts, nextTerms);
       setRollouts(nextRollouts);
@@ -1098,6 +1104,104 @@ function RolloutWindow({
       setRewardConfigLoading(false);
     }
   }, [applyRewardConfigToRollouts, applyRewardConfigToTrainingEpisodes, computeBreakdownFromRawTerms, envName, isSavedViewer, latestRolloutRawTerms, rewardConfig, rollouts, runId]);
+
+  const saveRewardConfigSnapshot = useCallback(async () => {
+    if (isSavedViewer) {
+      setRewardConfigStatus("Saved rollout viewers are read-only. Save reward configs from a live rollout.");
+      return;
+    }
+    if (!runId) {
+      setRewardConfigStatus("Run ID not ready yet. Wait a moment and try again.");
+      return;
+    }
+    setRewardConfigLoading(true);
+    try {
+      const response = await apiClient.post('/save_reward_config', {
+        run_id: runId,
+        env_name: envName,
+        filename: rewardConfigSaveName || undefined,
+        source_type: rewardConfigSaveSourceType || undefined,
+      });
+      const files = response.data.saved_reward_configs || [];
+      setSavedRewardConfigFiles(files);
+      setSelectedRewardConfigFile(response.data.filename || files[0] || '');
+      if (!rewardConfigSaveName && response.data.filename) {
+        setRewardConfigSaveName(response.data.filename);
+      }
+      setRewardConfigStatus(`Saved reward config to ${response.data.filename}.`);
+    } catch (error) {
+      console.error('Failed to save reward config snapshot:', error);
+      const backendMessage =
+        error?.response?.data?.detail ||
+        error?.response?.data?.error ||
+        error?.message ||
+        'Failed to save reward config snapshot.';
+      setRewardConfigStatus(String(backendMessage));
+    } finally {
+      setRewardConfigLoading(false);
+    }
+  }, [envName, isSavedViewer, rewardConfigSaveName, rewardConfigSaveSourceType, runId]);
+
+  const loadSavedRewardConfig = useCallback(async () => {
+    if (isSavedViewer) {
+      setRewardConfigStatus("Saved rollout viewers are read-only. Load reward configs from a live rollout.");
+      return;
+    }
+    if (!runId) {
+      setRewardConfigStatus("Run ID not ready yet. Wait a moment and try again.");
+      return;
+    }
+    if (!selectedRewardConfigFile) {
+      setRewardConfigStatus("Select a saved reward config first.");
+      return;
+    }
+    setRewardConfigLoading(true);
+    try {
+      const response = await apiClient.post('/load_reward_config', {
+        run_id: runId,
+        env_name: envName,
+        filename: selectedRewardConfigFile,
+      });
+      const nextTerms = response.data.terms || [];
+      setRewardConfig(nextTerms);
+      setSupportsCustomReward(Boolean(nextTerms.length > 1));
+      setAvailableRewardVariables(response.data.available_variables || []);
+      setRewardFormulaExamples(response.data.formula_examples || []);
+      setRewardSourceLinks(response.data.reward_source_links || []);
+      setSavedRewardConfigFiles(response.data.saved_reward_configs || []);
+      setSelectedRewardConfigFile(response.data.filename || selectedRewardConfigFile);
+      setRewardConfigSaveSourceType(response.data.source_type || 'manual');
+      setTaskGoal(response.data.task_config?.goal || '');
+      setTaskProposal((prev) => normalizeTaskProposal({
+        ...(prev || {}),
+        reward_terms: nextTerms,
+        ...(response.data.task_config || {}),
+      }));
+      setTrainingEpisodes((prev) => applyRewardConfigToTrainingEpisodes(prev, nextTerms));
+      const nextRollouts = applyRewardConfigToRollouts(rollouts, nextTerms);
+      setRollouts(nextRollouts);
+      const nextBreakdown = computeBreakdownFromRawTerms(nextTerms, latestRolloutRawTerms);
+      if (nextRollouts.length > 0) {
+        setEpisodeInfo((prev) => ({ ...prev, reward: nextRollouts[0].reward ?? prev.reward }));
+        setRolloutRewardBreakdown(nextRollouts[0].reward_breakdown || {});
+      } else if (nextBreakdown) {
+        setEpisodeInfo((prev) => ({ ...prev, reward: nextBreakdown.total }));
+        setRolloutRewardBreakdown(nextBreakdown);
+      }
+      setRewardConfigDirty(false);
+      setRewardConfigStatus(`Loaded reward config ${response.data.filename}.`);
+    } catch (error) {
+      console.error('Failed to load reward config snapshot:', error);
+      const backendMessage =
+        error?.response?.data?.detail ||
+        error?.response?.data?.error ||
+        error?.message ||
+        'Failed to load saved reward config.';
+      setRewardConfigStatus(String(backendMessage));
+    } finally {
+      setRewardConfigLoading(false);
+    }
+  }, [applyRewardConfigToRollouts, applyRewardConfigToTrainingEpisodes, computeBreakdownFromRawTerms, envName, isSavedViewer, latestRolloutRawTerms, normalizeTaskProposal, rollouts, runId, selectedRewardConfigFile]);
 
   const proposeTaskConfig = useCallback(async () => {
     if (isSavedViewer) {
@@ -1206,6 +1310,9 @@ function RolloutWindow({
       setAvailableRewardVariables(response.data.available_variables || []);
       setRewardFormulaExamples(response.data.formula_examples || []);
       setRewardSourceLinks(response.data.reward_source_links || []);
+      setSavedRewardConfigFiles(response.data.saved_reward_configs || []);
+      setSelectedRewardConfigFile((prev) => (prev && (response.data.saved_reward_configs || []).includes(prev) ? prev : ((response.data.saved_reward_configs || [])[0] || '')));
+      setRewardConfigSaveSourceType(response.data.source_type || 'manual');
       setTrainingEpisodes((prev) => applyRewardConfigToTrainingEpisodes(prev, nextTerms));
       const nextRollouts = applyRewardConfigToRollouts(rollouts, nextTerms);
       setRollouts(nextRollouts);
@@ -1585,6 +1692,9 @@ function RolloutWindow({
         setAvailableRewardVariables(response.data.available_variables || []);
         setRewardFormulaExamples(response.data.formula_examples || []);
         setRewardSourceLinks(response.data.reward_source_links || []);
+        setSavedRewardConfigFiles(response.data.saved_reward_configs || []);
+        setSelectedRewardConfigFile((prev) => (prev && (response.data.saved_reward_configs || []).includes(prev) ? prev : ((response.data.saved_reward_configs || [])[0] || '')));
+        setRewardConfigSaveSourceType(response.data.source_type || 'manual');
         setTaskGoal(response.data.task_config?.goal || '');
         setRewardConfigDirty(false);
         setRewardConfigStatus(
@@ -1659,6 +1769,10 @@ function RolloutWindow({
       availableRewardVariables,
       rewardFormulaExamples,
       rewardSourceLinks,
+      savedRewardConfigFiles,
+      selectedRewardConfigFile,
+      rewardConfigSaveName,
+      rewardConfigSaveSourceType,
       taskGoal,
       taskProposal,
       taskProposalLoading,
@@ -1675,6 +1789,11 @@ function RolloutWindow({
       onTaskGoalChange: isSavedViewer ? showSavedViewerTaskMessage : setTaskGoal,
       onProposeTaskConfig: proposeTaskConfig,
       onApplyTaskProposal: applyTaskProposal,
+      onRewardConfigFileSelect: isSavedViewer ? showSavedViewerRewardMessage : setSelectedRewardConfigFile,
+      onRewardConfigSaveNameChange: isSavedViewer ? showSavedViewerRewardMessage : setRewardConfigSaveName,
+      onRewardConfigSaveSourceTypeChange: isSavedViewer ? showSavedViewerRewardMessage : setRewardConfigSaveSourceType,
+      onSaveRewardConfigSnapshot: saveRewardConfigSnapshot,
+      onLoadRewardConfigSnapshot: loadSavedRewardConfig,
     });
   }, [
     isActive,
@@ -1688,6 +1807,10 @@ function RolloutWindow({
     availableRewardVariables,
     rewardFormulaExamples,
     rewardSourceLinks,
+    savedRewardConfigFiles,
+    selectedRewardConfigFile,
+    rewardConfigSaveName,
+    rewardConfigSaveSourceType,
     taskGoal,
     taskProposal,
     taskProposalLoading,
@@ -1706,6 +1829,8 @@ function RolloutWindow({
     saveRewardConfig,
     proposeTaskConfig,
     applyTaskProposal,
+    saveRewardConfigSnapshot,
+    loadSavedRewardConfig,
   ]);
   /* Here we are adding envName to the dependency array of useEffect, so useEffect will rerun when envName changes*/
   useEffect(() => {

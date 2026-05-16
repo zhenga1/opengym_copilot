@@ -1444,6 +1444,8 @@ def get_reward_config(run_id: str, env_name: str):
         "available_variables": task_variable_specs_for_run(run_id, env_name),
         "formula_examples": reward_formula_examples_for_env(env_name),
         "task_config": task_config,
+        "source_type": infer_reward_config_source_type(run_id, env_name),
+        "saved_reward_configs": list_saved_reward_config_files(env_name),
         "reward_source_links": [
             {
                 "label": "Open Reward Templates",
@@ -1475,6 +1477,8 @@ def update_reward_config(req: RewardConfigUpdateRequest):
         "available_variables": task_variable_specs_for_run(req.run_id, req.env_name),
         "formula_examples": reward_formula_examples_for_env(req.env_name),
         "task_config": get_task_config_for_run(req.run_id, req.env_name),
+        "source_type": infer_reward_config_source_type(req.run_id, req.env_name),
+        "saved_reward_configs": list_saved_reward_config_files(req.env_name),
         "reward_source_links": [
             {
                 "label": "Open Reward Templates",
@@ -1556,6 +1560,82 @@ def apply_task_config(req: TaskConfigApplyRequest):
         "task_config": task_config,
         "available_variables": task_variable_specs_for_run(req.run_id, req.env_name),
         "formula_examples": reward_formula_examples_for_env(req.env_name),
+        "source_type": infer_reward_config_source_type(req.run_id, req.env_name),
+        "saved_reward_configs": list_saved_reward_config_files(req.env_name),
+        "reward_source_links": [
+            {
+                "label": "Open Reward Templates",
+                "path": str((BASE_DIR / "train_backend_reward_tuning" / "reward_templates.py").resolve()),
+            },
+            {
+                "label": "Open Reward Shaping Wrapper",
+                "path": str((BASE_DIR / "train_backend_reward_tuning" / "reward_shaping.py").resolve()),
+            },
+        ],
+    }
+
+
+@app.get("/reward_config_files")
+def get_reward_config_files(env_name: str | None = None):
+    return {"reward_configs": list_saved_reward_config_files(env_name)}
+
+
+@app.post("/save_reward_config")
+def save_reward_config(req: SaveRewardConfigRequest):
+    filename, payload = save_reward_config_to_disk(
+        req.run_id,
+        req.env_name,
+        filename=req.filename,
+        source_type=req.source_type,
+    )
+    return {
+        "status": "saved",
+        "filename": filename,
+        "source_type": payload.get("source_type", "manual"),
+        "saved_reward_configs": list_saved_reward_config_files(req.env_name),
+        "task_config": payload.get("task_config", {}),
+    }
+
+
+@app.post("/load_reward_config")
+def load_reward_config(req: LoadRewardConfigRequest):
+    payload = load_reward_config_from_disk(req.filename)
+    file_env_name = str(payload.get("env_name") or req.env_name).strip() or req.env_name
+    if file_env_name != req.env_name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Saved reward config targets env '{file_env_name}', not '{req.env_name}'.",
+        )
+    task_config = payload.get("task_config") or {}
+    terms = payload.get("terms") or []
+    proposed_config = {
+        "goal": str(task_config.get("goal") or ""),
+        "task_params": list(task_config.get("task_params") or []),
+        "derived_signals": list(task_config.get("derived_signals") or []),
+        "reward_terms": terms,
+        "success_metric": str(task_config.get("success_metric") or ""),
+        "rationale": str(task_config.get("rationale") or ""),
+        "warnings": list(task_config.get("warnings") or []),
+        "provider": str(task_config.get("provider") or payload.get("source_type") or "manual"),
+        "model": str(task_config.get("model") or ""),
+    }
+    try:
+        validate_task_config_for_run(proposed_config, req.env_name, run_id=req.run_id)
+        stored_task_config = set_task_config_for_run(req.run_id, req.env_name, proposed_config)
+        stored_terms = set_reward_terms_for_run(req.run_id, req.env_name, terms)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "status": "loaded",
+        "filename": sanitize_storage_name(req.filename, ".json"),
+        "run_id": req.run_id,
+        "env_name": req.env_name,
+        "terms": stored_terms,
+        "task_config": stored_task_config,
+        "available_variables": task_variable_specs_for_run(req.run_id, req.env_name),
+        "formula_examples": reward_formula_examples_for_env(req.env_name),
+        "source_type": str(payload.get("source_type") or infer_reward_config_source_type(req.run_id, req.env_name)),
+        "saved_reward_configs": list_saved_reward_config_files(req.env_name),
         "reward_source_links": [
             {
                 "label": "Open Reward Templates",

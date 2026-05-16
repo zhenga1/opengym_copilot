@@ -10,6 +10,10 @@ function RewardSidebar({
   availableRewardVariables,
   rewardFormulaExamples,
   rewardSourceLinks,
+  savedRewardConfigFiles,
+  selectedRewardConfigFile,
+  rewardConfigSaveName,
+  rewardConfigSaveSourceType,
   taskGoal,
   taskProposal,
   taskProposalLoading,
@@ -26,12 +30,18 @@ function RewardSidebar({
   onTaskGoalChange,
   onProposeTaskConfig,
   onApplyTaskProposal,
+  onRewardConfigFileSelect,
+  onRewardConfigSaveNameChange,
+  onRewardConfigSaveSourceTypeChange,
+  onSaveRewardConfigSnapshot,
+  onLoadRewardConfigSnapshot,
 }) {
   const safeRewardConfig = Array.isArray(rewardConfig) ? rewardConfig : [];
   const safeRewardLogs = Array.isArray(rewardLogs) ? rewardLogs : [];
   const safeRewardVariables = Array.isArray(availableRewardVariables) ? availableRewardVariables : [];
   const safeFormulaExamples = Array.isArray(rewardFormulaExamples) ? rewardFormulaExamples : [];
   const safeRewardSourceLinks = Array.isArray(rewardSourceLinks) ? rewardSourceLinks : [];
+  const safeSavedRewardConfigFiles = Array.isArray(savedRewardConfigFiles) ? savedRewardConfigFiles : [];
   const rolloutEntries = Object.entries(latestRolloutBreakdown || {}).filter(([key, value]) => key !== 'total' && Number.isFinite(value));
   const trainingEntries = Object.entries(latestTrainingBreakdown || {}).filter(([key, value]) => key !== 'total' && Number.isFinite(value));
   const fallbackEntries = rolloutEntries.length > 0 ? rolloutEntries : trainingEntries;
@@ -617,6 +627,100 @@ function RewardSidebar({
               {rewardConfigLoading ? 'Saving...' : rewardConfigDirty ? 'Apply Reward Changes' : 'Reward Settings Applied'}
             </button>
             <div style={{ marginTop: '0.55rem', color: '#94a3b8', fontSize: '0.8rem' }}>{rewardConfigStatus}</div>
+
+            <div style={{ marginTop: '0.8rem', borderTop: '1px solid rgba(148, 163, 184, 0.12)', paddingTop: '0.8rem' }}>
+              <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#e2e8f0' }}>Save / Load Reward Config</div>
+              <div style={{ color: '#94a3b8', fontSize: '0.74rem', marginTop: '0.35rem', lineHeight: 1.4 }}>
+                Save the current reward definition separately from the policy checkpoint, then reload it later to restore the matching breakdown logic.
+              </div>
+              <div style={{ display: 'flex', gap: '0.45rem', marginTop: '0.6rem' }}>
+                <input
+                  type="text"
+                  value={rewardConfigSaveName || ''}
+                  onChange={(event) => onRewardConfigSaveNameChange(event.target.value)}
+                  placeholder="cartpole_sway_llm.json"
+                  style={{
+                    flex: 1,
+                    padding: '0.45rem 0.55rem',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(148, 163, 184, 0.3)',
+                    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+                    color: '#f8fafc',
+                  }}
+                />
+                <select
+                  value={rewardConfigSaveSourceType || 'manual'}
+                  onChange={(event) => onRewardConfigSaveSourceTypeChange(event.target.value)}
+                  style={{
+                    width: '110px',
+                    padding: '0.45rem 0.5rem',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(148, 163, 184, 0.3)',
+                    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+                    color: '#f8fafc',
+                  }}
+                >
+                  <option value="manual">manual</option>
+                  <option value="llm">llm</option>
+                  <option value="heuristic">heuristic</option>
+                </select>
+              </div>
+              <div style={{ display: 'flex', gap: '0.45rem', marginTop: '0.55rem' }}>
+                <button
+                  type="button"
+                  onClick={onSaveRewardConfigSnapshot}
+                  disabled={rewardConfigLoading}
+                  style={{
+                    flex: 1,
+                    padding: '0.55rem 0.8rem',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(125, 211, 252, 0.28)',
+                    backgroundColor: 'rgba(14, 165, 233, 0.18)',
+                    color: '#bae6fd',
+                    fontWeight: 700,
+                    cursor: rewardConfigLoading ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Save Config
+                </button>
+              </div>
+              <div style={{ display: 'flex', gap: '0.45rem', marginTop: '0.55rem' }}>
+                <select
+                  value={selectedRewardConfigFile || ''}
+                  onChange={(event) => onRewardConfigFileSelect(event.target.value)}
+                  style={{
+                    flex: 1,
+                    padding: '0.45rem 0.55rem',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(148, 163, 184, 0.3)',
+                    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+                    color: '#f8fafc',
+                  }}
+                >
+                  <option value="">Select saved reward config</option>
+                  {safeSavedRewardConfigFiles.map((fileName, index) => (
+                    <option key={fileName || `saved-reward-config-${index}`} value={fileName}>{fileName}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={onLoadRewardConfigSnapshot}
+                  disabled={rewardConfigLoading || !selectedRewardConfigFile}
+                  style={{
+                    width: '96px',
+                    padding: '0.55rem 0.8rem',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(74, 222, 128, 0.28)',
+                    backgroundColor: 'rgba(34, 197, 94, 0.15)',
+                    color: '#bbf7d0',
+                    fontWeight: 700,
+                    cursor: rewardConfigLoading || !selectedRewardConfigFile ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Load
+                </button>
+              </div>
+            </div>
 
             <div style={{ marginTop: '0.8rem', borderTop: '1px solid rgba(148, 163, 184, 0.12)', paddingTop: '0.8rem' }}>
               <button type="button" style={sectionHeaderStyle} onClick={() => toggleSection('formulaHelp')}>
