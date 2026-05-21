@@ -3356,6 +3356,35 @@ function RolloutWindow({
         {renderInsightCards(rolloutInsights, 'Rollout insights will appear after enough recent rollout episodes have been observed.')}
       </InsightsModal>
       
+      <div style={{ marginTop: "2rem", textAlign: "center" }}>
+        <label htmlFor="rolloutSpeed" style={{ fontWeight: 600 }}>
+          ⚡ Rollout Speed (FPS):
+        </label>
+        <br />
+        <input
+          id="rolloutSpeed"
+          type="range"
+          min="1"
+          max="500"
+          step="10"
+          value={rolloutSpeed}
+          onChange={(e) => updateRolloutSpeed(Number(e.target.value))}
+          style={{ width: "200px", margin: "0.5rem" }}
+        />
+        <input
+          type="number"
+          min="1"
+          step="10"
+          value={rolloutSpeed}
+          onChange={(e) => updateRolloutSpeed(Number(e.target.value))}
+          style={{
+            width: "70px",
+            padding: "4px",
+            border: "1px solid #d1d5db",
+            borderRadius: "4px",
+          }}
+        />
+      </div>
       {/* Playback Controls */}
       {currentRolloutWorkspaceView.key === 'visualization' && (
       <>
@@ -3518,35 +3547,6 @@ function RolloutWindow({
         Episode <strong>{episodeInfo.episode}</strong>, Reward:{' '}
         <strong style={{ color: '#10b981' }}>{episodeInfo.reward}</strong>
       </p>
-      <div style={{ marginTop: "2rem", textAlign: "center" }}>
-        <label htmlFor="rolloutSpeed" style={{ fontWeight: 600 }}>
-          ⚡ Rollout Speed (FPS):
-        </label>
-        <br />
-        <input
-          id="rolloutSpeed"
-          type="range"
-          min="1"
-          max="500"
-          step="10"
-          value={rolloutSpeed}
-          onChange={(e) => updateRolloutSpeed(Number(e.target.value))}
-          style={{ width: "200px", margin: "0.5rem" }}
-        />
-        <input
-          type="number"
-          min="1"
-          step="10"
-          value={rolloutSpeed}
-          onChange={(e) => updateRolloutSpeed(Number(e.target.value))}
-          style={{
-            width: "70px",
-            padding: "4px",
-            border: "1px solid #d1d5db",
-            borderRadius: "4px",
-          }}
-        />
-      </div>
       <div
         style={{
           display: 'flex',
