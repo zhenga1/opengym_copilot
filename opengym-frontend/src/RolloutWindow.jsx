@@ -2024,6 +2024,7 @@ function RolloutWindow({
   };
 
   const toggleTrainMode = async () => {
+    // safety check to prevent multiple rapid clicks causing issues
     if (trainMode) return;
     openPathPopup();
     // process the trainMode variable WITHIN the popup (i.e. after popup closes)
@@ -2042,15 +2043,15 @@ function RolloutWindow({
     }
   };
   const buttonStyle = (bg) => ({
-    padding: '0.4rem 1rem',
-    backgroundColor: bg,
+    padding: '0.6rem 1rem',
+    background: bg,
     color: 'white',
-    border: 'none',
-    borderRadius: '6px',
-    fontWeight: 600,
-    fontSize: '1rem',
+    border: '1px solid rgba(255,255,255,0.18)',
+    borderRadius: '14px',
+    fontWeight: 700,
+    fontSize: '0.96rem',
     cursor: 'pointer',
-    boxShadow: '0 3px 6px rgba(0,0,0,0.15)',
+    boxShadow: '0 14px 28px rgba(15, 23, 42, 0.12)',
     transition: 'all 0.2s ease',
   });
 
@@ -2207,11 +2208,12 @@ function RolloutWindow({
     }
   };
   const workspaceShellStyle = {
-    background: 'linear-gradient(145deg, #f0f9ff, #e0e7ff)',
-    borderRadius: '18px',
-    border: '1px solid rgba(148, 163, 184, 0.18)',
-    boxShadow: '0 8px 20px rgba(0,0,0,0.1)',
-    padding: '1.35rem',
+    background: 'linear-gradient(180deg, rgba(255,255,255,0.84), rgba(241,245,249,0.86))',
+    borderRadius: '28px',
+    border: '1px solid rgba(148, 163, 184, 0.16)',
+    boxShadow: '0 26px 54px rgba(15, 23, 42, 0.08)',
+    backdropFilter: 'blur(18px)',
+    padding: '1.45rem',
   };
 
   const workspaceHeaderStyle = {
@@ -2224,18 +2226,19 @@ function RolloutWindow({
   };
 
   const workspaceMetaStyle = {
-    color: '#64748b',
-    fontSize: '0.9rem',
+    color: '#526277',
+    fontSize: '0.94rem',
     maxWidth: '52rem',
-    lineHeight: 1.5,
+    lineHeight: 1.65,
   };
 
   const sectionPanelStyle = {
-    background: 'rgba(255,255,255,0.55)',
-    borderRadius: '14px',
-    border: '1px solid rgba(148, 163, 184, 0.18)',
-    padding: '1rem',
+    background: 'linear-gradient(180deg, rgba(255,255,255,0.84), rgba(248,250,252,0.72))',
+    borderRadius: '20px',
+    border: '1px solid rgba(148, 163, 184, 0.16)',
+    padding: '1.05rem',
     marginTop: '1rem',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.55), 0 10px 24px rgba(15, 23, 42, 0.05)',
   };
 
   const statusBadgeStyle = (backgroundColor) => ({

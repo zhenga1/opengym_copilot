@@ -39,6 +39,12 @@ from train_backend_reward_tuning.reward_shaping import (
     validate_reward_terms,
 )
 from deterministic_insights import build_episode_insights
+from run_logging import (
+    LOGS_DIR,
+    configure_backend_logging,
+    log_reward_spec_snapshot,
+    log_run_event,
+)
 
 try:
     from stable_baselines3 import PPO
@@ -68,6 +74,7 @@ task_config_request_status_by_run = {}  # run_id -> live LLM request status
 
 app = FastAPI()
 env_name = "" # unknown for now
+logger = configure_backend_logging()
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 time_intervals = {}
@@ -85,6 +92,7 @@ FRONTEND_DIST_DIR = (BASE_DIR / "opengym-frontend" / "dist").resolve()
 
 for path in (DATA_DIR, MODELS_DIR, ROLLOUTS_DIR, REWARD_CONFIGS_DIR):
     path.mkdir(parents=True, exist_ok=True)
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 cors_origins_raw = os.getenv(
     "CORS_ALLOW_ORIGINS",
@@ -157,6 +165,9 @@ def build_default_model_path(selected_env_name: str) -> str:
 
 
 def sanitize_storage_name(name: str | None, suffix: str) -> str:
+    # removes leading / training whitespace from "name" parameter
+    # and assigns it to raw_name variable
+    # then gives a default name if the candidate name (Path(raw_name).name) is empty after stripping
     raw_name = (name or "").strip()
     candidate = Path(raw_name).name
     if not candidate:
@@ -167,25 +178,31 @@ def sanitize_storage_name(name: str | None, suffix: str) -> str:
 
 
 def resolve_model_output_path(requested_path: str | None, run_id: str | None, selected_env_name: str) -> Path:
+    # Called to get a path to save the model to
     default_name = sanitize_storage_name(f"ppo_model_{selected_env_name}_{run_id or 'session'}", ".zip")
     if not requested_path or not requested_path.strip():
         return (MODELS_DIR / default_name).resolve()
 
     candidate = Path(requested_path.strip())
+    # tries to resolve the absolute path 
     if candidate.is_absolute():
         try:
             resolved = candidate.resolve()
         except OSError:
             resolved = (MODELS_DIR / default_name).resolve()
         else:
+            # run this if resolved succeeded. 
             try:
+                # check to see if the raw resolved path is WITHIN the MODELS_DIR and throw the ValueError if not. 
                 resolved.relative_to(MODELS_DIR)
             except ValueError:
                 resolved = (MODELS_DIR / sanitize_storage_name(candidate.name, ".zip")).resolve()
     else:
+        # basically resolve it relative to MODELS_DIR
         safe_parts = [part for part in candidate.parts if part not in {"", ".", ".."}]
         resolved = (MODELS_DIR / Path(*safe_parts)).resolve() if safe_parts else (MODELS_DIR / default_name).resolve()
 
+    # then ensures the path ends with a ".zip" suffix
     if resolved.suffix.lower() != ".zip":
         resolved = resolved.with_suffix(".zip")
     try:
@@ -196,6 +213,7 @@ def resolve_model_output_path(requested_path: str | None, run_id: str | None, se
     return resolved
 
 def encode_jpeg(frame_np, quality=80):
+    # encode the frame_np to JPEG bytes with the given quality setting
     import io
     from PIL import Image
     buf = io.BytesIO()
@@ -204,6 +222,7 @@ def encode_jpeg(frame_np, quality=80):
 
 
 class RewardTermPayload(BaseModel):
+    # Payload for a single reward term in the reward configuration
     key: str
     weight: float
     enabled: bool = True
@@ -213,18 +232,21 @@ class RewardTermPayload(BaseModel):
 
 
 class RewardConfigUpdateRequest(BaseModel):
+    #  Payload for updating the reward configuration
     run_id: str
     env_name: str
     terms: list[RewardTermPayload]
 
 
 class TaskConfigProposalRequest(BaseModel):
+    # Payload for a task configuration proposal
     run_id: str
     env_name: str
     goal: str
 
 
 class TaskConfigApplyRequest(BaseModel):
+    # Payload for applying a task configuration proposal
     run_id: str
     env_name: str
     goal: str | None = None
@@ -239,6 +261,7 @@ class TaskConfigApplyRequest(BaseModel):
 
 
 class SaveRewardConfigRequest(BaseModel):
+    # Payload for saving a reward configuration
     run_id: str
     env_name: str
     filename: str | None = None
@@ -246,12 +269,15 @@ class SaveRewardConfigRequest(BaseModel):
 
 
 class LoadRewardConfigRequest(BaseModel):
+    # Payload for loading a reward configuration
     run_id: str
     env_name: str
     filename: str
 
 
 def update_task_config_request_status(run_id: str | None, **fields: Any) -> None:
+    # updates the task config request status
+    # for the given run_id 
     if not run_id:
         return
     current = task_config_request_status_by_run.get(run_id, {})
@@ -291,35 +317,56 @@ reward_variable_cache: dict[str, list[dict[str, Any]]] = {}
 
 
 def reward_variable_specs_for_env(env_name: str) -> list[dict[str, Any]]:
+    # Take env name and return the cached reward specifications
+    # if exist, return from the cache. 
+    """
+    The function calculates the size of the observation space and action space. If the action space has a shape attribute, it calculates the size by multiplying the dimensions of the shape. Otherwise, it sets the size to 1.
+
+    Next, it retrieves the keys of the reward template for the given env_name and passes them along with the calculated sizes to the 
+    reward_expression_variable_specs function.
+
+    The resulting specs are stored in the reward_variable_cache with the env_name as the key. 
+    Finally, the function returns the specs and ensures that the environment is closed in a finally block.
+    """
     cached = reward_variable_cache.get(env_name)
     if cached is not None:
         return cached
 
+    # otherwise, get specs directly from the environment
     env = gym.make(env_name)
     try:
+        # get the observation and action spaces
         obs_space = env.observation_space
         action_space = env.action_space
 
+        # get the observation and action sizes
         obs_size = int(np.prod(obs_space.shape)) if getattr(obs_space, "shape", None) else 1
         if getattr(action_space, "shape", None):
             action_size = int(np.prod(action_space.shape))
         else:
             action_size = 1
 
+        # calculate the reward variable specs. Get deepcopy of the proper template. 
+        # "key" is the name of the reward term 
         raw_term_keys = [term["key"] for term in reward_template_for_env(env_name)]
+
+        # calculate the reward variable specs
         specs = reward_expression_variable_specs(
             env_name=env_name,
             obs_size=obs_size,
             action_size=action_size,
             raw_term_keys=raw_term_keys,
         )
+        # store the specs in the cache before returning
         reward_variable_cache[env_name] = specs
         return specs
     finally:
+        # close the environment to free up resources
         env.close()
 
 
 def reward_variable_names_for_env(env_name: str) -> list[str]:
+    
     variable_names: list[str] = []
     seen: set[str] = set()
     for spec in reward_variable_specs_for_env(env_name):
@@ -958,6 +1005,13 @@ def set_reward_terms_for_run(run_id: str, env_name: str, terms: list[dict]) -> l
         available_variable_names=task_variable_names_for_run(run_id, env_name),
     )
     reward_configs_by_run[run_id] = {"env_name": env_name, "terms": normalized}
+    log_reward_spec_snapshot(
+        run_id=run_id,
+        env_name=env_name,
+        terms=normalized,
+        task_config=get_task_config_for_run(run_id, env_name),
+        source="set_reward_terms_for_run",
+    )
     return normalized
 
 
@@ -1187,6 +1241,28 @@ def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_step
     preview_model = None
     eval_env = None
     training_hyperparams = get_training_hyperparams_for_run(run_id)
+    current_reward_terms = get_reward_terms_for_run(run_id, env_name)
+    current_task_config = get_task_config_for_run(run_id, env_name)
+    log_run_event(
+        "training_start_requested",
+        run_id=run_id,
+        env_name=env_name,
+        details={
+            "train_steps": int(train_steps),
+            "reset_num_timesteps": bool(reset_num_timesteps),
+            "hyperparams": training_hyperparams,
+            "model_path_requested": trained_model_paths.get(run_id),
+            "device": training_model_devices.get(run_id),
+        },
+    )
+    log_reward_spec_snapshot(
+        run_id=run_id,
+        env_name=env_name,
+        terms=current_reward_terms,
+        task_config=current_task_config,
+        source="training_start",
+        details={"train_steps": int(train_steps)},
+    )
 
     if model is None:
         vec_env = DummyVecEnv(
@@ -1372,10 +1448,31 @@ def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_step
             model.save(train_model_actual_path)
             RUNS_TRAINING_STATUS[run_id]["model_path"] = train_model_actual_path
             RUNS_TRAINING_STATUS[run_id]["status"] = "stopped" if stop_requested else "done"
+            log_run_event(
+                "training_finished",
+                run_id=run_id,
+                env_name=env_name,
+                details={
+                    "status": RUNS_TRAINING_STATUS[run_id]["status"],
+                    "model_path": train_model_actual_path,
+                    "stop_requested": stop_requested,
+                    "steps_done": RUNS_TRAINING_STATUS[run_id].get("steps_done"),
+                    "reward_last": RUNS_TRAINING_STATUS[run_id].get("reward_last"),
+                    "reward_mean": RUNS_TRAINING_STATUS[run_id].get("reward_mean"),
+                    "eval_reward": RUNS_TRAINING_STATUS[run_id].get("eval_reward"),
+                },
+            )
             print("Training stopped early" if stop_requested else "Training complete")
         except Exception as e:
             RUNS_TRAINING_STATUS[run_id]["status"] = "error"
             RUNS_TRAINING_STATUS[run_id]["error"] = str(e)
+            logger.exception("Training failed for run_id=%s env_name=%s", run_id, env_name)
+            log_run_event(
+                "training_failed",
+                run_id=run_id,
+                env_name=env_name,
+                details={"error": str(e)},
+            )
         finally:
             RUNS_TRAINING_STATUS[run_id]["stop"] = False
             model_env = model.get_env()
@@ -1727,6 +1824,24 @@ def set_training_dir(req: SetTrainingDirRequest):
     trained_model_paths[run_id] = str(where_to_save_trained_model)
     training_model_devices[run_id] = device
     training_hyperparams_by_run[run_id] = normalize_training_hyperparams(req.training_hyperparams)
+    log_run_event(
+        "training_dir_set",
+        run_id=run_id,
+        env_name=req.env_name or env_name or "env",
+        details={
+            "path": str(where_to_save_trained_model),
+            "device": device,
+            "training_hyperparams": training_hyperparams_by_run[run_id],
+        },
+    )
+    log_reward_spec_snapshot(
+        run_id=run_id,
+        env_name=req.env_name or env_name or "env",
+        terms=get_reward_terms_for_run(run_id, req.env_name or env_name or "env"),
+        task_config=get_task_config_for_run(run_id, req.env_name or env_name or "env"),
+        source="set_training_dir",
+        details={"path": str(where_to_save_trained_model)},
+    )
     # Here you would typically set the training directory for the session
     return {
         "status": "training directory set",
@@ -1753,6 +1868,15 @@ def save_rollouts_data(saveRolloutRequest: SaveRolloutRequest):
     rollouts = saveRolloutRequest.rollouts
     with open(ROLLOUTS_DIR / rollout_filename, "w") as f:
         json.dump(rollouts, f)
+    log_run_event(
+        "rollouts_saved",
+        run_id=run_id,
+        details={
+            "rollout_filename": rollout_filename,
+            "rollout_count": len(rollouts),
+            "path": str((ROLLOUTS_DIR / rollout_filename).resolve()),
+        },
+    )
     return {"status": "success", "run_id": run_id, "rollouts": rollouts}
 
 @app.get("/rollouts_files")
@@ -1913,6 +2037,25 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
     try:
         
         env = make_reward_wrapped_env(env_name, run_id=run_id, render_mode="rgb_array")
+        log_run_event(
+            "rollout_session_started",
+            run_id=run_id,
+            env_name=env_name,
+            details={
+                "train_mode": bool(train_mode),
+                "train_steps": int(train_steps),
+                "send_frame_interval": int(number_of_steps_dictionary.get(run_id, 5)),
+                "playback_delay_sec": float(time_intervals.get(run_id, 0.05)),
+            },
+        )
+        log_reward_spec_snapshot(
+            run_id=run_id,
+            env_name=env_name,
+            terms=get_reward_terms_for_run(run_id, env_name),
+            task_config=get_task_config_for_run(run_id, env_name),
+            source="rollout_session_start",
+            details={"train_mode": bool(train_mode)},
+        )
         #env = Monitor(env)
         model = None
         print("Model loaded: ", model)

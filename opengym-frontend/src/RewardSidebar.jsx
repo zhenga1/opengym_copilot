@@ -92,7 +92,13 @@ function RewardSidebar({
       for (const key of visibleTermKeys) {
         next[key] = prev[key] ?? false;
       }
-      return next;
+      const prevKeys = Object.keys(prev);
+      const nextKeys = Object.keys(next);
+      const sameLength = prevKeys.length === nextKeys.length;
+      const sameValues =
+        sameLength &&
+        nextKeys.every((key) => prev[key] === next[key]);
+      return sameValues ? prev : next;
     });
   }, [visibleTermKeys]);
 
@@ -141,25 +147,28 @@ function RewardSidebar({
     width: '360px',
     maxHeight: 'calc(100vh - 32px)',
     overflowY: 'auto',
-    background: 'linear-gradient(180deg, #0f172a, #111827)',
+    background:
+      'radial-gradient(circle at top left, rgba(96,165,250,0.22), transparent 26%), linear-gradient(180deg, rgba(15,23,42,0.96), rgba(15,23,42,0.92))',
     color: '#e5eefb',
-    borderRadius: '16px',
+    borderRadius: '24px',
     padding: '1rem',
-    boxShadow: '0 20px 44px rgba(15, 23, 42, 0.34)',
+    boxShadow: '0 28px 64px rgba(15, 23, 42, 0.34)',
     position: 'fixed',
     left: `${panelPosition.x}px`,
     top: `${panelPosition.y}px`,
     zIndex: 50,
     userSelect: isDragging ? 'none' : 'auto',
-    border: '1px solid rgba(148, 163, 184, 0.18)',
+    border: '1px solid rgba(148, 163, 184, 0.2)',
+    backdropFilter: 'blur(20px)',
   };
 
   const cardStyle = {
     backgroundColor: 'rgba(255, 255, 255, 0.06)',
-    border: '1px solid rgba(148, 163, 184, 0.18)',
-    borderRadius: '12px',
+    border: '1px solid rgba(148, 163, 184, 0.14)',
+    borderRadius: '18px',
     padding: '0.85rem',
     marginTop: '0.9rem',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05)',
   };
 
   const sectionHeaderStyle = {

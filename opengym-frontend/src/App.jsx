@@ -13,6 +13,10 @@ const emptySidebarState = {
   availableRewardVariables: [],
   rewardFormulaExamples: [],
   rewardSourceLinks: [],
+  savedRewardConfigFiles: [],
+  selectedRewardConfigFile: '',
+  rewardConfigSaveName: '',
+  rewardConfigSaveSourceType: 'manual',
   taskGoal: '',
   taskProposal: null,
   taskProposalLoading: false,
@@ -29,6 +33,11 @@ const emptySidebarState = {
   onTaskGoalChange: () => {},
   onProposeTaskConfig: () => {},
   onApplyTaskProposal: () => {},
+  onRewardConfigFileSelect: () => {},
+  onRewardConfigSaveNameChange: () => {},
+  onRewardConfigSaveSourceTypeChange: () => {},
+  onSaveRewardConfigSnapshot: () => {},
+  onLoadRewardConfigSnapshot: () => {},
 };
 
 function App() {
@@ -82,70 +91,39 @@ function App() {
   };
 
   return (
-    <div
-      style={{
-        padding: '2rem',
-        fontFamily: 'Segoe UI, sans-serif',
-        maxWidth: '1500px',
-        margin: '0 auto',
-        textAlign: 'center',
-      }}
-    >
-      <div style={{ marginBottom: '1rem' }}>
-        <button onClick={prev} disabled={currentIndex === 0}> <span>&#8592;</span> </button>
-
-        <button
-          onClick={addRollout}
-          style={{
-            margin: '0 1rem',
-            backgroundColor: '#8b5cf6',
-            color: 'white',
-            padding: '0.5rem 1rem',
-            borderRadius: '8px',
-            border: 'none',
-            cursor: 'pointer',
-            fontWeight: 'bold',
-          }}
-        >
-          Add Rollout
-        </button>
-
-        <button
-          onClick={removeRollout}
-          style={{
-            margin: '0 1rem',
-            backgroundColor: '#8b5cf6',
-            color: 'white',
-            padding: '0.5rem 1rem',
-            borderRadius: '8px',
-            border: 'none',
-            cursor: 'pointer',
-            fontWeight: 'bold',
-          }}
-        >
-          Remove Rollout
-        </button>
-
-        <button
-          onClick={next}
-          disabled={currentIndex >= windows.length - 1}
-        > <span>&#8594;</span> </button>
-      </div>
+    <div className="app-shell">
+      <header className="app-topbar">
+        <div className="app-brand-block">
+          <div className="app-kicker">Reward Engineering Workbench</div>
+          <h1 className="app-title">OpenGym Copilot</h1>
+          <p className="app-subtitle">
+            Tune rewards, compare policies, and inspect failures with a cleaner training and rollout workflow.
+          </p>
+        </div>
+        <div className="app-toolbar">
+          <button className="nav-button" onClick={prev} disabled={currentIndex === 0}>
+            <span>&#8592;</span>
+          </button>
+          <button onClick={addRollout} className="app-action-button primary">
+            Add Rollout
+          </button>
+          <button onClick={removeRollout} className="app-action-button ghost">
+            Remove Rollout
+          </button>
+          <button className="nav-button" onClick={next} disabled={currentIndex >= windows.length - 1}>
+            <span>&#8594;</span>
+          </button>
+        </div>
+      </header>
 
       {windows.length > 0 ? (
-        <div
-          style={{
-            width: '100%',
-            paddingTop: '1rem',
-            paddingBottom: 16,
-          }}
-        >
+        <div className="app-workspace">
           {windows.map((win, i) => (
             <div
               key={win.id}
               style={{
                 display: i === currentIndex ? 'block' : 'none',
-                padding: '1rem',
+                padding: '0.25rem',
               }}
             >
               <RolloutWindow
@@ -163,7 +141,17 @@ function App() {
           <RewardSidebar {...sidebarState} />
         </div>
       ) : (
-        <p>No rollouts yet. Click "Add Rollout" to begin.</p>
+        <div className="app-empty-state">
+          <div className="app-empty-card">
+            <div className="app-empty-title">No rollouts yet</div>
+            <div className="app-empty-copy">
+              Start a rollout window to train a policy, inspect reward structure, and compare saved experiments.
+            </div>
+            <button onClick={addRollout} className="app-action-button primary">
+              Add First Rollout
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
