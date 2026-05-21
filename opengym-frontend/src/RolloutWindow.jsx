@@ -141,6 +141,44 @@ function RolloutWindow({
   // the FPS of rollout, default is 20FPS (delay = 1/20 = 0.05 seconds)
   const [rolloutSpeed, setRolloutSpeed] = useState(20);
   const [showSavePopup, setShowSavePopup] = useState(false);
+
+  // Upload the files logistics:
+  const [serverModels, setServerModels] = useState([]);
+  const [serverModelRecords, setServerModelRecords] = useState([]);
+  const [selectedServerModel, setSelectedServerModel] = useState(""); // "" = None
+  const [modelSortOrder, setModelSortOrder] = useState('newest');
+  const [rolloutFiles, setRolloutFiles] = useState([]);
+  const [selectedRolloutFile, setSelectedRolloutFile] = useState("");
+  const [showPopup, setShowPopup] = useState(false);
+  const [file, setFile] = useState(null);
+  // whether is using default policy or not
+  const [isUsingNone, setIsUsingNone] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [loadingSavedRollouts, setLoadingSavedRollouts] = useState(false);
+  const sortedServerModelRecords = useMemo(() => {
+    const records = Array.isArray(serverModelRecords) ? [...serverModelRecords] : [];
+    records.sort((left, right) => {
+      const leftTs = Number(left?.created_ts || 0);
+      const rightTs = Number(right?.created_ts || 0);
+      if (modelSortOrder === 'oldest') {
+        return leftTs - rightTs || String(left?.name || '').localeCompare(String(right?.name || ''));
+      }
+      return rightTs - leftTs || String(left?.name || '').localeCompare(String(right?.name || ''));
+    });
+    return records;
+  }, [modelSortOrder, serverModelRecords]);
+
+
+
+  const selectedServerModelRecord = useMemo(
+    () => sortedServerModelRecords.find((record) => record.name === selectedServerModel) || null,
+    [selectedServerModel, sortedServerModelRecords]
+  );
+  //set whether model parent directory file path is copied
+  const [filePathCopied, setFilePathCopied] = useState(false);
+  const [hoverOnFilePathButton, setHoverOnFilePathButton] = useState(false);
+  const [hoverOnDeleteAllTemp, setHoverOnDeleteAllTempButton] = useState(false);
+
   const setShowSavePopupToTrue = () => {
     setSavePopupMode('manual');
     setPendingModelSwitch(null);
@@ -185,22 +223,19 @@ function RolloutWindow({
     setRewardLogs((prev) => [entry, ...prev.slice(0, rewardLogLimit - 1)]);
   }, []);
 
-  // Upload the files logistics:
-  const [serverModels, setServerModels] = useState([]);
-  const [selectedServerModel, setSelectedServerModel] = useState(""); // "" = None
-  const [rolloutFiles, setRolloutFiles] = useState([]);
-  const [selectedRolloutFile, setSelectedRolloutFile] = useState("");
-  const [showPopup, setShowPopup] = useState(false);
-  const [file, setFile] = useState(null);
-  // whether is using default policy or not
-  const [isUsingNone, setIsUsingNone] = useState(true);
-  const [loading, setLoading] = useState(false);
-  const [loadingSavedRollouts, setLoadingSavedRollouts] = useState(false);
+  const formatModelTimestamp = useCallback((value) => {
+    if (!value) return 'Unknown date';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'Unknown date';
+    return date.toLocaleString();
+  }, []);
 
-  //set whether model parent directory file path is copied
-  const [filePathCopied, setFilePathCopied] = useState(false);
-  const [hoverOnFilePathButton, setHoverOnFilePathButton] = useState(false);
-  const [hoverOnDeleteAllTemp, setHoverOnDeleteAllTempButton] = useState(false);
+  const formatModelSize = useCallback((sizeBytes) => {
+    const size = Number(sizeBytes || 0);
+    if (!Number.isFinite(size) || size <= 0) return 'Unknown size';
+    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+    return `${(size / (1024 * 1024)).toFixed(2)} MB`;
+  }, []);
 
   const handleEnvChange = (e) => {
     if (isSavedViewer) return;
@@ -1443,7 +1478,7 @@ function RolloutWindow({
   //gets the frozen Path, so the default Path doesn't change too drastically. 
   useEffect(() => {
       if (showPathPopup && frozenPath === null) {
-        setFrozenPath(`models/ppo_model_${envName}_${timestamp}.zip`);
+        setFrozenPath(`ppo_model_${envName}_${timestamp}.zip`);
       }
       if (!showPathPopup) {
         // reset so a new one is generated next time
@@ -1495,6 +1530,7 @@ function RolloutWindow({
         "training_hyperparams": nextTrainingHyperparams,
       });
       setTrainingPath(path);
+      setReloadAllTempModelsSwitcher((prev) => !prev);
       setTrainingHyperparams(nextTrainingHyperparams);
       setTrainingAblationReport(null);
       setTrainingAblationStatus('idle');
@@ -1666,9 +1702,14 @@ function RolloutWindow({
     const fetchModels = async () => {
       try {
         const res = await apiClient.get("/models");
-        // Get the models that currently exist
-        // console.log("Available models: ", res); // DEBUG:FRONTEND
-        setServerModels(res.data.models || []);
+        const modelNames = Array.isArray(res.data?.models) ? res.data.models : [];
+        const modelRecords = Array.isArray(res.data?.model_records) ? res.data.model_records : [];
+        setServerModels(modelNames);
+        setServerModelRecords(modelRecords);
+        setSelectedServerModel((prev) => {
+          if (prev && modelNames.includes(prev)) return prev;
+          return modelNames[0] || "";
+        });
       } catch (e) {
         console.error("List the models process has failed: Will retry in 5 seconds");
         //retry timeout = 5 seconds
@@ -2467,7 +2508,7 @@ function RolloutWindow({
       </button>
       <SetPathPopup
         isOpen={showPathPopup}
-        defaultPath={frozenPath !== null ? frozenPath : `models/ppo_model_${envName}_${timestamp}.zip`}
+        defaultPath={frozenPath !== null ? frozenPath : `ppo_model_${envName}_${timestamp}.zip`}
         defaultHyperparams={trainingHyperparams}
         onConfirm={saveTrainingPath}
         onClose={closePathPopup}
@@ -3196,15 +3237,25 @@ function RolloutWindow({
             </div>
           )}
           <select
+            value={modelSortOrder}
+            onChange={(e) => setModelSortOrder(e.target.value)}
+            disabled={isSavedViewer}
+            style={{ padding: '.35rem .5rem', minWidth: 132, borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: 'white' }}
+            title="Sort saved models by creation time"
+          >
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+            </select>
+          <select
             id="serverModel"
             value={selectedServerModel}
             onChange={(e) => setSelectedServerModel(e.target.value)}
             disabled={isSavedViewer}
-            style={{ padding: '.35rem .5rem', minWidth: 260 }}
+            style={{ padding: '.35rem .5rem', minWidth: 420, maxWidth: 520 }}
           >
               <option value="">(None — random policy)</option>
-              {serverModels.map(m => (
-                <option key={m} value={m}>{m}</option>
+              {sortedServerModelRecords.map((model) => (
+                <option key={model.name} value={model.name}>{`${model.env_name || 'Model'} | ${formatModelTimestamp(model.created_at)} | ${model.name}`}</option>
               ))}
             </select>
           <button
@@ -3261,6 +3312,28 @@ function RolloutWindow({
               Use None
             </button>
           </div>
+          {!isSavedViewer && selectedServerModelRecord && (
+            <div
+              style={{
+                marginTop: '0.85rem',
+                padding: '0.8rem 0.9rem',
+                borderRadius: '12px',
+                border: '1px solid rgba(148, 163, 184, 0.18)',
+                background: 'rgba(255,255,255,0.66)',
+                color: '#475569',
+                fontSize: '0.84rem',
+                lineHeight: 1.5,
+                textAlign: 'left',
+              }}
+            >
+              <div style={{ fontWeight: 800, color: '#334155', marginBottom: '0.25rem' }}>
+                {selectedServerModelRecord.env_name || 'Saved model'}
+              </div>
+              <div>Created: {formatModelTimestamp(selectedServerModelRecord.created_at)}</div>
+              <div>Size: {formatModelSize(selectedServerModelRecord.size_bytes)}</div>
+              <div>File: {selectedServerModelRecord.name}</div>
+            </div>
+          )}
         </div>
       </div>
       <div

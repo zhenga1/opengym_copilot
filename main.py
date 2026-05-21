@@ -160,8 +160,15 @@ timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
 def build_default_model_path(selected_env_name: str) -> str:
+    # This builds a string path to a file 
     safe_env_name = (selected_env_name or "env").replace("/", "_")
     return str((MODELS_DIR / f"ppo_model_{safe_env_name}_{timestamp}.zip").resolve())
+
+
+def build_default_model_filename(selected_env_name: str, run_id: str | None = None) -> str:
+    # This builds a string path to a file and replaces any invalid characters with _
+    safe_env_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", (selected_env_name or "env").strip() or "env")
+    return sanitize_storage_name(f"ppo_model_{safe_env_name}_{run_id or timestamp}", ".zip")
 
 
 def sanitize_storage_name(name: str | None, suffix: str) -> str:
@@ -169,6 +176,7 @@ def sanitize_storage_name(name: str | None, suffix: str) -> str:
     # and assigns it to raw_name variable
     # then gives a default name if the candidate name (Path(raw_name).name) is empty after stripping
     raw_name = (name or "").strip()
+    # gets the CLEAN name from the raw name without the whitespaces
     candidate = Path(raw_name).name
     if not candidate:
         candidate = f"default{suffix}"
@@ -179,7 +187,7 @@ def sanitize_storage_name(name: str | None, suffix: str) -> str:
 
 def resolve_model_output_path(requested_path: str | None, run_id: str | None, selected_env_name: str) -> Path:
     # Called to get a path to save the model to
-    default_name = sanitize_storage_name(f"ppo_model_{selected_env_name}_{run_id or 'session'}", ".zip")
+    default_name = build_default_model_filename(selected_env_name, run_id or "session")
     if not requested_path or not requested_path.strip():
         return (MODELS_DIR / default_name).resolve()
 
@@ -200,6 +208,9 @@ def resolve_model_output_path(requested_path: str | None, run_id: str | None, se
     else:
         # basically resolve it relative to MODELS_DIR
         safe_parts = [part for part in candidate.parts if part not in {"", ".", ".."}]
+        if safe_parts and safe_parts[0].lower() == "models":
+            # forces a fix if the first part is "models", to avoid "models/models.zip"
+            safe_parts = safe_parts[1:]
         resolved = (MODELS_DIR / Path(*safe_parts)).resolve() if safe_parts else (MODELS_DIR / default_name).resolve()
 
     # then ensures the path ends with a ".zip" suffix
@@ -211,6 +222,58 @@ def resolve_model_output_path(requested_path: str | None, run_id: str | None, se
         raise HTTPException(status_code=400, detail="training output path must stay inside the managed models directory") from exc
     resolved.parent.mkdir(parents=True, exist_ok=True)
     return resolved
+
+
+def _parse_model_timestamp_from_name(filename: str) -> datetime | None:
+    matches = re.findall(r"(\d{8}_\d{6})", filename)
+    for value in reversed(matches):
+        try:
+            return datetime.strptime(value, "%Y%m%d_%H%M%S")
+        except ValueError:
+            continue
+    return None
+
+
+def _infer_env_name_from_model_name(filename: str) -> str | None:
+    stem = Path(filename).stem
+    if stem.startswith("ppo_model_"):
+        remainder = stem.removeprefix("ppo_model_")
+        timestamp_match = re.search(r"_\d{8}_\d{6}$", remainder)
+        if timestamp_match:
+            return remainder[:timestamp_match.start()] or None
+        run_match = re.search(r"_[0-9a-fA-F-]{6,}$", remainder)
+        if run_match:
+            return remainder[:run_match.start()] or None
+        return remainder or None
+    return None
+
+
+def list_model_records() -> list[dict[str, Any]]:
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    records: list[dict[str, Any]] = []
+    for path in MODELS_DIR.iterdir():
+        if not path.is_file() or path.suffix != ".zip":
+            continue
+        stat = path.stat()
+        parsed_dt = _parse_model_timestamp_from_name(path.name)
+        created_ts = parsed_dt.timestamp() if parsed_dt is not None else float(stat.st_mtime)
+        created_at = (
+            parsed_dt.isoformat(timespec="seconds")
+            if parsed_dt is not None
+            else datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds")
+        )
+        env_guess = _infer_env_name_from_model_name(path.name)
+        records.append({
+            "name": path.name,
+            "path": str(path.resolve()),
+            "created_at": created_at,
+            "created_ts": created_ts,
+            "size_bytes": int(stat.st_size),
+            "env_name": env_guess,
+            "is_temp": path.name.startswith("temp_"),
+            "display_name": env_guess or path.stem,
+        })
+    return records
 
 def encode_jpeg(frame_np, quality=80):
     # encode the frame_np to JPEG bytes with the given quality setting
@@ -1491,9 +1554,12 @@ from fastapi import UploadFile, File
 print("Models directory: ", MODELS_DIR)
 @app.get("/models")
 def list_models():
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    files = [path.name for path in MODELS_DIR.iterdir() if path.is_file() and path.suffix == ".zip"]
-    return {"models": sorted(files)}
+    records = list_model_records()
+    records.sort(key=lambda entry: (entry["created_ts"], entry["name"]))
+    return {
+        "models": [entry["name"] for entry in records],
+        "model_records": records,
+    }
 
 class RolloutSpeedRequest(BaseModel):
     run_id: str
