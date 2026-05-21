@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import {Line} from 'react-chartjs-2'
 import SetPathPopup from './SetPathPopup'
 import SaveRolloutPopup from './RolloutPopup'
@@ -9,6 +10,57 @@ import {Chart as ChartJS, LineElement, CategoryScale, LinearScale, PointElement}
 import { buildWebSocketUrl } from './runtimeConfig'
 
 ChartJS.register(LineElement, CategoryScale, LinearScale, PointElement);
+
+function InsightsModal({ isOpen, onClose, title, accentColor, description, children }) {
+  useEffect(() => {
+    if (!isOpen) {
+      return undefined;
+    }
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isOpen]);
+
+  if (!isOpen) {
+    return null;
+  }
+
+  // This renders the Insight Modal component as a portal
+  // What does this mean?
+  // We see that it renders the children within the popup-card--insights div and then 
+  // puts it within the div of the popup-backdrop. However, instead of rendering the whole structure inside of popup-backdrop,
+  // it renders the structure inside of popup-card--insights. This allows the insight modal to be rendered outside of the normal React component hierarchy, 
+  // which can be useful for modals and popups that need to overlay other content on the page without being affected by the parent components' styles or layout. 
+  // By using createPortal, we can ensure that the modal is rendered at the top level of the DOM, allowing it to function properly as an overlay.
+  
+  // This createPortal renders the InsightsModel as a child of the document.body element, ouside of hierarchy
+  // of react. 
+  return createPortal(
+    <div className="popup-backdrop" onClick={onClose}>
+      <div className="popup-card popup-card--insights" onClick={(event) => event.stopPropagation()}>
+        <div className="popup-header">
+          <div>{title}</div>
+          <button className="popup-close" onClick={onClose} aria-label="Close">x</button>
+        </div>
+        <div className="popup-body popup-body--scroll">
+          <div style={{ color: accentColor, fontSize: '1.1rem', fontWeight: 800, marginBottom: '0.45rem' }}>
+            {title}
+          </div>
+          <div style={{ color: '#64748b', fontSize: '0.9rem', marginBottom: '0.95rem', lineHeight: 1.55 }}>
+            {description}
+          </div>
+          {children}
+        </div>
+        <div className="popup-actions">
+          <button className="btn secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
 
 function RolloutWindow({
   isActive = false,
@@ -2914,15 +2966,15 @@ function RolloutWindow({
         </div>
       </div>
     )}
-    {!isSavedViewer && showTrainingInsights && trainingInsights && (
-      <div style={{ ...sectionPanelStyle, marginTop: '1rem' }}>
-        <h3 style={{ fontSize: '1.2rem', color: '#0f766e', marginTop: 0 }}>Deterministic Training Insights</h3>
-        <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
-          Outcome-focused summaries derived from recent training episodes, using reward-term contrasts and terminal-window comparisons.
-        </div>
-        {renderInsightCards(trainingInsights, 'Training insights will appear after enough completed episodes are available.')}
-      </div>
-    )}
+    <InsightsModal
+      isOpen={!isSavedViewer && showTrainingInsights}
+      onClose={() => setShowTrainingInsights(false)}
+      title="Deterministic Training Insights"
+      accentColor="#0f766e"
+      description="Outcome-focused summaries derived from recent training episodes, using reward-term contrasts and terminal-window comparisons."
+    >
+      {renderInsightCards(trainingInsights, 'Training insights will appear after enough completed episodes are available.')}
+    </InsightsModal>
     {!isSavedViewer && (trainingAblationReport || trainingAblationStatus === 'running' || trainingAblationStatus === 'error') && (
       <div style={{ ...sectionPanelStyle, marginTop: '1rem' }}>
         <h3 style={{ fontSize: '1.2rem', color: '#7c3aed', marginTop: 0 }}>Post-Training Reward Ablation</h3>
@@ -3294,6 +3346,15 @@ function RolloutWindow({
           {'>'}
         </button>
       </div>
+      <InsightsModal
+        isOpen={!isSavedViewer && showRolloutInsights}
+        onClose={() => setShowRolloutInsights(false)}
+        title="Deterministic Rollout Insights"
+        accentColor="#2563eb"
+        description="Recent rollout episodes are analyzed for terms that separate success from failure and for late-episode failure signatures."
+      >
+        {renderInsightCards(rolloutInsights, 'Rollout insights will appear after enough recent rollout episodes have been observed.')}
+      </InsightsModal>
       
       {/* Playback Controls */}
       {currentRolloutWorkspaceView.key === 'visualization' && (
@@ -3356,15 +3417,6 @@ function RolloutWindow({
           <span style={{ color: '#64748b', fontSize: '0.85rem' }}>ms/frame</span>
         </div>
       </div>
-      {showRolloutInsights && !isSavedViewer && (
-        <div style={{ ...sectionPanelStyle, marginTop: 0, marginBottom: '0.9rem' }}>
-          <h3 style={{ fontSize: '1.2rem', color: '#2563eb', marginTop: 0 }}>Deterministic Rollout Insights</h3>
-          <div style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.8rem' }}>
-            Recent rollout episodes are analyzed for terms that separate success from failure and for late-episode failure signatures.
-          </div>
-          {renderInsightCards(rolloutInsights, 'Rollout insights will appear after enough recent rollout episodes have been observed.')}
-        </div>
-      )}
       <p style={{ fontSize: '1rem' }}>
         Simulating Episode <strong style={{ color: '#0ea5e9' }}>{selectedVisualizationEpisode ?? episodeNumForSimulation}</strong>
       </p>

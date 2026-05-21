@@ -168,6 +168,10 @@
   width: min(760px, 96vw);
 }
 
+.popup-card--insights {
+  width: min(820px, 96vw);
+}
+
 .popup-header {
   display: flex;
   justify-content: space-between;
@@ -276,6 +280,11 @@
 
   .popup-card--form {
     width: min(100%, 560px);
+    max-height: calc(100dvh - 24px);
+  }
+
+  .popup-card--insights {
+    width: min(100%, 640px);
     max-height: calc(100dvh - 24px);
   }
 
