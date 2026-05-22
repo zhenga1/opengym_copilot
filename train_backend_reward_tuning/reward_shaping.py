@@ -4,6 +4,8 @@ import ast
 import math
 import re
 from typing import Any, Callable
+import logging
+from run_logging import configure_backend_logging
 
 import gymnasium as gym
 import numpy as np
@@ -13,6 +15,7 @@ from train_backend_reward_tuning.reward_templates import (
     reward_template_for_env,
 )
 
+logger = configure_backend_logging(level=logging.INFO)
 
 def infer_episode_outcome(info: dict[str, Any], terminated: bool, truncated: bool) -> tuple[str, str]:
     is_success = info.get("is_success")
@@ -96,7 +99,8 @@ def reward_expression_context(
         if _REWARD_KEY_PATTERN.match(key):
             context[key] = float(value)
 
-    flat_obs = _flat_values(obs)
+    # flatten 
+    flat_obs = _flat_values(obs) 
     flat_action = _flat_values(action)
     flat_prev_action = _flat_values(previous_action, default_length=flat_action.size or 1)
 
@@ -195,8 +199,8 @@ def reward_expression_variable_names(
     variable_names: list[str] = []
     for spec in reward_expression_variable_specs(
         env_name=env_name,
-        obs_size=obs_size,
-        action_size=action_size,
+        obs_size=obs_size, # flattened obs
+        action_size=action_size, # flattened action
         include_previous_action=include_previous_action,
         raw_term_keys=raw_term_keys,
     ):
@@ -219,6 +223,25 @@ def reward_expression_variable_specs(
     include_previous_action: bool = True,
     raw_term_keys: list[str] | None = None,
 ) -> list[dict[str, Any]]:
+    # The following specs are always available.
+    # The variables are 
+    # - step: the current episode timestep, starting at 1
+    # - time_sec: the approximate elapsed episode time in seconds
+    # - native: the native reward returned by the environment
+    """
+    This code snippet defines a function called `reward_expression_variable_specs` that generates a list of dictionaries representing variable specifications for a reward expression in a reinforcement learning environment. The function takes several parameters including `env_name`, `obs_size`, and `action_size`, and has optional parameters like `include_previous_action` and `raw_term_keys`. 
+
+    The function starts by initializing a list called `specs` with three dictionaries representing the `step`, `time_sec`, and `native` variables. It then calls another function `_reward_observation_specs` to get a set of observation specifications based on the `env_name` and `obs_size`. 
+
+    The function then iterates over the range of `obs_size`, checking if each observation specification exists in the set. If it does, it extracts the display name and aliases from the specification and appends them to the `specs` list. If it doesn't exist, it adds a new dictionary representing the observation component to the `specs` list.
+
+    Next, the function iterates over the range of `action_size`, adding dictionaries representing the action components to the `specs` list. It also checks if `include_previous_action` is `True`, and if so, adds dictionaries representing the previous action components to the `specs` list.
+
+    Finally, the function iterates over the `raw_term_keys` list (if provided) and adds dictionaries representing the raw reward features to the `specs` list.
+
+    The function returns the `specs` list containing the variable specifications.
+
+    """
     specs: list[dict[str, Any]] = [
         {
             "name": "step",
@@ -242,9 +265,15 @@ def reward_expression_variable_specs(
             "aliases": ["native_reward"],
         }
     ]
+
+    # Add observation variables
+    # Add the aliases from the observation specs if available, otherwise add generic obs_i variables.
+
+    # it takes a description of every observation component from the environment-specific function _reward_observation_specs, which returns a dictionary mapping observation indices to their specifications. For each observation index up to obs_size, it checks if there is a corresponding specification in obs_specs. If there is, it extracts the display name and aliases from the specification and adds them to the specs list. If there isn't, it adds a generic specification for that observation index with a default display name and description.
     obs_specs = _reward_observation_specs(env_name or "", obs_size)
     for index in range(max(0, obs_size)):
         obs_spec = obs_specs.get(index)
+
         if obs_spec is not None:
             alias_values = [obs_spec.get("display_name"), *obs_spec.get("aliases", [])]
             deduped_aliases: list[str] = []
@@ -265,6 +294,7 @@ def reward_expression_variable_specs(
             }
         )
 
+    # Add action variables as observations. 
     for index in range(max(1, action_size)):
         action_aliases = [f"current_action_{index}"]
         if action_size == 1 and index == 0:
@@ -278,6 +308,7 @@ def reward_expression_variable_specs(
                 "aliases": [action_aliases[0], *action_aliases[1:]],
             }
         )
+    # Add previous action variables as observations
     if include_previous_action:
         for index in range(max(1, action_size)):
             previous_aliases = [f"previous_action_{index}"]
@@ -304,12 +335,31 @@ def reward_expression_variable_specs(
                 "aliases": [],
             }
         )
+    
+    # to see what the signals are
+    logger.info("Specs: %s", specs)
     return specs
 
 
 def _reward_observation_specs(env_name: str, obs_size: int) -> dict[int, dict[str, Any]]:
+    """
+    Generate dictionary of observation specifications for a variety of environments
+
+    Two parameters taken: env_name and obs_size
+        - env_name is used to determine the prefix of the environment (e.g., "cartpole" from "CartPole-v1") 
+        and select the appropriate set of observation specifications based on that prefix.
+        - obs_size is used to determine how many observation components to generate specifications for. 
+        The function iterates from 0 to obs_size-1 and checks if there are predefined specifications for 
+        each index based on the environment prefix. If there are, it uses those specifications; otherwise, 
+        it generates generic specifications for any remaining indices.
+    
+    The function returns a dictionary mapping observation indices to their specifications, which include the name, source, display name, description, and aliases for each observation component.
+    """
     prefix = (env_name or "").split("/", 1)[-1].split("-", 1)[0].lower()
 
+    """
+    Create tuple of index and dictionary of observation specifications using the make_spec function
+    """
     def make_spec(index: int, display_name: str, description: str, *aliases: str) -> tuple[int, dict[str, Any]]:
         clean_aliases: list[str] = []
         for alias_name in aliases:

@@ -10,6 +10,10 @@ function RewardSidebar({
   availableRewardVariables,
   rewardFormulaExamples,
   rewardSourceLinks,
+  savedRewardConfigFiles,
+  selectedRewardConfigFile,
+  rewardConfigSaveName,
+  rewardConfigSaveSourceType,
   taskGoal,
   taskProposal,
   taskProposalLoading,
@@ -26,12 +30,18 @@ function RewardSidebar({
   onTaskGoalChange,
   onProposeTaskConfig,
   onApplyTaskProposal,
+  onRewardConfigFileSelect,
+  onRewardConfigSaveNameChange,
+  onRewardConfigSaveSourceTypeChange,
+  onSaveRewardConfigSnapshot,
+  onLoadRewardConfigSnapshot,
 }) {
   const safeRewardConfig = Array.isArray(rewardConfig) ? rewardConfig : [];
   const safeRewardLogs = Array.isArray(rewardLogs) ? rewardLogs : [];
   const safeRewardVariables = Array.isArray(availableRewardVariables) ? availableRewardVariables : [];
   const safeFormulaExamples = Array.isArray(rewardFormulaExamples) ? rewardFormulaExamples : [];
   const safeRewardSourceLinks = Array.isArray(rewardSourceLinks) ? rewardSourceLinks : [];
+  const safeSavedRewardConfigFiles = Array.isArray(savedRewardConfigFiles) ? savedRewardConfigFiles : [];
   const rolloutEntries = Object.entries(latestRolloutBreakdown || {}).filter(([key, value]) => key !== 'total' && Number.isFinite(value));
   const trainingEntries = Object.entries(latestTrainingBreakdown || {}).filter(([key, value]) => key !== 'total' && Number.isFinite(value));
   const fallbackEntries = rolloutEntries.length > 0 ? rolloutEntries : trainingEntries;
@@ -82,7 +92,13 @@ function RewardSidebar({
       for (const key of visibleTermKeys) {
         next[key] = prev[key] ?? false;
       }
-      return next;
+      const prevKeys = Object.keys(prev);
+      const nextKeys = Object.keys(next);
+      const sameLength = prevKeys.length === nextKeys.length;
+      const sameValues =
+        sameLength &&
+        nextKeys.every((key) => prev[key] === next[key]);
+      return sameValues ? prev : next;
     });
   }, [visibleTermKeys]);
 
@@ -131,25 +147,28 @@ function RewardSidebar({
     width: '360px',
     maxHeight: 'calc(100vh - 32px)',
     overflowY: 'auto',
-    background: 'linear-gradient(180deg, #0f172a, #111827)',
+    background:
+      'radial-gradient(circle at top left, rgba(96,165,250,0.22), transparent 26%), linear-gradient(180deg, rgba(15,23,42,0.96), rgba(15,23,42,0.92))',
     color: '#e5eefb',
-    borderRadius: '16px',
+    borderRadius: '24px',
     padding: '1rem',
-    boxShadow: '0 20px 44px rgba(15, 23, 42, 0.34)',
+    boxShadow: '0 28px 64px rgba(15, 23, 42, 0.34)',
     position: 'fixed',
     left: `${panelPosition.x}px`,
     top: `${panelPosition.y}px`,
     zIndex: 50,
     userSelect: isDragging ? 'none' : 'auto',
-    border: '1px solid rgba(148, 163, 184, 0.18)',
+    border: '1px solid rgba(148, 163, 184, 0.2)',
+    backdropFilter: 'blur(20px)',
   };
 
   const cardStyle = {
     backgroundColor: 'rgba(255, 255, 255, 0.06)',
-    border: '1px solid rgba(148, 163, 184, 0.18)',
-    borderRadius: '12px',
+    border: '1px solid rgba(148, 163, 184, 0.14)',
+    borderRadius: '18px',
     padding: '0.85rem',
     marginTop: '0.9rem',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05)',
   };
 
   const sectionHeaderStyle = {
@@ -223,9 +242,9 @@ function RewardSidebar({
           <div style={{ color: '#93c5fd', fontSize: '0.9rem', marginTop: '0.25rem' }}>{envName}</div>
           {safeRewardSourceLinks.length > 0 && (
             <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', marginTop: '0.45rem' }}>
-              {safeRewardSourceLinks.map((link) => (
+              {safeRewardSourceLinks.map((link, index) => (
                 <a
-                  key={link.path}
+                  key={link.path || link.label || `reward-source-${index}`}
                   href={link.path}
                   style={{
                     fontSize: '0.75rem',
@@ -358,8 +377,8 @@ function RewardSidebar({
                 {Array.isArray(taskProposal.task_params) && taskProposal.task_params.length > 0 && (
                   <div style={{ marginTop: '0.7rem' }}>
                     <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0' }}>Task Parameters</div>
-                    {taskProposal.task_params.map((param) => (
-                      <div key={param.key} style={{ marginTop: '0.35rem', fontSize: '0.74rem', color: '#cbd5e1' }}>
+                    {taskProposal.task_params.map((param, index) => (
+                      <div key={param.key || `task-param-${index}`} style={{ marginTop: '0.35rem', fontSize: '0.74rem', color: '#cbd5e1' }}>
                         <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace', color: '#7dd3fc' }}>{param.key}</span>
                         {' = '}
                         <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{String(param.value)}</span>
@@ -371,8 +390,8 @@ function RewardSidebar({
                 {Array.isArray(taskProposal.derived_signals) && taskProposal.derived_signals.length > 0 && (
                   <div style={{ marginTop: '0.75rem' }}>
                     <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0' }}>Derived Signals</div>
-                    {taskProposal.derived_signals.map((signal) => (
-                      <div key={signal.key} style={{ marginTop: '0.35rem' }}>
+                    {taskProposal.derived_signals.map((signal, index) => (
+                      <div key={signal.key || `derived-signal-${index}`} style={{ marginTop: '0.35rem' }}>
                         <div style={{ fontSize: '0.74rem', color: '#7dd3fc', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
                           {signal.key}
                         </div>
@@ -389,8 +408,8 @@ function RewardSidebar({
                 {Array.isArray(taskProposal.reward_terms) && taskProposal.reward_terms.length > 0 && (
                   <div style={{ marginTop: '0.75rem' }}>
                     <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0' }}>Proposed Reward Terms</div>
-                    {taskProposal.reward_terms.map((term) => (
-                      <div key={term.key} style={{ marginTop: '0.4rem' }}>
+                    {taskProposal.reward_terms.map((term, index) => (
+                      <div key={term.key || `proposal-reward-term-${index}`} style={{ marginTop: '0.4rem' }}>
                         <div style={{ fontSize: '0.74rem', color: '#e2e8f0' }}>
                           {term.label || term.key}
                           <span style={{ marginLeft: '0.45rem', color: '#7dd3fc', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
@@ -619,6 +638,100 @@ function RewardSidebar({
             <div style={{ marginTop: '0.55rem', color: '#94a3b8', fontSize: '0.8rem' }}>{rewardConfigStatus}</div>
 
             <div style={{ marginTop: '0.8rem', borderTop: '1px solid rgba(148, 163, 184, 0.12)', paddingTop: '0.8rem' }}>
+              <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#e2e8f0' }}>Save / Load Reward Config</div>
+              <div style={{ color: '#94a3b8', fontSize: '0.74rem', marginTop: '0.35rem', lineHeight: 1.4 }}>
+                Save the current reward definition separately from the policy checkpoint, then reload it later to restore the matching breakdown logic.
+              </div>
+              <div style={{ display: 'flex', gap: '0.45rem', marginTop: '0.6rem' }}>
+                <input
+                  type="text"
+                  value={rewardConfigSaveName || ''}
+                  onChange={(event) => onRewardConfigSaveNameChange(event.target.value)}
+                  placeholder="cartpole_sway_llm.json"
+                  style={{
+                    flex: 1,
+                    padding: '0.45rem 0.55rem',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(148, 163, 184, 0.3)',
+                    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+                    color: '#f8fafc',
+                  }}
+                />
+                <select
+                  value={rewardConfigSaveSourceType || 'manual'}
+                  onChange={(event) => onRewardConfigSaveSourceTypeChange(event.target.value)}
+                  style={{
+                    width: '110px',
+                    padding: '0.45rem 0.5rem',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(148, 163, 184, 0.3)',
+                    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+                    color: '#f8fafc',
+                  }}
+                >
+                  <option value="manual">manual</option>
+                  <option value="llm">llm</option>
+                  <option value="heuristic">heuristic</option>
+                </select>
+              </div>
+              <div style={{ display: 'flex', gap: '0.45rem', marginTop: '0.55rem' }}>
+                <button
+                  type="button"
+                  onClick={onSaveRewardConfigSnapshot}
+                  disabled={rewardConfigLoading}
+                  style={{
+                    flex: 1,
+                    padding: '0.55rem 0.8rem',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(125, 211, 252, 0.28)',
+                    backgroundColor: 'rgba(14, 165, 233, 0.18)',
+                    color: '#bae6fd',
+                    fontWeight: 700,
+                    cursor: rewardConfigLoading ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Save Config
+                </button>
+              </div>
+              <div style={{ display: 'flex', gap: '0.45rem', marginTop: '0.55rem' }}>
+                <select
+                  value={selectedRewardConfigFile || ''}
+                  onChange={(event) => onRewardConfigFileSelect(event.target.value)}
+                  style={{
+                    flex: 1,
+                    padding: '0.45rem 0.55rem',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(148, 163, 184, 0.3)',
+                    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+                    color: '#f8fafc',
+                  }}
+                >
+                  <option value="">Select saved reward config</option>
+                  {safeSavedRewardConfigFiles.map((fileName, index) => (
+                    <option key={fileName || `saved-reward-config-${index}`} value={fileName}>{fileName}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={onLoadRewardConfigSnapshot}
+                  disabled={rewardConfigLoading || !selectedRewardConfigFile}
+                  style={{
+                    width: '96px',
+                    padding: '0.55rem 0.8rem',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(74, 222, 128, 0.28)',
+                    backgroundColor: 'rgba(34, 197, 94, 0.15)',
+                    color: '#bbf7d0',
+                    fontWeight: 700,
+                    cursor: rewardConfigLoading || !selectedRewardConfigFile ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Load
+                </button>
+              </div>
+            </div>
+
+            <div style={{ marginTop: '0.8rem', borderTop: '1px solid rgba(148, 163, 184, 0.12)', paddingTop: '0.8rem' }}>
               <button type="button" style={sectionHeaderStyle} onClick={() => toggleSection('formulaHelp')}>
                 <span>Formula Variables</span>
                 <span>{openSections.formulaHelp ? '▾' : '▸'}</span>
@@ -630,9 +743,9 @@ function RewardSidebar({
                   </div>
                   {safeFormulaExamples.length > 0 && (
                     <div style={{ marginTop: '0.55rem' }}>
-                      {safeFormulaExamples.map((example) => (
+                      {safeFormulaExamples.map((example, index) => (
                         <div
-                          key={example}
+                          key={example || `formula-example-${index}`}
                           style={{
                             fontFamily: 'ui-monospace, SFMono-Regular, monospace',
                             fontSize: '0.75rem',
@@ -646,9 +759,9 @@ function RewardSidebar({
                     </div>
                   )}
                   <div style={{ marginTop: '0.55rem', maxHeight: '180px', overflowY: 'auto' }}>
-                    {safeRewardVariables.map((variable) => (
+                    {safeRewardVariables.map((variable, index) => (
                       <div
-                        key={variable.name}
+                        key={variable.name || variable.display_name || `reward-variable-${index}`}
                         style={{
                           borderTop: '1px solid rgba(148, 163, 184, 0.08)',
                           padding: '0.35rem 0',

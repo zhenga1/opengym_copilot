@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 const SetPathPopup = ({
   isOpen,
@@ -8,7 +9,7 @@ const SetPathPopup = ({
   onClose,
 }) => {
   const [path, setPath] = useState(defaultPath);
-  const [device, setDevice] = useState("cuda"); // default gpu = cuda
+  const [device, setDevice] = useState("cuda");
   const [hyperparams, setHyperparams] = useState({
     learning_rate: 0.0003,
     lr_schedule: "constant",
@@ -24,18 +25,26 @@ const SetPathPopup = ({
     model_size: "medium",
   });
   const inputRef = useRef(null);
-  const frozenDefaultRef = useRef(null);
 
-  // reset path when opened & focus the input
   useEffect(() => {
     if (isOpen) {
-      frozenDefaultRef.current = defaultPath; // store the initial value
       setPath(defaultPath);
+      setDevice("cuda");
       setHyperparams((prev) => ({ ...prev, ...defaultHyperparams }));
-      // focus after mount
       setTimeout(() => inputRef.current?.focus(), 0);
     }
   }, [isOpen, defaultPath, defaultHyperparams]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return undefined;
+    }
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isOpen]);
 
   const updateHyperparam = (key, value, cast = Number) => {
     setHyperparams((prev) => ({
@@ -44,7 +53,6 @@ const SetPathPopup = ({
     }));
   };
 
-  // keyboard: Enter confirm, Esc close
   const onKeyDown = (e) => {
     if (e.key === "Enter") onConfirm?.(path, device, hyperparams);
     if (e.key === "Escape") onClose?.();
@@ -52,15 +60,15 @@ const SetPathPopup = ({
 
   if (!isOpen) return null;
 
-  return (
+  return createPortal(
     <div className="popup-backdrop" onClick={onClose}>
-      <div className="popup-card" onClick={(e) => e.stopPropagation()}>
+      <div className="popup-card popup-card--form" onClick={(e) => e.stopPropagation()}>
         <div className="popup-header">
           <div>Set Training Path</div>
-          <button className="popup-close" onClick={onClose} aria-label="Close">×</button>
+          <button className="popup-close" onClick={onClose} aria-label="Close">x</button>
         </div>
 
-        <div className="popup-body">
+        <div className="popup-body popup-body--scroll">
           <label className="popup-label">Training output filename</label>
           <input
             ref={inputRef}
@@ -71,21 +79,23 @@ const SetPathPopup = ({
             placeholder={defaultPath}
           />
           <div className="popup-hint">
-            This is a <strong>server</strong> path. Browsers can’t browse your server’s filesystem,
+            This is a <strong>server</strong> path. Browsers can&apos;t browse your server&apos;s filesystem,
             but you can type or paste it here.
           </div>
 
-          <label style={{ display: "block", marginBottom: 6 }}>Training Device</label>
+          <div className="popup-section">
+            <label className="popup-label">Training Device</label>
             <select
-            value={device}
-            onChange={(e) => setDevice(e.target.value === "gpu" ? "cuda" : "cpu")}
-            style={{ width: "100%", marginBottom: 12 }}
+              className="popup-input"
+              value={device}
+              onChange={(e) => setDevice(e.target.value)}
             >
-            <option value="gpu">GPU</option>
-            <option value="cpu">CPU</option>
+              <option value="cuda">GPU</option>
+              <option value="cpu">CPU</option>
             </select>
+          </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+          <div className="popup-grid">
             <div>
               <label className="popup-label">Learning Rate</label>
               <input className="popup-input" type="number" step="0.0001" value={hyperparams.learning_rate} onChange={(e) => updateHyperparam("learning_rate", e.target.value)} />
@@ -150,7 +160,8 @@ const SetPathPopup = ({
           <button className="btn primary" onClick={() => onConfirm?.(path, device, hyperparams)}>Save (Enter)</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 
