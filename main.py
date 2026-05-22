@@ -2253,13 +2253,12 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
             env.close()
 
 
-@app.get("/healthz")
+@app.api_route("/healthz", methods=["GET", "HEAD"])
 def healthcheck():
     return {
         "ok": True,
-        "models_dir": str(MODELS_DIR),
-        "rollouts_dir": str(ROLLOUTS_DIR),
-        "frontend_built": FRONTEND_DIST_DIR.exists(),
+        "status": "healthy",
+        "timestamp": time.time(),
     }
 
 
