@@ -111,6 +111,8 @@ function RolloutWindow({
   const [taskProposalStatus, setTaskProposalStatus] = useState('Describe a task goal, then generate a proposal.');
   const [taskProposalLiveStatus, setTaskProposalLiveStatus] = useState(null);
   const [availableBehaviorTags, setAvailableBehaviorTags] = useState([]);
+  const [availableLlms, setAvailableLlms] = useState([]);
+  const [selectedLlmId, setSelectedLlmId] = useState('');
   const [trainingRewardBreakdown, setTrainingRewardBreakdown] = useState({});
   const [trainingRewardBreakdownMean, setTrainingRewardBreakdownMean] = useState({});
   const [trainingAblationReport, setTrainingAblationReport] = useState(null);
@@ -1352,9 +1354,20 @@ function RolloutWindow({
         run_id: runId,
         env_name: envName,
         goal: trimmedGoal,
+        llm_id: selectedLlmId || undefined,
       });
       setTaskProposal(normalizeTaskProposal(response.data));
       setAvailableBehaviorTags(response.data.available_behavior_tags || []);
+      {
+        const nextLlms = response.data.available_llms || [];
+        setAvailableLlms(nextLlms);
+        setSelectedLlmId((prev) => {
+          if (prev && nextLlms.some((item) => item.id === prev && item.available)) {
+            return prev;
+          }
+          return response.data.default_llm_id || nextLlms.find((item) => item.available)?.id || '';
+        });
+      }
       setTaskProposalLiveStatus(null);
       const provider = response.data?.provider || 'proposal';
       setTaskProposalStatus(`Generated ${provider} task config proposal. Review it, then apply if it looks right.`);
@@ -1369,7 +1382,7 @@ function RolloutWindow({
     } finally {
       setTaskProposalLoading(false);
     }
-  }, [envName, isSavedViewer, normalizeTaskProposal, runId, showSavedViewerTaskMessage, taskGoal]);
+  }, [envName, isSavedViewer, normalizeTaskProposal, runId, selectedLlmId, showSavedViewerTaskMessage, taskGoal]);
 
   useEffect(() => {
     if (isSavedViewer || !runId || !taskProposalLoading) return undefined;
@@ -1835,6 +1848,14 @@ function RolloutWindow({
         setRewardFormulaExamples(response.data.formula_examples || []);
         setRewardSourceLinks(response.data.reward_source_links || []);
         setAvailableBehaviorTags(response.data.available_behavior_tags || []);
+        const nextLlms = response.data.available_llms || [];
+        setAvailableLlms(nextLlms);
+        setSelectedLlmId((prev) => {
+          if (prev && nextLlms.some((item) => item.id === prev && item.available)) {
+            return prev;
+          }
+          return response.data.default_llm_id || nextLlms.find((item) => item.available)?.id || '';
+        });
         setSavedRewardConfigFiles(response.data.saved_reward_configs || []);
         setSelectedRewardConfigFile((prev) => (prev && (response.data.saved_reward_configs || []).includes(prev) ? prev : ((response.data.saved_reward_configs || [])[0] || '')));
         setRewardConfigSaveSourceType(response.data.source_type || 'manual');
@@ -1878,6 +1899,36 @@ function RolloutWindow({
       cancelled = true;
     };
   }, [envName, isSavedViewer, runId]);
+
+  useEffect(() => {
+    if (isSavedViewer) return undefined;
+    let cancelled = false;
+
+    async function fetchTaskConfigLlms() {
+      try {
+        const response = await apiClient.get('/task_config_llms');
+        if (cancelled) return;
+        const nextLlms = response.data?.llms || [];
+        setAvailableLlms(nextLlms);
+        setSelectedLlmId((prev) => {
+          if (prev && nextLlms.some((item) => item.id === prev && item.available)) {
+            return prev;
+          }
+          return response.data?.default_llm_id || nextLlms.find((item) => item.available)?.id || '';
+        });
+      } catch (error) {
+        if (cancelled) return;
+        console.error('Failed to fetch task-config LLMs:', error);
+        setAvailableLlms([]);
+        setSelectedLlmId('');
+      }
+    }
+
+    fetchTaskConfigLlms();
+    return () => {
+      cancelled = true;
+    };
+  }, [isSavedViewer]);
 
   useEffect(() => {
     if (isSavedViewer || !runId) return undefined;
@@ -1934,6 +1985,8 @@ function RolloutWindow({
       taskProposalStatus,
       taskProposalLiveStatus,
       availableBehaviorTags,
+      availableLlms,
+      selectedLlmId,
       latestTrainingBreakdown: trainingRewardBreakdown,
       latestTrainingMeanBreakdown: trainingRewardBreakdownMean,
       latestRolloutBreakdown: rolloutRewardBreakdown,
@@ -1943,6 +1996,7 @@ function RolloutWindow({
       onRemoveTerm: isSavedViewer ? showSavedViewerRewardMessage : removeRewardTerm,
       onSaveConfig: saveRewardConfig,
       onTaskGoalChange: isSavedViewer ? showSavedViewerTaskMessage : setTaskGoal,
+      onLlmSelect: isSavedViewer ? showSavedViewerTaskMessage : setSelectedLlmId,
       onProposeTaskConfig: proposeTaskConfig,
       onApplyTaskProposal: applyTaskProposal,
       onRewardConfigFileSelect: isSavedViewer ? showSavedViewerRewardMessage : setSelectedRewardConfigFile,
@@ -1973,6 +2027,8 @@ function RolloutWindow({
     taskProposalStatus,
     taskProposalLiveStatus,
     availableBehaviorTags,
+    availableLlms,
+    selectedLlmId,
     trainingRewardBreakdown,
     trainingRewardBreakdownMean,
     rolloutRewardBreakdown,
@@ -1984,6 +2040,7 @@ function RolloutWindow({
     showSavedViewerTaskMessage,
     isSavedViewer,
     saveRewardConfig,
+    setSelectedLlmId,
     proposeTaskConfig,
     applyTaskProposal,
     saveRewardConfigSnapshot,

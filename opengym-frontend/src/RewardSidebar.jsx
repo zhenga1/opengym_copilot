@@ -20,6 +20,8 @@ function RewardSidebar({
   taskProposalStatus,
   taskProposalLiveStatus,
   availableBehaviorTags,
+  availableLlms,
+  selectedLlmId,
   latestTrainingBreakdown,
   latestTrainingMeanBreakdown,
   latestRolloutBreakdown,
@@ -29,6 +31,7 @@ function RewardSidebar({
   onRemoveTerm,
   onSaveConfig,
   onTaskGoalChange,
+  onLlmSelect,
   onProposeTaskConfig,
   onApplyTaskProposal,
   onRewardConfigFileSelect,
@@ -44,6 +47,7 @@ function RewardSidebar({
   const safeRewardSourceLinks = Array.isArray(rewardSourceLinks) ? rewardSourceLinks : [];
   const safeSavedRewardConfigFiles = Array.isArray(savedRewardConfigFiles) ? savedRewardConfigFiles : [];
   const safeAvailableBehaviorTags = Array.isArray(availableBehaviorTags) ? availableBehaviorTags : [];
+  const safeAvailableLlms = Array.isArray(availableLlms) ? availableLlms : [];
   const rolloutEntries = Object.entries(latestRolloutBreakdown || {}).filter(([key, value]) => key !== 'total' && Number.isFinite(value));
   const trainingEntries = Object.entries(latestTrainingBreakdown || {}).filter(([key, value]) => key !== 'total' && Number.isFinite(value));
   const fallbackEntries = rolloutEntries.length > 0 ? rolloutEntries : trainingEntries;
@@ -293,6 +297,57 @@ function RewardSidebar({
                 resize: 'vertical',
               }}
             />
+            <div style={{ marginTop: '0.75rem' }}>
+              <div style={{ fontSize: '0.76rem', fontWeight: 700, color: '#e2e8f0', marginBottom: '0.4rem' }}>
+                Planner LLM
+              </div>
+              {safeAvailableLlms.length === 0 ? (
+                <div style={{ color: '#94a3b8', fontSize: '0.72rem', lineHeight: 1.4 }}>
+                  Loading LLM providers...
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+                    {safeAvailableLlms.map((llm) => {
+                      const isSelected = selectedLlmId === llm.id;
+                      const isAvailable = Boolean(llm.available);
+                      const hoverLabel = isAvailable
+                        ? `${llm.label} (${llm.model})`
+                        : llm.missing_reason || `${llm.label} API key not provided.`;
+                      return (
+                        <span key={llm.id} title={hoverLabel} style={{ display: 'inline-flex' }}>
+                        <button
+                          type="button"
+                          disabled={!isAvailable}
+                          onClick={() => isAvailable && onLlmSelect(llm.id)}
+                          style={{
+                            padding: '0.45rem 0.7rem',
+                            borderRadius: '999px',
+                            border: `1px solid ${isSelected ? 'rgba(125, 211, 252, 0.5)' : 'rgba(148, 163, 184, 0.2)'}`,
+                            backgroundColor: !isAvailable
+                              ? 'rgba(71, 85, 105, 0.38)'
+                              : isSelected
+                                ? 'rgba(14, 165, 233, 0.2)'
+                                : 'rgba(255, 255, 255, 0.06)',
+                            color: !isAvailable ? '#94a3b8' : isSelected ? '#bae6fd' : '#e2e8f0',
+                            fontSize: '0.74rem',
+                            fontWeight: 700,
+                            cursor: !isAvailable ? 'not-allowed' : 'pointer',
+                            opacity: !isAvailable ? 0.7 : 1,
+                          }}
+                        >
+                          {llm.label}
+                        </button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                  <div style={{ marginTop: '0.35rem', color: '#94a3b8', fontSize: '0.72rem', lineHeight: 1.4 }}>
+                    Unavailable models are dimmed. Hover to see which API key is missing.
+                  </div>
+                </>
+              )}
+            </div>
             <div style={{ display: 'flex', gap: '0.55rem', marginTop: '0.7rem' }}>
               <button
                 type="button"

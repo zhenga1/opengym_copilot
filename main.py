@@ -313,6 +313,7 @@ class TaskConfigProposalRequest(BaseModel):
     run_id: str
     env_name: str
     goal: str
+    llm_id: str | None = None
 
 
 class TaskConfigApplyRequest(BaseModel):
@@ -727,24 +728,69 @@ def build_heuristic_task_config_proposal(goal: str, env_name: str) -> dict[str, 
     }
 
 
-def _task_config_llm_settings() -> dict[str, Any]:
-    api_key = (
-        os.getenv("TASK_CONFIG_LLM_API_KEY", "").strip()
-        or os.getenv("ZAI_API_KEY", "").strip()
-        or os.getenv("BIGMODEL_API_KEY", "").strip()
-        or os.getenv("OPENAI_API_KEY", "").strip()
-    )
-    if not api_key:
-        raise RuntimeError("No task-config LLM API key is configured. Set TASK_CONFIG_LLM_API_KEY or ZAI_API_KEY.")
+def _task_config_llm_catalog() -> list[dict[str, Any]]:
+    custom_key = os.getenv("TASK_CONFIG_LLM_API_KEY", "").strip()
+    glm_key = os.getenv("ZAI_API_KEY", "").strip() or os.getenv("BIGMODEL_API_KEY", "").strip()
+    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+    return [
+        {
+            "id": "glm",
+            "label": "GLM",
+            "provider": "glm",
+            "description": "Z.ai / BigModel OpenAI-compatible endpoint.",
+            "available": bool(glm_key),
+            "missing_reason": "" if glm_key else "ZAI_API_KEY or BIGMODEL_API_KEY not provided.",
+            "api_key": glm_key,
+            "base_url": os.getenv("GLM_BASE_URL", "https://api.z.ai/api/paas/v4").strip().rstrip("/"),
+            "model": os.getenv("GLM_MODEL", "glm-5").strip() or "glm-5",
+        },
+        {
+            "id": "openai",
+            "label": "OpenAI",
+            "provider": "openai-compatible",
+            "description": "OpenAI chat-completions compatible task-config planner.",
+            "available": bool(openai_key),
+            "missing_reason": "" if openai_key else "OPENAI_API_KEY not provided.",
+            "api_key": openai_key,
+            "base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip().rstrip("/"),
+            "model": os.getenv("OPENAI_TASK_CONFIG_MODEL", "gpt-4.1-mini").strip() or "gpt-4.1-mini",
+        },
+        {
+            "id": "custom",
+            "label": "Custom",
+            "provider": "openai-compatible",
+            "description": "User-configured OpenAI-compatible endpoint from TASK_CONFIG_LLM_* env vars.",
+            "available": bool(custom_key),
+            "missing_reason": "" if custom_key else "TASK_CONFIG_LLM_API_KEY not provided.",
+            "api_key": custom_key,
+            "base_url": os.getenv("TASK_CONFIG_LLM_BASE_URL", "https://api.z.ai/api/paas/v4").strip().rstrip("/"),
+            "model": os.getenv("TASK_CONFIG_LLM_MODEL", "glm-5").strip() or "glm-5",
+        },
+    ]
 
-    base_url = os.getenv("TASK_CONFIG_LLM_BASE_URL", "https://api.z.ai/api/paas/v4").strip().rstrip("/")
-    model = os.getenv("TASK_CONFIG_LLM_MODEL", "glm-5").strip() or "glm-5"
+
+def _task_config_llm_settings(llm_id: str | None = None) -> dict[str, Any]:
+    catalog = _task_config_llm_catalog()
+    preferred_id = str(llm_id or os.getenv("TASK_CONFIG_LLM_DEFAULT", "")).strip().lower()
+    selected = next((item for item in catalog if item["id"] == preferred_id), None) if preferred_id else None
+    if selected is None:
+        selected = next((item for item in catalog if item["available"]), None)
+    if selected is None:
+        raise RuntimeError("No task-config LLM API key is configured. Set ZAI_API_KEY, BIGMODEL_API_KEY, OPENAI_API_KEY, or TASK_CONFIG_LLM_API_KEY.")
+
+    api_key = str(selected.get("api_key") or "").strip()
+    if not api_key:
+        raise RuntimeError(str(selected.get("missing_reason") or f"No API key available for llm_id='{selected['id']}'."))
+
     timeout_sec = max(15, int(float(os.getenv("TASK_CONFIG_LLM_TIMEOUT_SEC", "120"))))
     max_retries = max(1, int(os.getenv("TASK_CONFIG_LLM_MAX_RETRIES", "2")))
     return {
+        "id": selected["id"],
+        "label": selected["label"],
+        "provider": selected["provider"],
         "api_key": api_key,
-        "base_url": base_url,
-        "model": model,
+        "base_url": str(selected["base_url"]),
+        "model": str(selected["model"]),
         "timeout_sec": timeout_sec,
         "max_retries": max_retries,
     }
@@ -971,8 +1017,8 @@ def call_llm_reward_config_from_behavior_plan(
     return proposal
 
 
-def call_llm_task_config_proposal(goal: str, env_name: str, *, run_id: str | None = None) -> dict[str, Any]:
-    settings = _task_config_llm_settings()
+def call_llm_task_config_proposal(goal: str, env_name: str, *, run_id: str | None = None, llm_id: str | None = None) -> dict[str, Any]:
+    settings = _task_config_llm_settings(llm_id)
     try:
         behavior_plan = call_llm_behavior_tag_plan(goal, env_name, run_id=run_id, settings=settings)
     except Exception as exc:
@@ -1006,9 +1052,17 @@ def call_llm_task_config_proposal(goal: str, env_name: str, *, run_id: str | Non
     return proposal
 
 
-def propose_task_config(goal: str, env_name: str, *, run_id: str | None = None) -> dict[str, Any]:
+def propose_task_config(goal: str, env_name: str, *, run_id: str | None = None, llm_id: str | None = None) -> dict[str, Any]:
+    """
+    Propose a task configuration based on the goal and environment name.
+    Takes in a goal, environment name and two optional parameters: run_id and llm_id.
+    Calls the LLM to get a reward configuration proposal based on the two-step reward design pipeline.
+    If the LLM call fails, it falls back to a heuristic proposal based on the environment schema and goal keywords.
+    It then normalizes and validates the proposed reward terms. If validation fails, it falls back to a heuristic proposal again.
+    Returns the normalized reward configuration proposal.
+    """
     try:
-        proposal = call_llm_task_config_proposal(goal, env_name, run_id=run_id)
+        proposal = call_llm_task_config_proposal(goal, env_name, run_id=run_id, llm_id=llm_id)
     except Exception as exc:
         proposal = build_heuristic_task_config_proposal(goal, env_name)
         proposal.setdefault("warnings", [])
@@ -1711,6 +1765,12 @@ def get_run(run_id: str):
 def get_reward_config(run_id: str, env_name: str):
     terms = get_reward_terms_for_run(run_id, env_name)
     task_config = get_task_config_for_run(run_id, env_name)
+    llm_catalog = _task_config_llm_catalog()
+    default_settings = None
+    try:
+        default_settings = _task_config_llm_settings()
+    except RuntimeError:
+        default_settings = None
     return {
         "run_id": run_id,
         "env_name": env_name,
@@ -1721,6 +1781,8 @@ def get_reward_config(run_id: str, env_name: str):
         "task_config": task_config,
         "source_type": infer_reward_config_source_type(run_id, env_name),
         "available_behavior_tags": available_behavior_tags_for_env(env_name),
+        "available_llms": [{key: value for key, value in item.items() if key not in {"api_key"}} for item in llm_catalog],
+        "default_llm_id": default_settings.get("id") if default_settings else None,
         "saved_reward_configs": list_saved_reward_config_files(env_name),
         "reward_source_links": [
             {
@@ -1737,6 +1799,12 @@ def get_reward_config(run_id: str, env_name: str):
 
 @app.post("/reward_config")
 def update_reward_config(req: RewardConfigUpdateRequest):
+    llm_catalog = _task_config_llm_catalog()
+    default_settings = None
+    try:
+        default_settings = _task_config_llm_settings()
+    except RuntimeError:
+        default_settings = None
     try:
         terms = set_reward_terms_for_run(
             run_id=req.run_id,
@@ -1755,6 +1823,8 @@ def update_reward_config(req: RewardConfigUpdateRequest):
         "task_config": get_task_config_for_run(req.run_id, req.env_name),
         "source_type": infer_reward_config_source_type(req.run_id, req.env_name),
         "available_behavior_tags": available_behavior_tags_for_env(req.env_name),
+        "available_llms": [{key: value for key, value in item.items() if key not in {"api_key"}} for item in llm_catalog],
+        "default_llm_id": default_settings.get("id") if default_settings else None,
         "saved_reward_configs": list_saved_reward_config_files(req.env_name),
         "reward_source_links": [
             {
@@ -1779,13 +1849,33 @@ def propose_task_config_endpoint(req: TaskConfigProposalRequest):
         elapsed_sec=0.0,
         env_name=req.env_name,
         goal=req.goal,
+        llm_id=req.llm_id,
     )
-    proposal = propose_task_config(req.goal, req.env_name, run_id=req.run_id)
+    proposal = propose_task_config(req.goal, req.env_name, run_id=req.run_id, llm_id=req.llm_id)
     return {
         "run_id": req.run_id,
         "env_name": req.env_name,
         "available_behavior_tags": available_behavior_tags_for_env(req.env_name),
+        # collect all information OTHER than the API_key for available LLMs to return in the response. 
+        "available_llms": [
+            {key: value for key, value in item.items() if key not in {"api_key"}}
+            for item in _task_config_llm_catalog()
+        ],
         **proposal,
+    }
+
+
+@app.get("/task_config_llms")
+def get_task_config_llms():
+    catalog = _task_config_llm_catalog()
+    default_settings = None
+    try:
+        default_settings = _task_config_llm_settings()
+    except RuntimeError:
+        default_settings = None
+    return {
+        "llms": [{key: value for key, value in item.items() if key not in {"api_key"}} for item in catalog],
+        "default_llm_id": default_settings.get("id") if default_settings else None,
     }
 
 
@@ -1805,6 +1895,12 @@ def get_task_config_status(run_id: str):
 
 @app.post("/apply_task_config")
 def apply_task_config(req: TaskConfigApplyRequest):
+    llm_catalog = _task_config_llm_catalog()
+    default_settings = None
+    try:
+        default_settings = _task_config_llm_settings()
+    except RuntimeError:
+        default_settings = None
     proposed_config = {
         "goal": req.goal or "",
         "task_params": req.task_params,
@@ -1841,6 +1937,8 @@ def apply_task_config(req: TaskConfigApplyRequest):
         "formula_examples": reward_formula_examples_for_env(req.env_name),
         "source_type": infer_reward_config_source_type(req.run_id, req.env_name),
         "available_behavior_tags": available_behavior_tags_for_env(req.env_name),
+        "available_llms": [{key: value for key, value in item.items() if key not in {"api_key"}} for item in llm_catalog],
+        "default_llm_id": default_settings.get("id") if default_settings else None,
         "saved_reward_configs": list_saved_reward_config_files(req.env_name),
         "reward_source_links": [
             {
@@ -1879,6 +1977,12 @@ def save_reward_config(req: SaveRewardConfigRequest):
 
 @app.post("/load_reward_config")
 def load_reward_config(req: LoadRewardConfigRequest):
+    llm_catalog = _task_config_llm_catalog()
+    default_settings = None
+    try:
+        default_settings = _task_config_llm_settings()
+    except RuntimeError:
+        default_settings = None
     payload = load_reward_config_from_disk(req.filename)
     file_env_name = str(payload.get("env_name") or req.env_name).strip() or req.env_name
     if file_env_name != req.env_name:
@@ -1917,6 +2021,8 @@ def load_reward_config(req: LoadRewardConfigRequest):
         "formula_examples": reward_formula_examples_for_env(req.env_name),
         "source_type": str(payload.get("source_type") or infer_reward_config_source_type(req.run_id, req.env_name)),
         "available_behavior_tags": available_behavior_tags_for_env(req.env_name),
+        "available_llms": [{key: value for key, value in item.items() if key not in {"api_key"}} for item in llm_catalog],
+        "default_llm_id": default_settings.get("id") if default_settings else None,
         "saved_reward_configs": list_saved_reward_config_files(req.env_name),
         "reward_source_links": [
             {
