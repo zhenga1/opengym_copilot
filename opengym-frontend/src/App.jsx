@@ -22,6 +22,7 @@ const emptySidebarState = {
   taskProposalLoading: false,
   taskProposalStatus: 'Describe a task goal, then generate a proposal.',
   taskProposalLiveStatus: null,
+  availableBehaviorTags: [],
   latestTrainingBreakdown: {},
   latestTrainingMeanBreakdown: {},
   latestRolloutBreakdown: {},

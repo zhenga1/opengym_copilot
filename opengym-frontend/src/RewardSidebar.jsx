@@ -19,6 +19,7 @@ function RewardSidebar({
   taskProposalLoading,
   taskProposalStatus,
   taskProposalLiveStatus,
+  availableBehaviorTags,
   latestTrainingBreakdown,
   latestTrainingMeanBreakdown,
   latestRolloutBreakdown,
@@ -42,6 +43,7 @@ function RewardSidebar({
   const safeFormulaExamples = Array.isArray(rewardFormulaExamples) ? rewardFormulaExamples : [];
   const safeRewardSourceLinks = Array.isArray(rewardSourceLinks) ? rewardSourceLinks : [];
   const safeSavedRewardConfigFiles = Array.isArray(savedRewardConfigFiles) ? savedRewardConfigFiles : [];
+  const safeAvailableBehaviorTags = Array.isArray(availableBehaviorTags) ? availableBehaviorTags : [];
   const rolloutEntries = Object.entries(latestRolloutBreakdown || {}).filter(([key, value]) => key !== 'total' && Number.isFinite(value));
   const trainingEntries = Object.entries(latestTrainingBreakdown || {}).filter(([key, value]) => key !== 'total' && Number.isFinite(value));
   const fallbackEntries = rolloutEntries.length > 0 ? rolloutEntries : trainingEntries;
@@ -372,6 +374,67 @@ function RewardSidebar({
                 {taskProposal.success_metric && (
                   <div style={{ marginTop: '0.55rem', color: '#93c5fd', fontSize: '0.76rem' }}>
                     Success Metric: {taskProposal.success_metric}
+                  </div>
+                )}
+                {taskProposal.behavior_plan && (
+                  <div style={{ marginTop: '0.75rem' }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0' }}>Behavior Plan</div>
+                    {taskProposal.behavior_plan.rationale && (
+                      <div style={{ marginTop: '0.3rem', color: '#cbd5e1', fontSize: '0.74rem', lineHeight: 1.45 }}>
+                        {taskProposal.behavior_plan.rationale}
+                      </div>
+                    )}
+                    <div style={{ marginTop: '0.5rem' }}>
+                      <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#86efac' }}>Desired Tags</div>
+                      {Array.isArray(taskProposal.behavior_plan.desired_tags) && taskProposal.behavior_plan.desired_tags.length > 0 ? (
+                        taskProposal.behavior_plan.desired_tags.map((item, index) => (
+                          <div key={`${item.key || 'desired'}-${index}`} style={{ marginTop: '0.3rem', fontSize: '0.72rem', color: '#cbd5e1' }}>
+                            <span style={{ color: '#7dd3fc', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{item.key}</span>
+                            <span style={{ marginLeft: '0.35rem', color: '#86efac' }}>w={Number(item.weight || 0).toFixed(2)}</span>
+                            {item.reason && <div style={{ color: '#94a3b8', marginTop: '0.08rem' }}>{item.reason}</div>}
+                          </div>
+                        ))
+                      ) : (
+                        <div style={{ marginTop: '0.25rem', color: '#94a3b8', fontSize: '0.72rem' }}>No desired tags selected.</div>
+                      )}
+                    </div>
+                    <div style={{ marginTop: '0.55rem' }}>
+                      <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#fdba74' }}>Avoid Tags</div>
+                      {Array.isArray(taskProposal.behavior_plan.avoid_tags) && taskProposal.behavior_plan.avoid_tags.length > 0 ? (
+                        taskProposal.behavior_plan.avoid_tags.map((item, index) => (
+                          <div key={`${item.key || 'avoid'}-${index}`} style={{ marginTop: '0.3rem', fontSize: '0.72rem', color: '#cbd5e1' }}>
+                            <span style={{ color: '#7dd3fc', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{item.key}</span>
+                            <span style={{ marginLeft: '0.35rem', color: '#fdba74' }}>w={Number(item.weight || 0).toFixed(2)}</span>
+                            {item.reason && <div style={{ color: '#94a3b8', marginTop: '0.08rem' }}>{item.reason}</div>}
+                          </div>
+                        ))
+                      ) : (
+                        <div style={{ marginTop: '0.25rem', color: '#94a3b8', fontSize: '0.72rem' }}>No avoid tags selected.</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {(Array.isArray(taskProposal.available_behavior_tags) ? taskProposal.available_behavior_tags : safeAvailableBehaviorTags).length > 0 && (
+                  <div style={{ marginTop: '0.75rem' }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0' }}>Available Behavior Tags</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginTop: '0.45rem' }}>
+                      {(Array.isArray(taskProposal.available_behavior_tags) ? taskProposal.available_behavior_tags : safeAvailableBehaviorTags).map((tag, index) => (
+                        <span
+                          key={`${tag.key || 'available-tag'}-${index}`}
+                          style={{
+                            padding: '0.18rem 0.45rem',
+                            borderRadius: '999px',
+                            backgroundColor: tag.polarity === 'avoid' ? 'rgba(251, 191, 36, 0.12)' : 'rgba(14, 165, 233, 0.12)',
+                            border: '1px solid rgba(148, 163, 184, 0.18)',
+                            color: '#e2e8f0',
+                            fontSize: '0.68rem',
+                            fontWeight: 700,
+                          }}
+                        >
+                          {tag.key}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 )}
                 {Array.isArray(taskProposal.task_params) && taskProposal.task_params.length > 0 && (

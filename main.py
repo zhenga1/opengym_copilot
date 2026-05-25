@@ -39,6 +39,13 @@ from train_backend_reward_tuning.reward_shaping import (
     validate_reward_terms,
 )
 from deterministic_insights import build_episode_insights
+from behavior_metrics import build_behavior_metric_report
+from behavior_tags import (
+    available_behavior_tags_for_env,
+    build_behavior_tag_report,
+    heuristic_behavior_tag_plan,
+    normalize_behavior_tag_plan,
+)
 from run_logging import (
     LOGS_DIR,
     configure_backend_logging,
@@ -321,6 +328,7 @@ class TaskConfigApplyRequest(BaseModel):
     warnings: list[str] = []
     provider: str | None = None
     model: str | None = None
+    behavior_plan: dict[str, Any] | None = None
 
 
 class SaveRewardConfigRequest(BaseModel):
@@ -473,6 +481,7 @@ def get_task_config_for_run(run_id: str | None, env_name: str) -> dict[str, Any]
             "warnings": [],
             "provider": "none",
             "model": "",
+            "behavior_plan": {},
         }
     current = task_configs_by_run.get(run_id)
     if current is None or current.get("env_name") != env_name:
@@ -486,6 +495,7 @@ def get_task_config_for_run(run_id: str | None, env_name: str) -> dict[str, Any]
             "warnings": [],
             "provider": "none",
             "model": "",
+            "behavior_plan": {},
         }
     return task_configs_by_run[run_id]
 
@@ -501,6 +511,11 @@ def set_task_config_for_run(run_id: str, env_name: str, config: dict[str, Any]) 
         "warnings": [str(item) for item in (config.get("warnings") or []) if str(item).strip()],
         "provider": str(config.get("provider") or "manual").strip(),
         "model": str(config.get("model") or "").strip(),
+        "behavior_plan": normalize_behavior_tag_plan(
+            config.get("behavior_plan"),
+            env_name,
+            goal=str(config.get("goal") or "").strip(),
+        ),
     }
     task_configs_by_run[run_id] = normalized
     return normalized
@@ -603,6 +618,11 @@ def build_heuristic_task_config_proposal(goal: str, env_name: str) -> dict[str, 
     normalized_goal = str(goal or "").strip()
     lower_goal = normalized_goal.lower()
     terms = reward_template_for_env(env_name)
+    behavior_plan = normalize_behavior_tag_plan(
+        heuristic_behavior_tag_plan(goal, env_name),
+        env_name,
+        goal=goal,
+    )
     task_params: list[dict[str, Any]] = []
     derived_signals: list[dict[str, Any]] = []
     warnings: list[str] = []
@@ -695,6 +715,7 @@ def build_heuristic_task_config_proposal(goal: str, env_name: str) -> dict[str, 
 
     return {
         "goal": normalized_goal,
+        "behavior_plan": behavior_plan,
         "task_params": task_params,
         "derived_signals": derived_signals,
         "reward_terms": terms,
@@ -706,7 +727,7 @@ def build_heuristic_task_config_proposal(goal: str, env_name: str) -> dict[str, 
     }
 
 
-def call_llm_task_config_proposal(goal: str, env_name: str, *, run_id: str | None = None) -> dict[str, Any]:
+def _task_config_llm_settings() -> dict[str, Any]:
     api_key = (
         os.getenv("TASK_CONFIG_LLM_API_KEY", "").strip()
         or os.getenv("ZAI_API_KEY", "").strip()
@@ -720,103 +741,32 @@ def call_llm_task_config_proposal(goal: str, env_name: str, *, run_id: str | Non
     model = os.getenv("TASK_CONFIG_LLM_MODEL", "glm-5").strip() or "glm-5"
     timeout_sec = max(15, int(float(os.getenv("TASK_CONFIG_LLM_TIMEOUT_SEC", "120"))))
     max_retries = max(1, int(os.getenv("TASK_CONFIG_LLM_MAX_RETRIES", "2")))
-    variable_specs = task_variable_specs_for_run(None, env_name)
-    current_terms = reward_template_for_env(env_name)
-    started_at = time.time()
-    update_task_config_request_status(
-        run_id,
-        status="preparing",
-        message=f"Preparing LLM task-config request for model={model}.",
-        model=model,
-        base_url=base_url,
-        env_name=env_name,
-        goal=goal,
-        attempt=0,
-        elapsed_sec=0.0,
-    )
-    schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["goal", "task_params", "derived_signals", "reward_terms", "success_metric", "rationale", "warnings"],
-        "properties": {
-            "goal": {"type": "string"},
-            "task_params": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["key", "value", "description"],
-                    "properties": {
-                        "key": {"type": "string"},
-                        "value": {"type": "number"},
-                        "description": {"type": "string"},
-                    },
-                },
-            },
-            "derived_signals": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["key", "expression", "description"],
-                    "properties": {
-                        "key": {"type": "string"},
-                        "expression": {"type": "string"},
-                        "description": {"type": "string"},
-                    },
-                },
-            },
-            "reward_terms": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["key", "label", "description", "weight", "enabled", "expression"],
-                    "properties": {
-                        "key": {"type": "string"},
-                        "label": {"type": "string"},
-                        "description": {"type": "string"},
-                        "weight": {"type": "number"},
-                        "enabled": {"type": "boolean"},
-                        "expression": {"type": "string"},
-                    },
-                },
-            },
-            "success_metric": {"type": "string"},
-            "rationale": {"type": "string"},
-            "warnings": {"type": "array", "items": {"type": "string"}},
-        },
+    return {
+        "api_key": api_key,
+        "base_url": base_url,
+        "model": model,
+        "timeout_sec": timeout_sec,
+        "max_retries": max_retries,
     }
-    system_prompt = (
-        "You are proposing a structured RL task config. Return valid JSON only. "
-        "Use only the provided formula variables and helper math functions already supported by the backend: "
-        "abs, min, max, clip, sqrt, square, exp, log, sin, cos, tanh, sign. "
-        "Reward term expressions must be runnable immediately; if you suggest task parameters or derived signals, "
-        "reward terms should still use variables that are already supported now, such as time_sec or step."
-    )
-    user_payload = {
-        "env_name": env_name,
-        "goal": goal,
-        "available_variables": variable_specs,
-        "default_reward_terms": current_terms,
-        "formula_examples": reward_formula_examples_for_env(env_name),
-        "output_requirements": {
-            "must_return_json_object": True,
-            "top_level_keys": ["goal", "task_params", "derived_signals", "reward_terms", "success_metric", "rationale", "warnings"],
-            "reward_term_fields": ["key", "label", "description", "weight", "enabled", "expression"],
-        },
-    }
+
+
+def _call_llm_json_response(
+    *,
+    base_url: str,
+    model: str,
+    api_key: str,
+    timeout_sec: int,
+    max_retries: int,
+    system_prompt: str,
+    user_payload: dict[str, Any],
+    run_id: str | None,
+    stage_label: str,
+) -> dict[str, Any]:
     prompt = {
         "model": model,
         "messages": [
-            {
-                "role": "system",
-                "content": system_prompt,
-            },
-            {
-                "role": "user",
-                "content": json.dumps(user_payload),
-            },
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(user_payload)},
         ],
         "response_format": {"type": "json_object"},
     }
@@ -829,44 +779,31 @@ def call_llm_task_config_proposal(goal: str, env_name: str, *, run_id: str | Non
         },
         method="POST",
     )
+    started_at = time.time()
     last_error: Exception | None = None
     for attempt in range(1, max_retries + 1):
         update_task_config_request_status(
             run_id,
-            status="sending",
-            message=f"Sending task-config request to {base_url} with model={model} (attempt {attempt}/{max_retries}).",
+            status=f"{stage_label}_sending",
+            message=f"Sending {stage_label} request to {base_url} with model={model} (attempt {attempt}/{max_retries}).",
             attempt=attempt,
             elapsed_sec=round(time.time() - started_at, 2),
         )
         try:
             with urllib_request.urlopen(request, timeout=timeout_sec) as response:
-                update_task_config_request_status(
-                    run_id,
-                    status="waiting_response_body",
-                    message=f"Connected to provider. Reading response body for model={model}.",
-                    attempt=attempt,
-                    elapsed_sec=round(time.time() - started_at, 2),
-                )
                 body = json.loads(response.read().decode("utf-8"))
-            update_task_config_request_status(
-                run_id,
-                status="received",
-                message=f"Received response from provider for model={model}. Parsing proposal.",
-                attempt=attempt,
-                elapsed_sec=round(time.time() - started_at, 2),
-            )
             break
         except urllib_error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             update_task_config_request_status(
                 run_id,
-                status="http_error",
-                message=f"Provider returned HTTP error for model={model}: {detail[:300]}",
+                status=f"{stage_label}_http_error",
+                message=f"{stage_label} HTTP error for model={model}: {detail[:300]}",
                 attempt=attempt,
                 elapsed_sec=round(time.time() - started_at, 2),
             )
             raise RuntimeError(
-                f"LLM task proposal request failed for model={model} base_url={base_url}: {detail}"
+                f"{stage_label} request failed for model={model} base_url={base_url}: {detail}"
             ) from exc
         except (urllib_error.URLError, TimeoutError, socket.timeout) as exc:
             last_error = exc
@@ -874,63 +811,197 @@ def call_llm_task_config_proposal(goal: str, env_name: str, *, run_id: str | Non
                 reason = getattr(exc, "reason", None) or str(exc)
                 update_task_config_request_status(
                     run_id,
-                    status="timeout",
-                    message=(
-                        f"Request timed out/failed after {attempt} attempt(s) for model={model} "
-                        f"at {base_url} with timeout={timeout_sec}s."
-                    ),
+                    status=f"{stage_label}_timeout",
+                    message=f"{stage_label} failed after {attempt} attempt(s) for model={model} at {base_url}.",
                     attempt=attempt,
                     elapsed_sec=round(time.time() - started_at, 2),
                 )
                 raise RuntimeError(
-                    f"LLM task proposal request timed out/failed after {attempt} attempt(s) "
+                    f"{stage_label} request timed out/failed after {attempt} attempt(s) "
                     f"for model={model} base_url={base_url} timeout={timeout_sec}s: {reason}"
                 ) from exc
-            update_task_config_request_status(
-                run_id,
-                status="retrying",
-                message=(
-                    f"Attempt {attempt}/{max_retries} failed for model={model}. "
-                    f"Retrying after backoff."
-                ),
-                attempt=attempt,
-                elapsed_sec=round(time.time() - started_at, 2),
-            )
             time.sleep(min(2 * attempt, 5))
     else:
-        raise RuntimeError(
-            f"LLM task proposal request failed for model={model} base_url={base_url}: {last_error}"
-        )
+        raise RuntimeError(f"{stage_label} request failed for model={model} base_url={base_url}: {last_error}")
 
     output_text = None
     choices = body.get("choices") or []
     if choices:
         output_text = choices[0].get("message", {}).get("content")
     if not output_text:
+        raise RuntimeError(f"{stage_label} response did not include structured output text.")
+    parsed = json.loads(output_text)
+    update_task_config_request_status(
+        run_id,
+        status=f"{stage_label}_completed",
+        message=f"{stage_label} completed successfully with model={model}.",
+        attempt=max_retries,
+        elapsed_sec=round(time.time() - started_at, 2),
+    )
+    return parsed
+
+
+def call_llm_behavior_tag_plan(goal: str, env_name: str, *, run_id: str | None = None, settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    """
+    Takes in goal, environment name, and run ID and settings. 
+    It updates the task configuration with the given information of
+        run_id, status, message, model, base_url, env_name, goal, attempt, and elapsed_sec.
+    Then it constructs a system prompt and user payload to send to the LLM.
+    It then sends the prompt to the LLM
+        LLM
+    """
+    settings = settings or _task_config_llm_settings()
+    started_at = time.time()
+    update_task_config_request_status(
+        run_id,
+        status="behavior_plan_preparing",
+        message=f"Preparing behavior-tag planning request for model={settings['model']}.",
+        model=settings["model"],
+        base_url=settings["base_url"],
+        env_name=env_name,
+        goal=goal,
+        attempt=0,
+        elapsed_sec=0.0,
+    )
+    system_prompt = (
+        "You are the first stage of a two-stage RL reward-design pipeline. "
+        "Return valid JSON only. "
+        "Map the user's goal to a small set of desired behavior tags and anti-goal tags using only the provided tag catalog. "
+        "Assign each selected tag a weight between 0 and 1 representing importance. "
+        "Prefer a concise set of high-signal tags over a long noisy list."
+    )
+    user_payload = {
+        "env_name": env_name,
+        "goal": goal,
+        "available_behavior_tags": available_behavior_tags_for_env(env_name),
+        "output_requirements": {
+            "must_return_json_object": True,
+            "required_keys": ["goal", "desired_tags", "avoid_tags", "constraints", "rationale"],
+            "tag_item_fields": ["key", "weight", "reason"],
+        },
+    }
+    raw_plan = _call_llm_json_response(
+        base_url=settings["base_url"],
+        model=settings["model"],
+        api_key=settings["api_key"],
+        timeout_sec=settings["timeout_sec"],
+        max_retries=settings["max_retries"],
+        system_prompt=system_prompt,
+        user_payload=user_payload,
+        run_id=run_id,
+        stage_label="behavior_plan",
+    )
+    plan = normalize_behavior_tag_plan(raw_plan, env_name, goal=goal)
+    if not plan.get("desired_tags") and not plan.get("avoid_tags"):
+        raise RuntimeError("behavior_plan response did not contain any valid behavior tags for this environment.")
+    plan["provider"] = "glm" if "z.ai" in settings["base_url"] or "bigmodel" in settings["base_url"] else "openai-compatible"
+    plan["model"] = settings["model"]
+    update_task_config_request_status(
+        run_id,
+        status="behavior_plan_completed",
+        message=f"Behavior-tag planning completed successfully with model={settings['model']}.",
+        attempt=settings["max_retries"],
+        elapsed_sec=round(time.time() - started_at, 2),
+    )
+    return plan
+
+
+def call_llm_reward_config_from_behavior_plan(
+    goal: str,
+    env_name: str,
+    behavior_plan: dict[str, Any],
+    *,
+    run_id: str | None = None,
+    settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    settings = settings or _task_config_llm_settings()
+    variable_specs = task_variable_specs_for_run(None, env_name)
+    current_terms = reward_template_for_env(env_name)
+    system_prompt = (
+        "You are the second stage of a two-stage RL reward-design pipeline. Return valid JSON only. "
+        "Use the provided behavior plan to generate a structured RL task config with runnable reward expressions. "
+        "Use only the provided formula variables and helper math functions already supported by the backend: "
+        "abs, min, max, clip, sqrt, square, exp, log, sin, cos, tanh, sign. "
+        "Reward term expressions must be runnable immediately; if you suggest task parameters or derived signals, "
+        "reward terms should still use variables that are already supported now, such as time_sec or step. "
+        "The behavior plan is authoritative: reward the desired tags, penalize the avoid tags, and explain the mapping clearly."
+    )
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["goal", "task_params", "derived_signals", "reward_terms", "success_metric", "rationale", "warnings"],
+        "properties": {
+            "goal": {"type": "string"},
+            "task_params": {"type": "array"},
+            "derived_signals": {"type": "array"},
+            "reward_terms": {"type": "array"},
+            "success_metric": {"type": "string"},
+            "rationale": {"type": "string"},
+            "warnings": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+    user_payload = {
+        "env_name": env_name,
+        "goal": goal,
+        "behavior_plan": behavior_plan,
+        "available_variables": variable_specs,
+        "default_reward_terms": current_terms,
+        "formula_examples": reward_formula_examples_for_env(env_name),
+        "output_requirements": {
+            "must_return_json_object": True,
+            "top_level_keys": ["goal", "task_params", "derived_signals", "reward_terms", "success_metric", "rationale", "warnings"],
+            "reward_term_fields": ["key", "label", "description", "weight", "enabled", "expression"],
+        },
+    }
+    proposal = _call_llm_json_response(
+        base_url=settings["base_url"],
+        model=settings["model"],
+        api_key=settings["api_key"],
+        timeout_sec=settings["timeout_sec"],
+        max_retries=settings["max_retries"],
+        system_prompt=system_prompt,
+        user_payload=user_payload,
+        run_id=run_id,
+        stage_label="reward_config",
+    )
+    provider_label = "glm" if "z.ai" in settings["base_url"] or "bigmodel" in settings["base_url"] else "openai-compatible"
+    proposal["provider"] = provider_label
+    proposal["model"] = settings["model"]
+    proposal["behavior_plan"] = behavior_plan
+    return proposal
+
+
+def call_llm_task_config_proposal(goal: str, env_name: str, *, run_id: str | None = None) -> dict[str, Any]:
+    settings = _task_config_llm_settings()
+    try:
+        behavior_plan = call_llm_behavior_tag_plan(goal, env_name, run_id=run_id, settings=settings)
+    except Exception as exc:
+        behavior_plan = normalize_behavior_tag_plan(
+            heuristic_behavior_tag_plan(goal, env_name),
+            env_name,
+            goal=goal,
+        )
+        behavior_plan.setdefault("warnings", [])
+        behavior_plan["warnings"] = [f"Behavior-tag planning unavailable; used heuristic fallback instead. {exc}"]
         update_task_config_request_status(
             run_id,
-            status="parse_error",
-            message=f"Provider response did not include text content for model={model}.",
-            attempt=max_retries,
-            elapsed_sec=round(time.time() - started_at, 2),
+            status="behavior_plan_fallback",
+            message=behavior_plan["warnings"][0],
+            elapsed_sec=task_config_request_status_by_run.get(run_id, {}).get("elapsed_sec", 0.0),
         )
-        raise RuntimeError("LLM response did not include structured output text.")
-    proposal = json.loads(output_text)
-    provider_label = "glm"
-    if "z.ai" in base_url or "bigmodel" in base_url:
-        provider_label = "glm"
-    elif "openai" in base_url:
-        provider_label = "openai-compatible"
-    else:
-        provider_label = "openai-compatible"
-    proposal["provider"] = provider_label
-    proposal["model"] = model
+    proposal = call_llm_reward_config_from_behavior_plan(
+        goal,
+        env_name,
+        behavior_plan,
+        run_id=run_id,
+        settings=settings,
+    )
     update_task_config_request_status(
         run_id,
         status="completed",
-        message=f"Task-config proposal completed successfully with model={model}.",
-        attempt=max_retries,
-        elapsed_sec=round(time.time() - started_at, 2),
+        message=f"Two-stage task-config proposal completed successfully with model={settings['model']}.",
+        attempt=settings["max_retries"],
+        elapsed_sec=task_config_request_status_by_run.get(run_id, {}).get("elapsed_sec", 0.0),
     )
     return proposal
 
@@ -1011,6 +1082,10 @@ def ensure_run_status(run_id: str | None, env_name: str | None = None) -> dict:
     status.setdefault("recent_rollout_episodes", [])
     status.setdefault("training_insights", {})
     status.setdefault("rollout_insights", {})
+    status.setdefault("training_behavior_report", {})
+    status.setdefault("rollout_behavior_report", {})
+    status.setdefault("training_behavior_tags", {})
+    status.setdefault("rollout_behavior_tags", {})
     if env_name:
         status["env_name"] = env_name
     return status
@@ -1022,12 +1097,26 @@ def append_recent_episode(run_id: str | None, episode_payload: dict[str, Any], s
         return
     key = "recent_training_episodes" if source == "training" else "recent_rollout_episodes"
     insight_key = "training_insights" if source == "training" else "rollout_insights"
+    behavior_key = "training_behavior_report" if source == "training" else "rollout_behavior_report"
+    behavior_tag_key = "training_behavior_tags" if source == "training" else "rollout_behavior_tags"
     episodes = [episode_payload, *status.get(key, [])][:25]
     status[key] = episodes
+    # Deterministic Insights section below
     status[insight_key] = build_episode_insights(
         episodes,
         source=source,
         env_name=status.get("env_name"),
+    )
+    # Behavior Metrics section below
+    status[behavior_key] = build_behavior_metric_report(
+        episodes,
+        source=source,
+        env_name=status.get("env_name"),
+    )
+
+    status[behavior_tag_key] = build_behavior_tag_report(
+        status[behavior_key],
+        status.get("env_name"),
     )
 
 
@@ -1580,17 +1669,40 @@ def get_run(run_id: str):
     status = RUNS_TRAINING_STATUS.get(run_id)
     if status is None:
         return {"status": "unknown"}
+    # Getting recent_training_episodes and training_insights. If no training insights, build it. 
     if status.get("recent_training_episodes") and not status.get("training_insights"):
         status["training_insights"] = build_episode_insights(
             status.get("recent_training_episodes", []),
             source="training",
             env_name=status.get("env_name"),
         )
+    if status.get("recent_training_episodes") and not status.get("training_behavior_report"):
+        status["training_behavior_report"] = build_behavior_metric_report(
+            status.get("recent_training_episodes", []),
+            source="training",
+            env_name=status.get("env_name"),
+        )
+    if status.get("training_behavior_report") and not status.get("training_behavior_tags"):
+        status["training_behavior_tags"] = build_behavior_tag_report(
+            status.get("training_behavior_report", {}),
+            status.get("env_name"),
+        )
     if status.get("recent_rollout_episodes") and not status.get("rollout_insights"):
         status["rollout_insights"] = build_episode_insights(
             status.get("recent_rollout_episodes", []),
             source="rollout",
             env_name=status.get("env_name"),
+        )
+    if status.get("recent_rollout_episodes") and not status.get("rollout_behavior_report"):
+        status["rollout_behavior_report"] = build_behavior_metric_report(
+            status.get("recent_rollout_episodes", []),
+            source="rollout",
+            env_name=status.get("env_name"),
+        )
+    if status.get("rollout_behavior_report") and not status.get("rollout_behavior_tags"):
+        status["rollout_behavior_tags"] = build_behavior_tag_report(
+            status.get("rollout_behavior_report", {}),
+            status.get("env_name"),
         )
     return status
 
@@ -1608,6 +1720,7 @@ def get_reward_config(run_id: str, env_name: str):
         "formula_examples": reward_formula_examples_for_env(env_name),
         "task_config": task_config,
         "source_type": infer_reward_config_source_type(run_id, env_name),
+        "available_behavior_tags": available_behavior_tags_for_env(env_name),
         "saved_reward_configs": list_saved_reward_config_files(env_name),
         "reward_source_links": [
             {
@@ -1641,6 +1754,7 @@ def update_reward_config(req: RewardConfigUpdateRequest):
         "formula_examples": reward_formula_examples_for_env(req.env_name),
         "task_config": get_task_config_for_run(req.run_id, req.env_name),
         "source_type": infer_reward_config_source_type(req.run_id, req.env_name),
+        "available_behavior_tags": available_behavior_tags_for_env(req.env_name),
         "saved_reward_configs": list_saved_reward_config_files(req.env_name),
         "reward_source_links": [
             {
@@ -1670,6 +1784,7 @@ def propose_task_config_endpoint(req: TaskConfigProposalRequest):
     return {
         "run_id": req.run_id,
         "env_name": req.env_name,
+        "available_behavior_tags": available_behavior_tags_for_env(req.env_name),
         **proposal,
     }
 
@@ -1700,6 +1815,7 @@ def apply_task_config(req: TaskConfigApplyRequest):
         "warnings": req.warnings,
         "provider": req.provider or "manual",
         "model": req.model or "",
+        "behavior_plan": req.behavior_plan or {},
     }
     try:
         validate_task_config_for_run(proposed_config, req.env_name, run_id=req.run_id)
@@ -1724,6 +1840,7 @@ def apply_task_config(req: TaskConfigApplyRequest):
         "available_variables": task_variable_specs_for_run(req.run_id, req.env_name),
         "formula_examples": reward_formula_examples_for_env(req.env_name),
         "source_type": infer_reward_config_source_type(req.run_id, req.env_name),
+        "available_behavior_tags": available_behavior_tags_for_env(req.env_name),
         "saved_reward_configs": list_saved_reward_config_files(req.env_name),
         "reward_source_links": [
             {
@@ -1781,6 +1898,7 @@ def load_reward_config(req: LoadRewardConfigRequest):
         "warnings": list(task_config.get("warnings") or []),
         "provider": str(task_config.get("provider") or payload.get("source_type") or "manual"),
         "model": str(task_config.get("model") or ""),
+        "behavior_plan": dict(task_config.get("behavior_plan") or {}),
     }
     try:
         validate_task_config_for_run(proposed_config, req.env_name, run_id=req.run_id)
@@ -1798,6 +1916,7 @@ def load_reward_config(req: LoadRewardConfigRequest):
         "available_variables": task_variable_specs_for_run(req.run_id, req.env_name),
         "formula_examples": reward_formula_examples_for_env(req.env_name),
         "source_type": str(payload.get("source_type") or infer_reward_config_source_type(req.run_id, req.env_name)),
+        "available_behavior_tags": available_behavior_tags_for_env(req.env_name),
         "saved_reward_configs": list_saved_reward_config_files(req.env_name),
         "reward_source_links": [
             {
@@ -2142,6 +2261,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
         ep_reward_breakdown = {}
         ep_reward_raw_terms = {}
         ep_reward_history = []
+        ep_behavior_trace = []
         send_frame_interval = 5 if run_id not in number_of_steps_dictionary else number_of_steps_dictionary[run_id]
         ep_frames = []
 
@@ -2199,6 +2319,12 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                 "reward_breakdown": {key: float(value) for key, value in step_reward_breakdown.items()},
                 "reward_raw_terms": {key: float(value) for key, value in step_reward_raw_terms.items()},
             })
+            ep_behavior_trace.append({
+                "step": current_step,
+                "observation": np.asarray(next_obs, dtype=np.float32).tolist(),
+                "action": np.asarray(action, dtype=np.float32).tolist(),
+                "time_sec": float(current_step),
+            })
             if capture_episode_frames:
                 ep_frames.append(render_env(env))
 
@@ -2227,7 +2353,8 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                     "reward_weights": reward_weights_for_run(run_id, env_name),
                     #"done": done
                 }
-                append_recent_episode(run_id, data, source="rollout", env_name=env_name)
+                backend_episode_payload = {**data, "behavior_trace": list(ep_behavior_trace)}
+                append_recent_episode(run_id, backend_episode_payload, source="rollout", env_name=env_name)
                 #print("Rollout data sent with reward: ", float(ep_reward));
 
                 # Send JSON over WebSocket
@@ -2239,6 +2366,7 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
                 ep_reward_breakdown = {}
                 ep_reward_raw_terms = {}
                 ep_reward_history = []
+                ep_behavior_trace = []
                 episodes_seen += 1
                 ep_frames = []
             else:
