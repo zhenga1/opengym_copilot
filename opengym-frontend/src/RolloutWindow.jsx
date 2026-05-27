@@ -1186,6 +1186,7 @@ function RolloutWindow({
 
     setRewardConfigLoading(true);
     try {
+      // Reward config is being generated from the current reward config terms, so we send the current terms to ensure the backend has the latest version of the config (in case there are unsaved changes) and can validate it before applying.
       const response = await apiClient.post("/reward_config", {
         run_id: runId,
         env_name: envName,

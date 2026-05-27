@@ -14,6 +14,8 @@ DATA_DIR = Path(os.getenv("OPEN_GYM_DATA_DIR", str(BASE_DIR))).resolve()
 LOGS_DIR = (DATA_DIR / "logs").resolve()
 RUN_EVENTS_LOG_PATH = (LOGS_DIR / "run_events.jsonl").resolve()
 REWARD_SPECS_LOG_PATH = (LOGS_DIR / "reward_specs.jsonl").resolve()
+LLM_TRACES_LOG_PATH = (LOGS_DIR / "llm_traces.jsonl").resolve()
+LLM_TRACES_DIR = (LOGS_DIR / "llm_traces").resolve()
 BACKEND_LOG_PATH = (LOGS_DIR / "backend.log").resolve()
 
 _WRITE_LOCK = threading.Lock()
@@ -22,6 +24,7 @@ _CONFIGURED = False
 
 def ensure_log_dirs() -> None:
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    LLM_TRACES_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def utc_now_iso() -> str:
@@ -65,6 +68,43 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
             handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
 
 
+def _safe_path_component(value: str | None, fallback: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return fallback
+    cleaned = "".join(char if char.isalnum() or char in {"-", "_", "."} else "_" for char in text)
+    return cleaned.strip("._") or fallback
+
+
+def _write_pretty_json(path: Path, payload: dict[str, Any]) -> None:
+    ensure_log_dirs()
+    with _WRITE_LOCK:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            # two spaces for indentation to balance readability with file size
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+
+
+def _llm_trace_pretty_path(
+    *,
+    run_id: str | None,
+    stage: str,
+    trace_type: str,
+    llm_id: str | None,
+    ts: str,
+    attempt: int | None,
+) -> Path:
+    run_key = _safe_path_component(run_id, "no_run_id")
+    stage_key = _safe_path_component(stage, "stage")
+    trace_key = _safe_path_component(trace_type, "trace")
+    llm_key = _safe_path_component(llm_id, "llm")
+    ts_key = _safe_path_component(ts.replace(":", "-"), "ts")
+    attempt_suffix = f"__attempt_{attempt}" if attempt is not None else ""
+    filename = f"{ts_key}__{stage_key}__{trace_key}__{llm_key}{attempt_suffix}.json"
+    return LLM_TRACES_DIR / run_key / filename
+
+
 def log_run_event(
     event_type: str,
     *,
@@ -102,4 +142,55 @@ def log_reward_spec_snapshot(
         "details": details or {},
     }
     _append_jsonl(REWARD_SPECS_LOG_PATH, payload)
+    return payload
+
+
+def log_llm_trace(
+    *,
+    run_id: str | None,
+    env_name: str | None,
+    stage: str,
+    trace_type: str,
+    llm_id: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+    goal: str | None = None,
+    attempt: int | None = None,
+    request_payload: dict[str, Any] | None = None,
+    raw_response_text: str | None = None,
+    parsed_response: dict[str, Any] | None = None,
+    error: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    ts = utc_now_iso()
+    payload = {
+        "ts": ts,
+        "run_id": run_id,
+        "env_name": env_name,
+        "stage": str(stage),
+        "trace_type": str(trace_type),
+        "llm_id": llm_id,
+        "provider": provider,
+        "model": model,
+        "base_url": base_url,
+        "goal": goal,
+        "attempt": attempt,
+        "request_payload": request_payload or {},
+        "raw_response_text": raw_response_text,
+        "parsed_response": parsed_response or {},
+        "error": error,
+        "details": details or {},
+    }
+    pretty_path = _llm_trace_pretty_path(
+        run_id=run_id,
+        stage=stage,
+        trace_type=trace_type,
+        llm_id=llm_id,
+        ts=ts,
+        attempt=attempt,
+    )
+    payload["pretty_path"] = str(pretty_path)
+    _append_jsonl(LLM_TRACES_LOG_PATH, payload)
+    _write_pretty_json(pretty_path, payload)
     return payload

@@ -49,6 +49,7 @@ from behavior_tags import (
 from run_logging import (
     LOGS_DIR,
     configure_backend_logging,
+    log_llm_trace,
     log_reward_spec_snapshot,
     log_run_event,
 )
@@ -352,7 +353,9 @@ def update_task_config_request_status(run_id: str | None, **fields: Any) -> None
     # for the given run_id 
     if not run_id:
         return
+    # see if the run_id is already in the task_config_request_status_by_run
     current = task_config_request_status_by_run.get(run_id, {})
+    # if not save the current as default status. 
     if not current:
         current = {
             "run_id": run_id,
@@ -798,6 +801,8 @@ def _task_config_llm_settings(llm_id: str | None = None) -> dict[str, Any]:
 
 def _call_llm_json_response(
     *,
+    llm_id: str | None,
+    provider: str | None,
     base_url: str,
     model: str,
     api_key: str,
@@ -806,6 +811,8 @@ def _call_llm_json_response(
     system_prompt: str,
     user_payload: dict[str, Any],
     run_id: str | None,
+    env_name: str | None,
+    goal: str | None,
     stage_label: str,
 ) -> dict[str, Any]:
     prompt = {
@@ -816,6 +823,19 @@ def _call_llm_json_response(
         ],
         "response_format": {"type": "json_object"},
     }
+    log_llm_trace(
+        run_id=run_id,
+        env_name=env_name,
+        stage=stage_label,
+        trace_type="request_prepared",
+        llm_id=llm_id,
+        provider=provider,
+        model=model,
+        base_url=base_url,
+        goal=goal,
+        request_payload=prompt,
+        details={"timeout_sec": timeout_sec, "max_retries": max_retries},
+    )
     request = urllib_request.Request(
         f"{base_url}/chat/completions",
         data=json.dumps(prompt).encode("utf-8"),
@@ -835,12 +855,39 @@ def _call_llm_json_response(
             attempt=attempt,
             elapsed_sec=round(time.time() - started_at, 2),
         )
+        log_llm_trace(
+            run_id=run_id,
+            env_name=env_name,
+            stage=stage_label,
+            trace_type="request_sent",
+            llm_id=llm_id,
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            goal=goal,
+            attempt=attempt,
+            request_payload=prompt,
+        )
         try:
             with urllib_request.urlopen(request, timeout=timeout_sec) as response:
                 body = json.loads(response.read().decode("utf-8"))
             break
         except urllib_error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
+            log_llm_trace(
+                run_id=run_id,
+                env_name=env_name,
+                stage=stage_label,
+                trace_type="http_error",
+                llm_id=llm_id,
+                provider=provider,
+                model=model,
+                base_url=base_url,
+                goal=goal,
+                attempt=attempt,
+                request_payload=prompt,
+                error=detail,
+            )
             update_task_config_request_status(
                 run_id,
                 status=f"{stage_label}_http_error",
@@ -855,6 +902,20 @@ def _call_llm_json_response(
             last_error = exc
             if attempt >= max_retries:
                 reason = getattr(exc, "reason", None) or str(exc)
+                log_llm_trace(
+                    run_id=run_id,
+                    env_name=env_name,
+                    stage=stage_label,
+                    trace_type="timeout_error",
+                    llm_id=llm_id,
+                    provider=provider,
+                    model=model,
+                    base_url=base_url,
+                    goal=goal,
+                    attempt=attempt,
+                    request_payload=prompt,
+                    error=str(reason),
+                )
                 update_task_config_request_status(
                     run_id,
                     status=f"{stage_label}_timeout",
@@ -875,8 +936,55 @@ def _call_llm_json_response(
     if choices:
         output_text = choices[0].get("message", {}).get("content")
     if not output_text:
+        log_llm_trace(
+            run_id=run_id,
+            env_name=env_name,
+            stage=stage_label,
+            trace_type="empty_response_error",
+            llm_id=llm_id,
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            goal=goal,
+            request_payload=prompt,
+            parsed_response=body if isinstance(body, dict) else {},
+            error="No structured output text in first choice.",
+        )
         raise RuntimeError(f"{stage_label} response did not include structured output text.")
-    parsed = json.loads(output_text)
+    try:
+        parsed = json.loads(output_text)
+    except json.JSONDecodeError as exc:
+        log_llm_trace(
+            run_id=run_id,
+            env_name=env_name,
+            stage=stage_label,
+            trace_type="parse_error",
+            llm_id=llm_id,
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            goal=goal,
+            request_payload=prompt,
+            raw_response_text=output_text,
+            parsed_response=body if isinstance(body, dict) else {},
+            error=str(exc),
+        )
+        raise
+    log_llm_trace(
+        run_id=run_id,
+        env_name=env_name,
+        stage=stage_label,
+        trace_type="response_received",
+        llm_id=llm_id,
+        provider=provider,
+        model=model,
+        base_url=base_url,
+        goal=goal,
+        request_payload=prompt,
+        raw_response_text=output_text,
+        parsed_response=parsed,
+        details={"response_envelope": body if isinstance(body, dict) else {}},
+    )
     update_task_config_request_status(
         run_id,
         status=f"{stage_label}_completed",
@@ -927,6 +1035,8 @@ def call_llm_behavior_tag_plan(goal: str, env_name: str, *, run_id: str | None =
         },
     }
     raw_plan = _call_llm_json_response(
+        llm_id=settings.get("id"),
+        provider=settings.get("provider"),
         base_url=settings["base_url"],
         model=settings["model"],
         api_key=settings["api_key"],
@@ -935,6 +1045,8 @@ def call_llm_behavior_tag_plan(goal: str, env_name: str, *, run_id: str | None =
         system_prompt=system_prompt,
         user_payload=user_payload,
         run_id=run_id,
+        env_name=env_name,
+        goal=goal,
         stage_label="behavior_plan",
     )
     plan = normalize_behavior_tag_plan(raw_plan, env_name, goal=goal)
@@ -1000,6 +1112,8 @@ def call_llm_reward_config_from_behavior_plan(
         },
     }
     proposal = _call_llm_json_response(
+        llm_id=settings.get("id"),
+        provider=settings.get("provider"),
         base_url=settings["base_url"],
         model=settings["model"],
         api_key=settings["api_key"],
@@ -1008,6 +1122,8 @@ def call_llm_reward_config_from_behavior_plan(
         system_prompt=system_prompt,
         user_payload=user_payload,
         run_id=run_id,
+        env_name=env_name,
+        goal=goal,
         stage_label="reward_config",
     )
     provider_label = "glm" if "z.ai" in settings["base_url"] or "bigmodel" in settings["base_url"] else "openai-compatible"
@@ -1019,9 +1135,33 @@ def call_llm_reward_config_from_behavior_plan(
 
 def call_llm_task_config_proposal(goal: str, env_name: str, *, run_id: str | None = None, llm_id: str | None = None) -> dict[str, Any]:
     settings = _task_config_llm_settings(llm_id)
+    log_run_event(
+        "task_config_llm_pipeline_started",
+        run_id=run_id,
+        env_name=env_name,
+        details={
+            "goal": goal,
+            "llm_id": settings.get("id"),
+            "provider": settings.get("provider"),
+            "model": settings.get("model"),
+            "base_url": settings.get("base_url"),
+        },
+    )
     try:
         behavior_plan = call_llm_behavior_tag_plan(goal, env_name, run_id=run_id, settings=settings)
     except Exception as exc:
+        log_run_event(
+            "task_config_behavior_plan_fallback",
+            run_id=run_id,
+            env_name=env_name,
+            details={
+                "goal": goal,
+                "llm_id": settings.get("id"),
+                "provider": settings.get("provider"),
+                "model": settings.get("model"),
+                "error": str(exc),
+            },
+        )
         behavior_plan = normalize_behavior_tag_plan(
             heuristic_behavior_tag_plan(goal, env_name),
             env_name,
@@ -1041,6 +1181,20 @@ def call_llm_task_config_proposal(goal: str, env_name: str, *, run_id: str | Non
         behavior_plan,
         run_id=run_id,
         settings=settings,
+    )
+    log_run_event(
+        "task_config_llm_pipeline_completed",
+        run_id=run_id,
+        env_name=env_name,
+        details={
+            "goal": goal,
+            "llm_id": settings.get("id"),
+            "provider": settings.get("provider"),
+            "model": settings.get("model"),
+            "desired_tag_count": len(behavior_plan.get("desired_tags") or []),
+            "avoid_tag_count": len(behavior_plan.get("avoid_tags") or []),
+            "reward_term_count": len(proposal.get("reward_terms") or []),
+        },
     )
     update_task_config_request_status(
         run_id,
