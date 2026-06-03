@@ -28,6 +28,15 @@ def _rule(metric: str, op: str, threshold: float, weight: float = 1.0) -> dict[s
     }
 
 
+def _metric_candidates_rule(metrics: list[str], op: str, threshold: float, weight: float = 1.0) -> dict[str, Any]:
+    return {
+        "metrics": [str(metric).strip() for metric in metrics if str(metric).strip()],
+        "op": op,
+        "threshold": float(threshold),
+        "weight": float(weight),
+    }
+
+
 # Get the behavior Tags 
 BEHAVIOR_TAG_LIBRARY: dict[str, list[dict[str, Any]]] = {
     "generic": [
@@ -57,114 +66,11 @@ BEHAVIOR_TAG_LIBRARY: dict[str, list[dict[str, Any]]] = {
             "tags": ["control", "instability"],
         },
         {
-            "key": "alternating_motion",
-            "title": "Alternating Motion",
-            "description": "Move back and forth with repeated reversals rather than staying on one side.",
-            "polarity": "desired",
-            "rules": [_rule("cart_position_sign_change_count", ">=", 2.0), _rule("pole_angle_sign_change_count", ">=", 2.0)],
-            "tags": ["oscillation", "alternation"],
-        },
-        {
-            "key": "single_direction_motion",
-            "title": "Single-Direction Motion",
-            "description": "Drift or commit to one direction with little meaningful reversal.",
-            "polarity": "avoid",
-            "rules": [_rule("x_velocity_positive_fraction", ">=", 0.9), _rule("x_velocity_negative_fraction", ">=", 0.9)],
-            "mode": "any",
-            "tags": ["drift", "bias"],
-        },
-        {
-            "key": "symmetric_left_right_usage",
-            "title": "Symmetric Left/Right Usage",
-            "description": "Use left and right sides or limbs with roughly similar intensity.",
-            "polarity": "desired",
-            "rules": [_rule("cart_side_balance_score", ">=", 0.55), _rule("left_right_leg_angle_balance_score", ">=", 0.55)],
-            "mode": "any",
-            "tags": ["symmetry", "coverage"],
-        },
-        {
-            "key": "forward_progress",
-            "title": "Forward Progress",
-            "description": "Produce sustained positive forward velocity.",
-            "polarity": "desired",
-            "rules": [_rule("x_velocity_mean", ">=", 0.5), _rule("x_velocity_positive_fraction", ">=", 0.6)],
-            "tags": ["locomotion", "forward"],
-        },
-        {
-            "key": "backward_drift",
-            "title": "Backward Drift",
-            "description": "Spend much of the trajectory moving backwards.",
-            "polarity": "avoid",
-            "rules": [_rule("x_velocity_mean", "<=", -0.2), _rule("x_velocity_negative_fraction", ">=", 0.65)],
-            "tags": ["locomotion", "backward"],
-        },
-        {
-            "key": "lateral_drift",
-            "title": "Lateral Drift",
-            "description": "Move sideways instead of maintaining a stable heading corridor.",
-            "polarity": "avoid",
-            "rules": [_rule("y_velocity_abs_mean", ">=", 0.3)],
-            "tags": ["locomotion", "heading"],
-        },
-        {
-            "key": "upright_posture",
-            "title": "Upright Posture",
-            "description": "Remain upright with modest pitch/roll excursions.",
-            "polarity": "desired",
-            "rules": [_rule("torso_pitch_abs_mean", "<=", 0.45), _rule("roll_velocity_abs_mean", "<=", 1.2)],
-            "mode": "any",
-            "tags": ["posture", "stability"],
-        },
-        {
-            "key": "excessive_tilt",
-            "title": "Excessive Tilt",
-            "description": "Spend too much time strongly pitched or rolled.",
-            "polarity": "avoid",
-            "rules": [_rule("angle_abs_mean", ">=", 0.35), _rule("torso_angle_abs_mean", ">=", 0.35), _rule("pitch_velocity_abs_mean", ">=", 1.8)],
-            "mode": "any",
-            "tags": ["posture", "instability"],
-        },
-        {
-            "key": "high_reversal_frequency",
-            "title": "High Reversal Frequency",
-            "description": "Reverse sign or direction often, indicating oscillatory or exploratory motion.",
-            "polarity": "desired",
-            "rules": [_rule("x_velocity_sign_change_count", ">=", 3.0), _rule("pole_angle_sign_change_count", ">=", 3.0)],
-            "mode": "any",
-            "tags": ["oscillation", "reversal"],
-        },
-        {
-            "key": "low_reversal_frequency",
-            "title": "Low Reversal Frequency",
-            "description": "Rarely reverse direction or sign, indicating sticky or one-sided behavior.",
-            "polarity": "avoid",
-            "rules": [_rule("x_velocity_sign_change_count", "<=", 1.0), _rule("pole_angle_sign_change_count", "<=", 1.0)],
-            "mode": "any",
-            "tags": ["oscillation", "failure"],
-        },
-        {
-            "key": "target_tracking",
-            "title": "Target Tracking",
-            "description": "Stay close to a target or reference trajectory.",
-            "polarity": "desired",
-            "rules": [_rule("target_distance_mean", "<=", 0.25), _rule("tracking_error_abs_mean", "<=", 0.2)],
-            "mode": "any",
-            "tags": ["tracking", "target"],
-        },
-        {
-            "key": "target_approach",
-            "title": "Target Approach",
-            "description": "Reduce distance to the target over the episode.",
-            "polarity": "desired",
-            "rules": [_rule("target_distance_delta", "<=", -0.05)],
-            "tags": ["tracking", "progress"],
-        },
-        {
             "key": "low_motion",
             "title": "Low Motion",
             "description": "Barely move, often indicating under-exploration or frozen policy behavior.",
             "polarity": "avoid",
-            "rules": [_rule("x_velocity_std", "<=", 0.05), _rule("action_0_std", "<=", 0.05)],
+            "rules": [_rule("action_0_std", "<=", 0.05)],
             "mode": "any",
             "tags": ["exploration", "stagnation"],
         },
@@ -173,12 +79,29 @@ BEHAVIOR_TAG_LIBRARY: dict[str, list[dict[str, Any]]] = {
             "title": "High Motion",
             "description": "Move energetically with substantial state variation.",
             "polarity": "desired",
-            "rules": [_rule("x_velocity_std", ">=", 0.4), _rule("action_0_std", ">=", 0.25)],
+            "rules": [_rule("action_0_std", ">=", 0.25)],
             "mode": "any",
             "tags": ["exploration", "activity"],
         },
     ],
     "cartpole": [
+        {
+            "key": "alternating_motion",
+            "title": "Alternating Motion",
+            "description": "Move back and forth with repeated reversals rather than staying on one side.",
+            "polarity": "desired",
+            "rules": [_rule("cart_position_sign_change_count", ">=", 2.0), _rule("pole_angle_sign_change_count", ">=", 2.0)],
+            "tags": ["cartpole", "oscillation", "alternation"],
+        },
+        {
+            "key": "single_direction_motion",
+            "title": "Single-Direction Motion",
+            "description": "Drift or commit to one direction with little meaningful reversal.",
+            "polarity": "avoid",
+            "rules": [_rule("cart_velocity_positive_fraction", ">=", 0.9), _rule("cart_velocity_negative_fraction", ">=", 0.9)],
+            "mode": "any",
+            "tags": ["cartpole", "drift", "bias"],
+        },
         {
             "key": "bounded_cart_motion",
             "title": "Bounded Cart Motion",
@@ -214,6 +137,41 @@ BEHAVIOR_TAG_LIBRARY: dict[str, list[dict[str, Any]]] = {
             "tags": ["cartpole", "balance", "alternation"],
         },
         {
+            "key": "upright_posture",
+            "title": "Upright Posture",
+            "description": "Remain upright with modest pole-angle and angular-velocity excursions.",
+            "polarity": "desired",
+            "rules": [_rule("pole_angle_abs_mean", "<=", 0.45), _rule("pole_velocity_abs_mean", "<=", 1.2)],
+            "tags": ["cartpole", "posture", "stability"],
+        },
+        {
+            "key": "excessive_tilt",
+            "title": "Excessive Tilt",
+            "description": "Spend too much time strongly tilted or falling rapidly.",
+            "polarity": "avoid",
+            "rules": [_rule("pole_angle_abs_mean", ">=", 0.35), _rule("pole_velocity_abs_mean", ">=", 1.8)],
+            "mode": "any",
+            "tags": ["cartpole", "posture", "instability"],
+        },
+        {
+            "key": "high_reversal_frequency",
+            "title": "High Reversal Frequency",
+            "description": "Reverse cart direction and pole direction frequently.",
+            "polarity": "desired",
+            "rules": [_rule("cart_velocity_sign_change_count", ">=", 3.0), _rule("pole_angle_sign_change_count", ">=", 3.0)],
+            "mode": "any",
+            "tags": ["cartpole", "oscillation", "reversal"],
+        },
+        {
+            "key": "low_reversal_frequency",
+            "title": "Low Reversal Frequency",
+            "description": "Rarely reverse direction or sign, indicating sticky or one-sided behavior.",
+            "polarity": "avoid",
+            "rules": [_rule("cart_velocity_sign_change_count", "<=", 1.0), _rule("pole_angle_sign_change_count", "<=", 1.0)],
+            "mode": "any",
+            "tags": ["cartpole", "oscillation", "failure"],
+        },
+        {
             "key": "pole_recovery",
             "title": "Pole Recovery",
             "description": "Recover pole angle direction repeatedly instead of falling to one side.",
@@ -239,6 +197,22 @@ BEHAVIOR_TAG_LIBRARY: dict[str, list[dict[str, Any]]] = {
         },
     ],
     "mountaincar": [
+        {
+            "key": "alternating_motion",
+            "title": "Alternating Motion",
+            "description": "Reverse direction repeatedly to build momentum instead of committing to one slope.",
+            "polarity": "desired",
+            "rules": [_rule("velocity_reversal_count", ">=", 4.0)],
+            "tags": ["mountaincar", "oscillation", "momentum"],
+        },
+        {
+            "key": "low_reversal_frequency",
+            "title": "Low Reversal Frequency",
+            "description": "Rarely reverse velocity, which usually prevents useful momentum building.",
+            "polarity": "avoid",
+            "rules": [_rule("velocity_reversal_count", "<=", 1.0)],
+            "tags": ["mountaincar", "oscillation", "failure"],
+        },
         {
             "key": "hill_climbing_progress",
             "title": "Hill Climbing Progress",
@@ -266,6 +240,31 @@ BEHAVIOR_TAG_LIBRARY: dict[str, list[dict[str, Any]]] = {
     ],
     "pendulum": [
         {
+            "key": "alternating_motion",
+            "title": "Alternating Motion",
+            "description": "Sweep the pendulum through repeated angle reversals rather than staying stuck on one side.",
+            "polarity": "desired",
+            "rules": [_rule("pendulum_angle_sign_change_count", ">=", 2.0)],
+            "tags": ["pendulum", "oscillation", "alternation"],
+        },
+        {
+            "key": "upright_posture",
+            "title": "Upright Posture",
+            "description": "Keep the pendulum near upright with modest angular velocity.",
+            "polarity": "desired",
+            "rules": [_rule("pendulum_angle_abs_mean", "<=", 0.45), _rule("angular_velocity_abs_mean", "<=", 1.2)],
+            "tags": ["pendulum", "posture", "stability"],
+        },
+        {
+            "key": "excessive_tilt",
+            "title": "Excessive Tilt",
+            "description": "Spend too much time far from upright or rotating too aggressively.",
+            "polarity": "avoid",
+            "rules": [_rule("pendulum_angle_abs_mean", ">=", 0.35), _rule("angular_velocity_abs_mean", ">=", 1.8)],
+            "mode": "any",
+            "tags": ["pendulum", "posture", "instability"],
+        },
+        {
             "key": "upright_stabilization",
             "title": "Upright Stabilization",
             "description": "Keep the pendulum near upright with limited angular velocity.",
@@ -292,6 +291,14 @@ BEHAVIOR_TAG_LIBRARY: dict[str, list[dict[str, Any]]] = {
     ],
     "acrobot": [
         {
+            "key": "alternating_motion",
+            "title": "Alternating Motion",
+            "description": "Use repeated joint-angle reversals to swing through the trajectory instead of freezing one side.",
+            "polarity": "desired",
+            "rules": [_rule("joint1_angle_sign_change_count", ">=", 2.0), _rule("joint2_angle_sign_change_count", ">=", 2.0)],
+            "tags": ["acrobot", "oscillation", "alternation"],
+        },
+        {
             "key": "double_link_swing_up",
             "title": "Double-Link Swing-Up",
             "description": "Use both links dynamically to build energy and swing upward.",
@@ -310,6 +317,31 @@ BEHAVIOR_TAG_LIBRARY: dict[str, list[dict[str, Any]]] = {
         },
     ],
     "lunarlander": [
+        {
+            "key": "upright_posture",
+            "title": "Upright Posture",
+            "description": "Maintain a mostly upright lander attitude with controlled angular velocity.",
+            "polarity": "desired",
+            "rules": [_rule("angle_abs_mean", "<=", 0.45), _rule("angular_velocity_abs_mean", "<=", 1.2)],
+            "tags": ["lander", "posture", "stability"],
+        },
+        {
+            "key": "excessive_tilt",
+            "title": "Excessive Tilt",
+            "description": "Remain overly tilted or rotating too aggressively during descent.",
+            "polarity": "avoid",
+            "rules": [_rule("angle_abs_mean", ">=", 0.35), _rule("angular_velocity_abs_mean", ">=", 1.8)],
+            "mode": "any",
+            "tags": ["lander", "posture", "instability"],
+        },
+        {
+            "key": "symmetric_left_right_usage",
+            "title": "Symmetric Left/Right Usage",
+            "description": "Use both landing legs in a balanced way during touchdown.",
+            "polarity": "desired",
+            "rules": [_rule("left_leg_contact_true_fraction", ">=", 0.05), _rule("right_leg_contact_true_fraction", ">=", 0.05)],
+            "tags": ["lander", "symmetry", "contact"],
+        },
         {
             "key": "stable_attitude",
             "title": "Stable Attitude",
@@ -345,6 +377,22 @@ BEHAVIOR_TAG_LIBRARY: dict[str, list[dict[str, Any]]] = {
     ],
     "reacher": [
         {
+            "key": "target_tracking",
+            "title": "Target Tracking",
+            "description": "Stay close to the target rather than merely moving the arm around.",
+            "polarity": "desired",
+            "rules": [_rule("target_distance_mean", "<=", 0.25)],
+            "tags": ["reacher", "tracking", "target"],
+        },
+        {
+            "key": "target_approach",
+            "title": "Target Approach",
+            "description": "Reduce the fingertip-to-target distance over the episode.",
+            "polarity": "desired",
+            "rules": [_rule("target_distance_delta", "<=", -0.05)],
+            "tags": ["reacher", "tracking", "progress"],
+        },
+        {
             "key": "target_proximity",
             "title": "Target Proximity",
             "description": "Keep the fingertip close to the target.",
@@ -370,6 +418,86 @@ BEHAVIOR_TAG_LIBRARY: dict[str, list[dict[str, Any]]] = {
         },
     ],
     "locomotion": [
+        {
+            "key": "single_direction_motion",
+            "title": "Single-Direction Motion",
+            "description": "Commit strongly to one travel direction with little meaningful reversal.",
+            "polarity": "avoid",
+            "rules": [_rule("x_velocity_positive_fraction", ">=", 0.9), _rule("x_velocity_negative_fraction", ">=", 0.9)],
+            "mode": "any",
+            "tags": ["locomotion", "drift", "bias"],
+        },
+        {
+            "key": "symmetric_left_right_usage",
+            "title": "Symmetric Left/Right Usage",
+            "description": "Use left and right limbs with roughly similar intensity.",
+            "polarity": "desired",
+            "rules": [
+                _rule("left_right_thigh_angle_balance_score", ">=", 0.5),
+                _rule("left_right_leg_angle_balance_score", ">=", 0.5),
+                _rule("left_right_foot_angle_balance_score", ">=", 0.5),
+            ],
+            "mode": "any",
+            "tags": ["locomotion", "symmetry", "coverage"],
+        },
+        {
+            "key": "forward_progress",
+            "title": "Forward Progress",
+            "description": "Produce sustained positive forward velocity.",
+            "polarity": "desired",
+            "rules": [_rule("x_velocity_mean", ">=", 0.5), _rule("x_velocity_positive_fraction", ">=", 0.6)],
+            "tags": ["locomotion", "forward"],
+        },
+        {
+            "key": "backward_drift",
+            "title": "Backward Drift",
+            "description": "Spend much of the trajectory moving backwards.",
+            "polarity": "avoid",
+            "rules": [_rule("x_velocity_mean", "<=", -0.2), _rule("x_velocity_negative_fraction", ">=", 0.65)],
+            "tags": ["locomotion", "backward"],
+        },
+        {
+            "key": "lateral_drift",
+            "title": "Lateral Drift",
+            "description": "Move sideways instead of maintaining a stable heading corridor.",
+            "polarity": "avoid",
+            "rules": [_rule("y_velocity_abs_mean", ">=", 0.3)],
+            "tags": ["locomotion", "heading"],
+        },
+        {
+            "key": "upright_posture",
+            "title": "Upright Posture",
+            "description": "Remain upright with modest pitch and roll excursions.",
+            "polarity": "desired",
+            "rules": [_rule("torso_pitch_abs_mean", "<=", 0.45), _rule("roll_velocity_abs_mean", "<=", 1.2)],
+            "mode": "any",
+            "tags": ["locomotion", "posture", "stability"],
+        },
+        {
+            "key": "excessive_tilt",
+            "title": "Excessive Tilt",
+            "description": "Spend too much time strongly pitched or rolled while moving.",
+            "polarity": "avoid",
+            "rules": [_rule("torso_pitch_abs_mean", ">=", 0.35), _rule("pitch_velocity_abs_mean", ">=", 1.8)],
+            "mode": "any",
+            "tags": ["locomotion", "posture", "instability"],
+        },
+        {
+            "key": "high_reversal_frequency",
+            "title": "High Reversal Frequency",
+            "description": "Reverse the forward velocity sign often, indicating oscillatory or unstable locomotion.",
+            "polarity": "desired",
+            "rules": [_rule("x_velocity_sign_change_count", ">=", 3.0)],
+            "tags": ["locomotion", "oscillation", "reversal"],
+        },
+        {
+            "key": "low_reversal_frequency",
+            "title": "Low Reversal Frequency",
+            "description": "Rarely reverse direction or sign, indicating sticky or one-sided locomotion.",
+            "polarity": "avoid",
+            "rules": [_rule("x_velocity_sign_change_count", "<=", 1.0)],
+            "tags": ["locomotion", "oscillation", "failure"],
+        },
         {
             "key": "forward_locomotion",
             "title": "Forward Locomotion",
@@ -482,6 +610,26 @@ def _score_rule(metric_value: float | None, rule: dict[str, Any]) -> float:
     return 0.0
 
 
+def _score_rule_candidates(metrics: dict[str, Any], rule: dict[str, Any]) -> tuple[float, dict[str, float]]:
+    metric_names = [str(rule.get("metric") or "").strip()] if str(rule.get("metric") or "").strip() else []
+    metric_names.extend(str(name).strip() for name in (rule.get("metrics") or []) if str(name).strip())
+
+    scored: list[tuple[str, float, float]] = []
+    evidence: dict[str, float] = {}
+    for metric_name in metric_names:
+        metric_value = metrics.get(metric_name)
+        if metric_value is None:
+            continue
+        score = _score_rule(metric_value, rule)
+        scored.append((metric_name, score, _safe_float(metric_value)))
+        evidence[metric_name] = _safe_float(metric_value)
+
+    if not scored:
+        return 0.0, {}
+    best_metric_name, best_score, best_value = max(scored, key=lambda item: item[1])
+    return best_score, {best_metric_name: best_value}
+
+
 def build_behavior_tag_report(behavior_report: dict[str, Any] | None, env_name: str | None) -> dict[str, Any]:
     metrics = dict((behavior_report or {}).get("metrics") or {})
     tag_specs = available_behavior_tags_for_env(env_name)
@@ -498,13 +646,10 @@ def build_behavior_tag_report(behavior_report: dict[str, Any] | None, env_name: 
         weighted_scores: list[tuple[float, float]] = []
         evidence: dict[str, float] = {}
         for rule in rules:
-            metric_name = str(rule.get("metric") or "").strip()
-            metric_value = metrics.get(metric_name)
-            score = _score_rule(metric_value if metric_value is not None else None, rule)
+            score, rule_evidence = _score_rule_candidates(metrics, rule)
             weight = _safe_float(rule.get("weight"), 1.0)
             weighted_scores.append((score, weight))
-            if metric_value is not None:
-                evidence[metric_name] = _safe_float(metric_value)
+            evidence.update(rule_evidence)
         if not weighted_scores:
             continue
         mode = str(spec.get("mode") or "all")

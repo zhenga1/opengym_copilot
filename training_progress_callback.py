@@ -198,6 +198,7 @@ class TrainingProgressCallback(BaseCallback):
                     pass
         
         if status.get("stop", False):
+            # returning False will allow model.learn(..) to stop training
             return False # allow stop flag that is triggered from other parts of the class
 
         return True
