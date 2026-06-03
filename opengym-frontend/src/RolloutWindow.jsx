@@ -424,6 +424,8 @@ function RolloutWindow({
           ...term,
           key: String(term?.key || ''),
           label: String(term?.label || term?.key || ''),
+          weight: Number.isFinite(Number(term?.weight)) ? Number(term.weight) : 0,
+          enabled: typeof term?.enabled === 'boolean' ? term.enabled : true,
           description:
             typeof term?.description === 'string'
               ? term.description
@@ -498,6 +500,25 @@ function RolloutWindow({
       derived_signals: normalizedDerivedSignals,
       reward_terms: normalizedRewardTerms,
     };
+  }, []);
+
+  const buildProposalRewardPreviewTerms = useCallback((proposal) => {
+    const terms = Array.isArray(proposal?.reward_terms) ? proposal.reward_terms : [];
+    return terms.map((term, index) => ({
+      key: String(term?.key || `proposal_term_${index}`),
+      label: String(term?.label || term?.key || `Proposal Term ${index + 1}`),
+      description:
+        typeof term?.description === 'string'
+          ? term.description
+          : 'Proposed by the task-config planner. Review and apply to persist it on the backend.',
+      weight: Number.isFinite(Number(term?.weight)) ? Number(term.weight) : 0,
+      enabled: typeof term?.enabled === 'boolean' ? term.enabled : true,
+      expression:
+        typeof term?.expression === 'string'
+          ? term.expression
+          : '',
+      is_custom: typeof term?.is_custom === 'boolean' ? term.is_custom : String(term?.key || '') !== 'native',
+    }));
   }, []);
 
   const formatRewardTermLabel = useCallback((label) => {
@@ -1198,6 +1219,15 @@ function RolloutWindow({
           enabled: Boolean(term.enabled),
           expression: term.expression || '',
         })),
+        goal: taskProposal?.goal || taskGoal || undefined,
+        task_params: taskProposal?.task_params || [],
+        derived_signals: taskProposal?.derived_signals || [],
+        success_metric: taskProposal?.success_metric || '',
+        rationale: taskProposal?.rationale || '',
+        warnings: taskProposal?.warnings || [],
+        provider: taskProposal?.provider || undefined,
+        model: taskProposal?.model || undefined,
+        behavior_plan: taskProposal?.behavior_plan || {},
       });
       const nextTerms = response.data.terms || [];
       setRewardConfig(nextTerms);
@@ -1232,7 +1262,7 @@ function RolloutWindow({
     } finally {
       setRewardConfigLoading(false);
     }
-  }, [applyRewardConfigToRollouts, applyRewardConfigToTrainingEpisodes, computeBreakdownFromRawTerms, envName, isSavedViewer, latestRolloutRawTerms, rewardConfig, rollouts, runId]);
+  }, [applyRewardConfigToRollouts, applyRewardConfigToTrainingEpisodes, computeBreakdownFromRawTerms, envName, isSavedViewer, latestRolloutRawTerms, rewardConfig, rollouts, runId, taskGoal, taskProposal]);
 
   const saveRewardConfigSnapshot = useCallback(async () => {
     if (isSavedViewer) {
@@ -1357,7 +1387,15 @@ function RolloutWindow({
         goal: trimmedGoal,
         llm_id: selectedLlmId || undefined,
       });
-      setTaskProposal(normalizeTaskProposal(response.data));
+      const normalizedProposal = normalizeTaskProposal(response.data);
+      setTaskProposal(normalizedProposal);
+      const previewTerms = buildProposalRewardPreviewTerms(normalizedProposal);
+      if (previewTerms.length > 0) {
+        setRewardConfig(previewTerms);
+        setSupportsCustomReward(true);
+        setRewardConfigDirty(true);
+        setRewardConfigStatus('Proposal copied into Reward Terms locally. Click Apply Proposal to persist the task config and reward terms on the backend.');
+      }
       setAvailableBehaviorTags(response.data.available_behavior_tags || []);
       {
         const nextLlms = response.data.available_llms || [];
@@ -1383,7 +1421,7 @@ function RolloutWindow({
     } finally {
       setTaskProposalLoading(false);
     }
-  }, [envName, isSavedViewer, normalizeTaskProposal, runId, selectedLlmId, showSavedViewerTaskMessage, taskGoal]);
+  }, [buildProposalRewardPreviewTerms, envName, isSavedViewer, normalizeTaskProposal, runId, selectedLlmId, showSavedViewerTaskMessage, taskGoal]);
 
   useEffect(() => {
     if (isSavedViewer || !runId || !taskProposalLoading) return undefined;

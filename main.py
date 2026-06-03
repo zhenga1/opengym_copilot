@@ -52,6 +52,7 @@ from run_logging import (
     log_llm_trace,
     log_reward_spec_snapshot,
     log_run_event,
+    log_task_variable_names,
 )
 
 try:
@@ -307,6 +308,15 @@ class RewardConfigUpdateRequest(BaseModel):
     run_id: str
     env_name: str
     terms: list[RewardTermPayload]
+    goal: str | None = None
+    task_params: list[dict[str, Any]] = []
+    derived_signals: list[dict[str, Any]] = []
+    success_metric: str | None = None
+    rationale: str | None = None
+    warnings: list[str] = []
+    provider: str | None = None
+    model: str | None = None
+    behavior_plan: dict[str, Any] | None = None
 
 
 class TaskConfigProposalRequest(BaseModel):
@@ -562,6 +572,84 @@ def validate_task_config_for_run(config: dict[str, Any], env_name: str, run_id: 
     return config
 
 
+def normalize_task_config_proposal_shape(proposal: dict[str, Any] | None) -> dict[str, Any]:
+    current = dict(proposal or {})
+    dropped_messages: list[str] = []
+
+    def _normalize_object_list(value: Any, field_name: str) -> list[dict[str, Any]]:
+        source_items: list[Any]
+        if isinstance(value, list):
+            source_items = value
+        elif isinstance(value, dict):
+            if field_name == "task_params":
+                source_items = [
+                    {"key": key, "value": item}
+                    for key, item in value.items()
+                ]
+            elif field_name == "derived_signals":
+                source_items = [
+                    {
+                        "key": key,
+                        "expression": item if isinstance(item, str) else (item.get("expression") if isinstance(item, dict) else ""),
+                        "description": item.get("description", "") if isinstance(item, dict) else "",
+                    }
+                    for key, item in value.items()
+                ]
+            else:
+                dropped_messages.append(f"Ignored object-form field '{field_name}' from model output.")
+                return []
+        else:
+            if value not in (None, ""):
+                dropped_messages.append(f"Ignored non-list field '{field_name}' from model output.")
+            return []
+        normalized_items: list[dict[str, Any]] = []
+        for index, item in enumerate(source_items):
+            if isinstance(item, dict):
+                normalized_item = dict(item)
+                if field_name == "task_params":
+                    normalized_item["key"] = normalized_item.get("key", normalized_item.get("name", ""))
+                    normalized_item["description"] = normalized_item.get("description", "")
+                elif field_name == "derived_signals":
+                    normalized_item["key"] = normalized_item.get("key", normalized_item.get("name", ""))
+                    normalized_item["expression"] = normalized_item.get("expression", normalized_item.get("formula", ""))
+                    normalized_item["description"] = normalized_item.get("description", "")
+                elif field_name == "reward_terms":
+                    normalized_item["key"] = normalized_item.get("key", normalized_item.get("name", ""))
+                    normalized_item["label"] = normalized_item.get("label", normalized_item.get("title", normalized_item.get("key", "")))
+                    normalized_item["description"] = normalized_item.get("description", "")
+                    normalized_item["expression"] = normalized_item.get("expression", normalized_item.get("formula", ""))
+                normalized_items.append(normalized_item)
+                continue
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    dropped_messages.append(
+                        f"Ignored string item in '{field_name}' at index {index}; expected an object with named fields."
+                    )
+                continue
+            if item is not None:
+                dropped_messages.append(
+                    f"Ignored unsupported item in '{field_name}' at index {index}; expected an object."
+                )
+        return normalized_items
+
+    current["task_params"] = _normalize_object_list(current.get("task_params"), "task_params")
+    current["derived_signals"] = _normalize_object_list(current.get("derived_signals"), "derived_signals")
+    current["reward_terms"] = _normalize_object_list(current.get("reward_terms"), "reward_terms")
+
+    warnings_value = current.get("warnings")
+    if isinstance(warnings_value, list):
+        current["warnings"] = [str(item).strip() for item in warnings_value if str(item).strip()]
+    elif isinstance(warnings_value, str):
+        current["warnings"] = [warnings_value.strip()] if warnings_value.strip() else []
+    else:
+        current["warnings"] = []
+
+    if dropped_messages:
+        current["warnings"] = [*dropped_messages, *current["warnings"]]
+    return current
+
+
 def task_variable_specs_for_run(run_id: str | None, env_name: str) -> list[dict[str, Any]]:
     specs = [dict(spec) for spec in reward_variable_specs_for_env(env_name)]
     task_config = get_task_config_for_run(run_id, env_name)
@@ -605,6 +693,16 @@ def task_variable_names_for_run(run_id: str | None, env_name: str) -> list[str]:
             if variable_name and variable_name not in seen:
                 seen.add(variable_name)
                 variable_names.append(variable_name)
+    log_task_variable_names(
+        run_id=run_id,
+        env_name=env_name,
+        variable_names=variable_names,
+        source="task_variable_names_for_run",
+        details={
+            "task_param_count": len(get_task_config_for_run(run_id, env_name).get("task_params") or []),
+            "derived_signal_count": len(get_task_config_for_run(run_id, env_name).get("derived_signals") or []),
+        },
+    )
     return variable_names
 
 
@@ -815,11 +913,12 @@ def _call_llm_json_response(
     goal: str | None,
     stage_label: str,
 ) -> dict[str, Any]:
+    user_payload_text = json.dumps(user_payload, ensure_ascii=False, indent=2)
     prompt = {
         "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps(user_payload)},
+            {"role": "user", "content": user_payload_text},
         ],
         "response_format": {"type": "json_object"},
     }
@@ -1080,8 +1179,13 @@ def call_llm_reward_config_from_behavior_plan(
         "Use the provided behavior plan to generate a structured RL task config with runnable reward expressions. "
         "Use only the provided formula variables and helper math functions already supported by the backend: "
         "abs, min, max, clip, sqrt, square, exp, log, sin, cos, tanh, sign. "
-        "Reward term expressions must be runnable immediately; if you suggest task parameters or derived signals, "
-        "reward terms should still use variables that are already supported now, such as time_sec or step. "
+        "Do not invent variable names that are not in the provided variable list or in derived_signals that you also return. "
+        "Do not invent previous-state variables such as prev_cart_position unless they already appear in the provided variable list. "
+        "Only these expression constructs are supported: names, numeric constants, +, -, *, /, %, **, unary +/- and helper function calls. "
+        "Comparisons and control flow are not supported, including >, <, >=, <=, ==, !=, and ternary syntax like a ? b : c. "
+        "If you need an indicator-like reward, approximate it using the supported math helpers instead of boolean logic. "
+        "Derived signals are allowed, but each derived signal expression must itself be runnable using only the provided variables, task_params, "
+        "and any earlier derived_signals in the returned list. Reward terms may reference returned derived_signals. "
         "The behavior plan is authoritative: reward the desired tags, penalize the avoid tags, and explain the mapping clearly."
     )
     schema = {
@@ -1108,7 +1212,13 @@ def call_llm_reward_config_from_behavior_plan(
         "output_requirements": {
             "must_return_json_object": True,
             "top_level_keys": ["goal", "task_params", "derived_signals", "reward_terms", "success_metric", "rationale", "warnings"],
+            "derived_signal_fields": ["key", "expression", "description"],
             "reward_term_fields": ["key", "label", "description", "weight", "enabled", "expression"],
+            "expression_rules": [
+                "Use only provided variables, returned task_params, and earlier returned derived_signals.",
+                "Do not use comparisons or ternary syntax.",
+                "Do not invent prev_* state variables unless explicitly provided in available_variables.",
+            ],
         },
     }
     proposal = _call_llm_json_response(
@@ -1227,13 +1337,13 @@ def propose_task_config(goal: str, env_name: str, *, run_id: str | None = None, 
             message=str(proposal["warnings"][0]),
             elapsed_sec=task_config_request_status_by_run.get(run_id, {}).get("elapsed_sec", 0.0),
         )
+    proposal = normalize_task_config_proposal_shape(proposal)
     try:
-        normalized_terms = validate_reward_terms(
+        validate_task_config_for_run(proposal, env_name, run_id=None)
+        proposal["reward_terms"] = normalize_reward_terms(
             env_name,
             proposal.get("reward_terms") or [],
-            available_variable_names=task_variable_names_for_run(None, env_name),
         )
-        proposal["reward_terms"] = normalized_terms
     except Exception as exc:
         fallback = build_heuristic_task_config_proposal(goal, env_name)
         fallback.setdefault("warnings", [])
@@ -1397,12 +1507,25 @@ def list_saved_reward_config_files(env_name: str | None = None) -> list[str]:
 def build_reward_config_payload(run_id: str, env_name: str, *, source_type: str | None = None) -> dict[str, Any]:
     task_config = get_task_config_for_run(run_id, env_name)
     inferred_source_type = (source_type or infer_reward_config_source_type(run_id, env_name)).strip().lower() or "manual"
+    terms = get_reward_terms_for_run(run_id, env_name)
+    readable_terms = []
+    for term in terms:
+        label = str(term.get("label") or term.get("key") or "Reward Term").strip()
+        weight = float(term.get("weight", 0.0))
+        expression = str(term.get("expression") or "").strip() or "native_reward"
+        description = str(term.get("description") or "").strip()
+        state_text = "enabled" if bool(term.get("enabled", True)) else "disabled"
+        paragraph = f"{label} (w={weight:.2f}, {state_text}) uses `{expression}`."
+        if description:
+            paragraph = f"{paragraph} {description}"
+        readable_terms.append(paragraph)
     return {
         "run_id": run_id,
         "env_name": env_name,
         "saved_at": datetime.now().isoformat(),
         "source_type": inferred_source_type,
-        "terms": get_reward_terms_for_run(run_id, env_name),
+        "terms": terms,
+        "terms_summary": "\n\n".join(readable_terms),
         "task_config": task_config,
     }
 
@@ -1960,6 +2083,31 @@ def update_reward_config(req: RewardConfigUpdateRequest):
     except RuntimeError:
         default_settings = None
     try:
+        has_task_overrides = bool(
+            (req.goal and str(req.goal).strip())
+            or req.task_params
+            or req.derived_signals
+            or req.success_metric
+            or req.rationale
+            or req.warnings
+            or req.behavior_plan
+        )
+        if has_task_overrides:
+            proposed_config = {
+                "goal": req.goal or "",
+                "task_params": req.task_params,
+                "derived_signals": req.derived_signals,
+                "reward_terms": [term.model_dump() for term in req.terms],
+                "success_metric": req.success_metric or "",
+                "rationale": req.rationale or "",
+                "warnings": req.warnings,
+                "provider": req.provider or "manual",
+                "model": req.model or "",
+                "behavior_plan": req.behavior_plan or {},
+            }
+            proposed_config = normalize_task_config_proposal_shape(proposed_config)
+            validate_task_config_for_run(proposed_config, req.env_name, run_id=req.run_id)
+            set_task_config_for_run(req.run_id, req.env_name, proposed_config)
         terms = set_reward_terms_for_run(
             run_id=req.run_id,
             env_name=req.env_name,

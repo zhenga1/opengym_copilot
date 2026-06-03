@@ -240,6 +240,15 @@ def _image_observation_metrics(history: list[dict[str, Any]]) -> tuple[dict[str,
 
 
 def _cartpole_like_metrics(history: list[dict[str, Any]], obs_series: dict[str, list[float]]) -> tuple[dict[str, float], dict[str, dict[str, Any]], list[str]]:
+    """
+    Cartpole like metrics takes a `history` list of dictionaries of the list of floats.
+
+    It calculates various metrics related to signals in obs_series dictionary. Then it adds the metrics 
+    for `left_time_fraction`, `right_time_fraction`, and `sign_change_count` for each signal in the list of signals.
+
+    Returns:
+        tuple[dict[str, float], dict[str, dict[str, Any]], list[str]]: A tuple containing the metrics dictionary, metadata dictionary, and labels list.
+    """
     metrics: dict[str, float] = {}
     metadata: dict[str, dict[str, Any]] = {}
     labels: list[str] = []
@@ -268,6 +277,12 @@ def _cartpole_like_metrics(history: list[dict[str, Any]], obs_series: dict[str, 
 
 
 def _mountain_car_metrics(obs_series: dict[str, list[float]]) -> tuple[dict[str, float], dict[str, dict[str, Any]]]:
+    """
+    Mountain car metrics takes in dictionary of signal names and values.
+
+    It calculates various metrics related to signals in obs_series dictionary. Then it adds the metrics
+    for `hill_progress_fraction` and `velocity_reversal_count` for the position and velocity signals.
+    """
     metrics: dict[str, float] = {}
     metadata: dict[str, dict[str, Any]] = {}
     position = obs_series.get("position", [])

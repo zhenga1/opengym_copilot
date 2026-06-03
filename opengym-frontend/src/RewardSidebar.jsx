@@ -534,9 +534,14 @@ function RewardSidebar({
                             w={Number(term.weight || 0).toFixed(2)}
                           </span>
                         </div>
-                        <div style={{ fontSize: '0.72rem', color: '#cbd5e1', fontFamily: 'ui-monospace, SFMono-Regular, monospace', marginTop: '0.08rem' }}>
+                        <div style={{ fontSize: '0.72rem', color: '#cbd5e1', fontFamily: 'ui-monospace, SFMono-Regular, monospace', marginTop: '0.08rem', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
                           {term.expression}
                         </div>
+                        {term.description && (
+                          <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '0.08rem', lineHeight: 1.45 }}>
+                            {term.description}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
