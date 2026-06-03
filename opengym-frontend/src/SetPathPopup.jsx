@@ -4,12 +4,14 @@ import { createPortal } from "react-dom";
 const SetPathPopup = ({
   isOpen,
   defaultPath = "./models/ppo_model",
+  defaultTrainSteps = 1000,
   defaultHyperparams = {},
   onConfirm,
   onClose,
 }) => {
   const [path, setPath] = useState(defaultPath);
   const [device, setDevice] = useState("cuda");
+  const [trainSteps, setTrainSteps] = useState(defaultTrainSteps);
   const [hyperparams, setHyperparams] = useState({
     learning_rate: 0.0003,
     lr_schedule: "constant",
@@ -30,10 +32,11 @@ const SetPathPopup = ({
     if (isOpen) {
       setPath(defaultPath);
       setDevice("cuda");
+      setTrainSteps(defaultTrainSteps);
       setHyperparams((prev) => ({ ...prev, ...defaultHyperparams }));
       setTimeout(() => inputRef.current?.focus(), 0);
     }
-  }, [isOpen, defaultPath, defaultHyperparams]);
+  }, [isOpen, defaultPath, defaultHyperparams, defaultTrainSteps]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -54,7 +57,7 @@ const SetPathPopup = ({
   };
 
   const onKeyDown = (e) => {
-    if (e.key === "Enter") onConfirm?.(path, device, hyperparams);
+    if (e.key === "Enter") onConfirm?.(path, device, trainSteps, hyperparams);
     if (e.key === "Escape") onClose?.();
   };
 
@@ -69,6 +72,33 @@ const SetPathPopup = ({
         </div>
 
         <div className="popup-body popup-body--scroll">
+          <div className="popup-hero-field">
+            <label className="popup-label popup-label--hero">Training Steps</label>
+            <div className="popup-hero-copy">
+              Set the training budget first. This controls how long the backend PPO run will train before it stops.
+            </div>
+            <div className="popup-hero-controls">
+              <input
+                className="popup-slider popup-slider--hero"
+                type="range"
+                min="1000"
+                max="100000"
+                step="1000"
+                value={trainSteps}
+                onChange={(e) => setTrainSteps(Number(e.target.value))}
+              />
+              <input
+                className="popup-input popup-input--hero-number"
+                type="number"
+                min="1000"
+                max="100000"
+                step="1000"
+                value={trainSteps}
+                onChange={(e) => setTrainSteps(Number(e.target.value))}
+              />
+            </div>
+          </div>
+
           <label className="popup-label">Training output filename</label>
           <input
             ref={inputRef}
@@ -157,7 +187,7 @@ const SetPathPopup = ({
 
         <div className="popup-actions">
           <button className="btn secondary" onClick={onClose}>Cancel (Esc)</button>
-          <button className="btn primary" onClick={() => onConfirm?.(path, device, hyperparams)}>Save (Enter)</button>
+          <button className="btn primary" onClick={() => onConfirm?.(path, device, trainSteps, hyperparams)}>Save (Enter)</button>
         </div>
       </div>
     </div>,

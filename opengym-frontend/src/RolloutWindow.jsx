@@ -1613,7 +1613,7 @@ function RolloutWindow({
       console.error("Failed to set rollout speed:", e);
     }
   };
-  const saveTrainingPath = async (path, device, nextTrainingHyperparams) => {
+  const saveTrainingPath = async (path, device, nextTrainSteps, nextTrainingHyperparams) => {
     if (!runId) {
       console.warn("Run ID not set yet, cannot pause/resume");
       return;
@@ -1630,6 +1630,7 @@ function RolloutWindow({
         "training_hyperparams": nextTrainingHyperparams,
       });
       setTrainingPath(path);
+      setTrainSteps(Number(nextTrainSteps) || trainSteps);
       setReloadAllTempModelsSwitcher((prev) => !prev);
       setTrainingHyperparams(nextTrainingHyperparams);
       setTrainingAblationReport(null);
@@ -2823,38 +2824,6 @@ function RolloutWindow({
       </div>
     </div>
       
-    <div style={{ ...sectionPanelStyle, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-      <label htmlFor="trainSteps" style={{ fontWeight: 600 }}>
-        🧠 Train Steps:
-      </label>
-
-      <input
-        id='trainSteps'
-        type="range"
-        min="1000"
-        max="100000"
-        step="1000"
-        value={trainSteps}
-        onChange={(e) => setTrainSteps(Number(e.target.value))}
-        style={{ width: '200px', margin: '0.5rem' }}
-      /> 
-      <input
-        type="number"
-        min="1000"
-        max="100000"
-        step="1000"
-        value={trainSteps}
-        onChange={(e) =>  setTrainSteps(Number(e.target.value))}
-        style={{
-          width: '70px',
-          padding: '4px',
-          border: '1px solid #d1d5db',
-          borderRadius: '4px',
-        }}
-      /> 
-    </div>
-    
-    
     {/* Top Control Row */}
     <div
       style={{
@@ -2891,6 +2860,7 @@ function RolloutWindow({
       <SetPathPopup
         isOpen={showPathPopup}
         defaultPath={frozenPath !== null ? frozenPath : `ppo_model_${envName}_${timestamp}.zip`}
+        defaultTrainSteps={trainSteps}
         defaultHyperparams={trainingHyperparams}
         onConfirm={saveTrainingPath}
         onClose={closePathPopup}
