@@ -23,6 +23,8 @@ from urllib import request as urllib_request
 
 from urllib.parse import parse_qs
 
+import testenv
+
 try:
     from dotenv import load_dotenv
 except ModuleNotFoundError:
@@ -271,7 +273,8 @@ def list_model_records() -> list[dict[str, Any]]:
             if parsed_dt is not None
             else datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds")
         )
-        env_guess = _infer_env_name_from_model_name(path.name)
+        metadata = read_model_metadata(path)
+        env_guess = str(metadata.get("env_name") or _infer_env_name_from_model_name(path.name) or "").strip() or None
         records.append({
             "name": path.name,
             "path": str(path.resolve()),
@@ -281,8 +284,56 @@ def list_model_records() -> list[dict[str, Any]]:
             "env_name": env_guess,
             "is_temp": path.name.startswith("temp_"),
             "display_name": env_guess or path.stem,
+            "metadata_source": metadata.get("source"),
         })
     return records
+
+
+def model_metadata_path(model_path: Path) -> Path:
+    return model_path.with_suffix(".meta.json")
+
+
+def write_model_metadata(
+    model_path: Path,
+    *,
+    env_name: str,
+    run_id: str | None = None,
+    source: str = "training",
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    metadata = {
+        "model_name": model_path.name,
+        "env_name": str(env_name).strip(),
+        "run_id": run_id,
+        "source": source,
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+        "details": details or {},
+    }
+    with open(model_metadata_path(model_path), "w", encoding="utf-8") as handle:
+        json.dump(metadata, handle, indent=2)
+        handle.write("\n")
+    return metadata
+
+
+def read_model_metadata(model_path: Path) -> dict[str, Any]:
+    metadata_file = model_metadata_path(model_path)
+    if metadata_file.exists():
+        try:
+            with open(metadata_file, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if isinstance(payload, dict):
+                return payload
+        except (OSError, json.JSONDecodeError):
+            pass
+    inferred_env = _infer_env_name_from_model_name(model_path.name)
+    return {
+        "model_name": model_path.name,
+        "env_name": inferred_env,
+        "run_id": None,
+        "source": "inferred",
+        "saved_at": None,
+        "details": {},
+    }
 
 def encode_jpeg(frame_np, quality=80):
     # encode the frame_np to JPEG bytes with the given quality setting
@@ -1929,6 +1980,13 @@ def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_step
             else:
                 train_model_actual_path = trained_model_paths[run_id]
             model.save(train_model_actual_path)
+            write_model_metadata(
+                Path(train_model_actual_path),
+                env_name=env_name,
+                run_id=run_id,
+                source="training",
+                details={"train_steps": int(train_steps)},
+            )
             RUNS_TRAINING_STATUS[run_id]["model_path"] = train_model_actual_path
             RUNS_TRAINING_STATUS[run_id]["status"] = "stopped" if stop_requested else "done"
             log_run_event(
@@ -2502,6 +2560,14 @@ if HAS_MULTIPART:
       dest = MODELS_DIR / safe_model_name
       with open(dest, "wb") as f:
           f.write(await file.read())
+      inferred_env_name = _infer_env_name_from_model_name(safe_model_name)
+      if inferred_env_name:
+          write_model_metadata(
+              dest,
+              env_name=inferred_env_name,
+              run_id=None,
+              source="upload_inferred",
+          )
       return {"ok": True, "model_name": safe_model_name}
 else:
     @app.post("/upload_model")
@@ -2518,6 +2584,7 @@ training_preview_model_locks = collections.defaultdict(Lock)
 class LoadRequest(BaseModel):
     run_id:str
     model_name:str
+    env_name:str | None = None
 
 class DeleteAllTempModelsRequest(BaseModel):
     run_id:str
@@ -2550,6 +2617,16 @@ def load_model(req: LoadRequest):
     path = MODELS_DIR / sanitize_storage_name(req.model_name, ".zip")
     if not path.exists():
         return {"ok": False, "error": "model_not_found"}
+    requested_env_name = str(req.env_name or "").strip()
+    metadata = read_model_metadata(path)
+    model_env_name = str(metadata.get("env_name") or "").strip()
+    if requested_env_name and model_env_name and requested_env_name != model_env_name:
+        return {
+            "ok": False,
+            "error": "model_env_mismatch",
+            "expected_env_name": requested_env_name,
+            "model_env_name": model_env_name,
+        }
     # Load the model
     # print("Sessions are this: ", sessions)
     # state = sessions.get(req.session_id)
@@ -2560,7 +2637,7 @@ def load_model(req: LoadRequest):
         with current_model_locks[req.run_id]:
             current_model[req.run_id] = PPO.load(str(path))
         print("load model is", current_model)
-        return {"ok": True, "run_id": req.run_id, "model": path.name}
+        return {"ok": True, "run_id": req.run_id, "model": path.name, "model_env_name": model_env_name}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

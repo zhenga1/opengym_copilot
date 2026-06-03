@@ -153,6 +153,7 @@ function RolloutWindow({
   const [serverModels, setServerModels] = useState([]);
   const [serverModelRecords, setServerModelRecords] = useState([]);
   const [selectedServerModel, setSelectedServerModel] = useState(""); // "" = None
+  const [activeModelName, setActiveModelName] = useState("");
   const [modelSortOrder, setModelSortOrder] = useState('newest');
   const [rolloutFiles, setRolloutFiles] = useState([]);
   const [selectedRolloutFile, setSelectedRolloutFile] = useState("");
@@ -180,6 +181,10 @@ function RolloutWindow({
   const selectedServerModelRecord = useMemo(
     () => sortedServerModelRecords.find((record) => record.name === selectedServerModel) || null,
     [selectedServerModel, sortedServerModelRecords]
+  );
+  const activeModelRecord = useMemo(
+    () => sortedServerModelRecords.find((record) => record.name === activeModelName) || null,
+    [activeModelName, sortedServerModelRecords]
   );
   //set whether model parent directory file path is copied
   const [filePathCopied, setFilePathCopied] = useState(false);
@@ -2319,8 +2324,23 @@ function RolloutWindow({
     }
     setLoading(true);
     try {
-      await apiClient.post("/load_model", { run_id: runId, model_name: modelName });
-      setIsUsingNone(!modelName);
+      const response = await apiClient.post("/load_model", { run_id: runId, model_name: modelName, env_name: envName });
+      if (!response?.data?.ok) {
+        const errorMessage =
+          response?.data?.error === 'model_env_mismatch'
+            ? `Model is for ${response?.data?.model_env_name || 'another environment'}, but the current environment is ${response?.data?.expected_env_name || envName}.`
+            : response?.data?.error || "Failed to load model.";
+        setRewardConfigStatus(`Model load failed: ${errorMessage}`);
+        return;
+      }
+      const loadedModelName = response?.data?.model || "";
+      setIsUsingNone(!loadedModelName);
+      setActiveModelName(loadedModelName);
+      setRewardConfigStatus(
+        loadedModelName
+          ? `Using model ${loadedModelName} for rollout.`
+          : 'Using no model. Rollout is running with the random policy.'
+      );
       clearLiveRolloutState();
     } finally {
       setLoading(false);
@@ -2350,13 +2370,20 @@ function RolloutWindow({
 
   const useNone = async () => {
     setLoading(true);
-    setIsUsingNone(true);
     try {
       // “Clear” the session’s model by loading none; implement either:
       // 1) a dedicated endpoint:
       // await apiClient.post("/unload_model", { session_id: sessionId });
       // OR 2) overload load_model with a sentinel:
-      await apiClient.post("/load_model", { run_id: runId, model_name: "" });
+      const response = await apiClient.post("/load_model", { run_id: runId, model_name: "", env_name: envName });
+      if (!response?.data?.ok) {
+        const errorMessage = response?.data?.error || "Failed to clear model.";
+        setRewardConfigStatus(`Model clear failed: ${errorMessage}`);
+        return;
+      }
+      setIsUsingNone(true);
+      setActiveModelName("");
+      setRewardConfigStatus('Using no model. Rollout is running with the random policy.');
     } finally {
       setLoading(false);
     }
@@ -2440,7 +2467,8 @@ function RolloutWindow({
       const up = await apiClient.post("/upload_model", form);
       const modelName = up.data?.model_name; // backend should return stored filename
       if (modelName) {
-        await apiClient.post("/load_model", { run_id: runId, model_name: modelName });
+        setSelectedServerModel(modelName);
+        await applyModelSelection(modelName);
       }
     } finally {
       setLoading(false);
@@ -2899,6 +2927,7 @@ function RolloutWindow({
         {/* Classic Control Environments */}
         <option value="CartPole-v0">CartPole-v0</option>
         <option value="CartPole-v1">CartPole-v1</option>
+        <option value="CartPoleLoose-v0">CartPoleLoose-v0</option>
         <option value="MountainCar-v0">MountainCar-v0</option>
         <option value="MountainCarContinuous-v0">MountainCarContinuous-v0</option>
         <option value="Acrobot-v1">Acrobot-v1</option>
@@ -3614,7 +3643,15 @@ function RolloutWindow({
           >
               <option value="">(None — random policy)</option>
               {sortedServerModelRecords.map((model) => (
-                <option key={model.name} value={model.name}>{`${model.env_name || 'Model'} | ${formatModelTimestamp(model.created_at)} | ${model.name}`}</option>
+                <option
+                  key={model.name}
+                  value={model.name}
+                  disabled={Boolean(model.env_name) && model.env_name !== envName}
+                >
+                  {`${model.env_name || 'Model'} | ${formatModelTimestamp(model.created_at)} | ${model.name}${
+                    model.env_name && model.env_name !== envName ? ' | incompatible' : ''
+                  }`}
+                </option>
               ))}
             </select>
           <button
@@ -3840,6 +3877,35 @@ function RolloutWindow({
           <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#334155' }}>Rollout Visualization</div>
           <div style={{ color: '#64748b', fontSize: '0.82rem', marginTop: '0.15rem' }}>
             Control capture cadence, playback speed, and rollout insight visibility from this header.
+          </div>
+          <div
+            style={{
+              marginTop: '0.5rem',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              padding: '0.45rem 0.7rem',
+              borderRadius: '999px',
+              background: activeModelName
+                ? 'linear-gradient(180deg, rgba(14,165,233,0.16), rgba(37,99,235,0.12))'
+                : 'linear-gradient(180deg, rgba(148,163,184,0.18), rgba(100,116,139,0.12))',
+              border: activeModelName
+                ? '1px solid rgba(37,99,235,0.25)'
+                : '1px solid rgba(148,163,184,0.25)',
+              color: '#334155',
+              fontSize: '0.82rem',
+              lineHeight: 1.35,
+            }}
+          >
+            <span style={{ fontWeight: 800, color: activeModelName ? '#1d4ed8' : '#475569' }}>Active Model</span>
+            <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace', color: '#0f172a' }}>
+              {activeModelRecord?.name || activeModelName || 'None (random policy)'}
+            </span>
+            {activeModelRecord?.created_at && (
+              <span style={{ color: '#64748b' }}>
+                {formatModelTimestamp(activeModelRecord.created_at)}
+              </span>
+            )}
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
