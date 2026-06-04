@@ -757,6 +757,49 @@ def task_variable_names_for_run(run_id: str | None, env_name: str) -> list[str]:
     return variable_names
 
 
+"""
+These items reduce the catalog items to only the fields neceessary for the prompt,
+and also ensure that the prompt catalog is compact. 
+
+Much of the catalog information is not needed for prompt generation and can be safely omitted 
+to reduce token usage and noise in the prompt.
+"""
+def _compact_behavior_tag_catalog(env_name: str) -> list[dict[str, Any]]:
+    compact_catalog: list[dict[str, Any]] = []
+    for tag in available_behavior_tags_for_env(env_name):
+        compact_catalog.append({
+            "key": str(tag.get("key") or "").strip(),
+            "polarity": str(tag.get("polarity") or "").strip(),
+            "title": str(tag.get("title") or "").strip(),
+            "tags": [str(item).strip() for item in (tag.get("tags") or []) if str(item).strip()][:4],
+        })
+    return compact_catalog
+
+
+def _compact_variable_specs_for_prompt(env_name: str) -> list[dict[str, Any]]:
+    compact_specs: list[dict[str, Any]] = []
+    for spec in task_variable_specs_for_run(None, env_name):
+        aliases = [str(alias).strip() for alias in (spec.get("aliases") or []) if str(alias).strip()]
+        compact_specs.append({
+            "name": str(spec.get("name") or "").strip(),
+            "source": str(spec.get("source") or "").strip(),
+            "aliases": aliases[:3],
+        })
+    return compact_specs
+
+
+def _compact_reward_terms_for_prompt(env_name: str) -> list[dict[str, Any]]:
+    compact_terms: list[dict[str, Any]] = []
+    for term in reward_template_for_env(env_name):
+        compact_terms.append({
+            "key": str(term.get("key") or "").strip(),
+            "weight": float(term.get("weight", 0.0)),
+            "enabled": bool(term.get("enabled", True)),
+            "expression": str(term.get("expression") or "").strip(),
+        })
+    return compact_terms
+
+
 def _extract_first_number(text: str, default: float) -> float:
     match = re.search(r"(-?\d+(?:\.\d+)?)", text)
     if not match:
@@ -920,12 +963,24 @@ def _task_config_llm_catalog() -> list[dict[str, Any]]:
         },
     ]
 
+"""
+Retrieves and returns dictionary of settings for language model (LLM) based on provided llm_id.
 
+First calls `_task_config_llm_catalog` to get list of LLM specific information and selects an LLM.
+
+Then retrieves API key and then returns a list of settings for the selected LLM, 
+including id, label, provider, api_key, base_url, model, timeout_sec, max_retries, 
+behavior_plan_max_tokens, and reward_config_max_tokens.
+"""
 def _task_config_llm_settings(llm_id: str | None = None) -> dict[str, Any]:
+    # This below gets LLM specific information
     catalog = _task_config_llm_catalog()
+    # Then this below trieed to find preferred LLM. 
     preferred_id = str(llm_id or os.getenv("TASK_CONFIG_LLM_DEFAULT", "")).strip().lower()
+    # Then this selects the LLM based on preferred_id if provided. 
     selected = next((item for item in catalog if item["id"] == preferred_id), None) if preferred_id else None
     if selected is None:
+        # if no prefered id then select first available
         selected = next((item for item in catalog if item["available"]), None)
     if selected is None:
         raise RuntimeError("No task-config LLM API key is configured. Set ZAI_API_KEY, BIGMODEL_API_KEY, OPENAI_API_KEY, or TASK_CONFIG_LLM_API_KEY.")
@@ -945,6 +1000,9 @@ def _task_config_llm_settings(llm_id: str | None = None) -> dict[str, Any]:
         "model": str(selected["model"]),
         "timeout_sec": timeout_sec,
         "max_retries": max_retries,
+        # added max tokens for behavior plan into the llm settings
+        "behavior_plan_max_tokens": max(128, int(os.getenv("TASK_CONFIG_BEHAVIOR_PLAN_MAX_TOKENS", "320"))),
+        "reward_config_max_tokens": max(256, int(os.getenv("TASK_CONFIG_REWARD_CONFIG_MAX_TOKENS", "700"))),
     }
 
 
@@ -963,8 +1021,22 @@ def _call_llm_json_response(
     env_name: str | None,
     goal: str | None,
     stage_label: str,
+    max_output_tokens: int,
 ) -> dict[str, Any]:
-    user_payload_text = json.dumps(user_payload, ensure_ascii=False, indent=2)
+    """
+    Calls the LLM API and return a JSON response. 
+
+    Takes in a bunch of parameters for LLM API call: 
+        llm_id, provider, base_url, model, api_key, timeout_sec, max_retries, system_prompt, user_payload, 
+        run_id, env_name, goal, and stage_label.
+
+    We have the user_payload is converted to JSON string and added to prompt dictionary along with 
+    system prompt to form the final prompt. This prompt is then logged as "request_prepared" trace.
+
+    This trace is then passed to the LLM APi multiple times, and on success, response body is then 
+    parsed as a JSON and returned.
+    """
+    user_payload_text = json.dumps(user_payload, ensure_ascii=False, separators=(",", ":"))
     prompt = {
         "model": model,
         "messages": [
@@ -972,6 +1044,9 @@ def _call_llm_json_response(
             {"role": "user", "content": user_payload_text},
         ],
         "response_format": {"type": "json_object"},
+        # max token caps
+        "temperature": 0,
+        "max_completion_tokens": max_output_tokens,
     }
     log_llm_trace(
         run_id=run_id,
@@ -984,7 +1059,12 @@ def _call_llm_json_response(
         base_url=base_url,
         goal=goal,
         request_payload=prompt,
-        details={"timeout_sec": timeout_sec, "max_retries": max_retries},
+        details={
+            "timeout_sec": timeout_sec,
+            "max_retries": max_retries,
+            "max_output_tokens": max_output_tokens,
+            "request_bytes": len(user_payload_text.encode("utf-8")),
+        },
     )
     request = urllib_request.Request(
         f"{base_url}/chat/completions",
@@ -1177,11 +1257,17 @@ def call_llm_behavior_tag_plan(goal: str, env_name: str, *, run_id: str | None =
     user_payload = {
         "env_name": env_name,
         "goal": goal,
-        "available_behavior_tags": available_behavior_tags_for_env(env_name),
+        "available_behavior_tags": _compact_behavior_tag_catalog(env_name),
         "output_requirements": {
             "must_return_json_object": True,
             "required_keys": ["goal", "desired_tags", "avoid_tags", "constraints", "rationale"],
             "tag_item_fields": ["key", "weight", "reason"],
+            "limits": {
+                "max_desired_tags": 4,
+                "max_avoid_tags": 3,
+                "max_constraints": 3,
+                "rationale_sentences_max": 2,
+            },
         },
     }
     raw_plan = _call_llm_json_response(
@@ -1198,6 +1284,7 @@ def call_llm_behavior_tag_plan(goal: str, env_name: str, *, run_id: str | None =
         env_name=env_name,
         goal=goal,
         stage_label="behavior_plan",
+        max_output_tokens=settings["behavior_plan_max_tokens"],
     )
     plan = normalize_behavior_tag_plan(raw_plan, env_name, goal=goal)
     if not plan.get("desired_tags") and not plan.get("avoid_tags"):
@@ -1223,8 +1310,8 @@ def call_llm_reward_config_from_behavior_plan(
     settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     settings = settings or _task_config_llm_settings()
-    variable_specs = task_variable_specs_for_run(None, env_name)
-    current_terms = reward_template_for_env(env_name)
+    variable_specs = _compact_variable_specs_for_prompt(env_name)
+    current_terms = _compact_reward_terms_for_prompt(env_name)
     system_prompt = (
         "You are the second stage of a two-stage RL reward-design pipeline. Return valid JSON only. "
         "Use the provided behavior plan to generate a structured RL task config with runnable reward expressions. "
@@ -1237,26 +1324,19 @@ def call_llm_reward_config_from_behavior_plan(
         "If you need an indicator-like reward, approximate it using the supported math helpers instead of boolean logic. "
         "Derived signals are allowed, but each derived signal expression must itself be runnable using only the provided variables, task_params, "
         "and any earlier derived_signals in the returned list. Reward terms may reference returned derived_signals. "
-        "The behavior plan is authoritative: reward the desired tags, penalize the avoid tags, and explain the mapping clearly."
+        "The behavior plan is authoritative: reward the desired tags, penalize the avoid tags, and explain the mapping clearly. "
+        "Keep the response compact: at most 3 task_params, 4 derived_signals, 6 reward_terms, 2 warnings, and a rationale of at most 2 sentences."
     )
-    schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["goal", "task_params", "derived_signals", "reward_terms", "success_metric", "rationale", "warnings"],
-        "properties": {
-            "goal": {"type": "string"},
-            "task_params": {"type": "array"},
-            "derived_signals": {"type": "array"},
-            "reward_terms": {"type": "array"},
-            "success_metric": {"type": "string"},
-            "rationale": {"type": "string"},
-            "warnings": {"type": "array", "items": {"type": "string"}},
-        },
+    compact_behavior_plan = {
+        "goal": str(behavior_plan.get("goal") or goal or "").strip(),
+        "desired_tags": list(behavior_plan.get("desired_tags") or [])[:4],
+        "avoid_tags": list(behavior_plan.get("avoid_tags") or [])[:3],
+        "constraints": list(behavior_plan.get("constraints") or [])[:3],
     }
     user_payload = {
         "env_name": env_name,
         "goal": goal,
-        "behavior_plan": behavior_plan,
+        "behavior_plan": compact_behavior_plan,
         "available_variables": variable_specs,
         "default_reward_terms": current_terms,
         "formula_examples": reward_formula_examples_for_env(env_name),
@@ -1270,6 +1350,13 @@ def call_llm_reward_config_from_behavior_plan(
                 "Do not use comparisons or ternary syntax.",
                 "Do not invent prev_* state variables unless explicitly provided in available_variables.",
             ],
+            "limits": {
+                "max_task_params": 3,
+                "max_derived_signals": 4,
+                "max_reward_terms": 6,
+                "max_warnings": 2,
+                "rationale_sentences_max": 2,
+            },
         },
     }
     proposal = _call_llm_json_response(
@@ -1286,6 +1373,7 @@ def call_llm_reward_config_from_behavior_plan(
         env_name=env_name,
         goal=goal,
         stage_label="reward_config",
+        max_output_tokens=settings["reward_config_max_tokens"],
     )
     provider_label = "glm" if "z.ai" in settings["base_url"] or "bigmodel" in settings["base_url"] else "openai-compatible"
     proposal["provider"] = provider_label

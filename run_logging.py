@@ -150,6 +150,7 @@ def _llm_trace_pretty_path(
     ts: str,
     attempt: int | None,
 ) -> Path:
+    # _safe_path_component this just cleans to make sure every char is alphanumeric or - or _ or .
     run_key = _safe_path_component(run_id, "no_run_id")
     stage_key = _safe_path_component(stage, "stage")
     trace_key = _safe_path_component(trace_type, "trace")
@@ -258,6 +259,7 @@ def log_llm_trace(
         "error": error,
         "details": details or {},
     }
+    # Trace out pretty path = make a valid path from the inputs
     pretty_path = _llm_trace_pretty_path(
         run_id=run_id,
         stage=stage,
@@ -267,6 +269,9 @@ def log_llm_trace(
         attempt=attempt,
     )
     payload["pretty_path"] = str(pretty_path)
+    # write the raw payload into the LLM_TRACES_LOG_PATH
     _append_jsonl(LLM_TRACES_LOG_PATH, payload)
+    # write the prettified payload into the pretty path
+    # Prettified = payload made more human readable
     _write_pretty_json(pretty_path, _prettify_llm_payload(payload))
     return payload
