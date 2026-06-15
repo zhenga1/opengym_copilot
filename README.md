@@ -1,5 +1,9 @@
 # OpenGym Copilot
 
+## Try it!
+https://opengym-copilot.onrender.com/
+
+## Introduction
 OpenGym Copilot is a realtime Gymnasium environment viewer for RL experimentation. It separates training from rollout playback, exposes reward shaping controls in the UI, and lets you inspect reward terms while agents are learning.
 
 The project is aimed at a workflow where you can:
