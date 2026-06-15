@@ -748,6 +748,7 @@ class RewardShapingWrapper(gym.Wrapper):
             term["key"]: 0.0 for term in reward_template_for_env(self.env_name)
         }
         self._episode_reward_history: list[dict[str, Any]] = []
+        self._episode_behavior_trace: list[dict[str, Any]] = []
 
     def reset(self, **kwargs):
         self._previous_action = None
@@ -821,6 +822,15 @@ class RewardShapingWrapper(gym.Wrapper):
                 "reward_raw_terms": {key: float(value) for key, value in raw_terms.items()},
             }
         )
+        self._episode_behavior_trace.append(
+            {
+                "step": len(self._episode_behavior_trace) + 1,
+                "time_sec": float(self._episode_step * self._step_duration),
+                "observation": np.asarray(obs, dtype=np.float32).tolist(),
+                "action": np.asarray(action, dtype=np.float32).tolist(),
+                "previous_action": np.asarray(self._previous_action if self._previous_action is not None else np.zeros_like(np.asarray(action, dtype=np.float32)), dtype=np.float32).tolist(),
+            }
+        )
 
         if terminated or truncated:
             episode_total = float(sum(self._episode_term_sums.values()))
@@ -833,6 +843,7 @@ class RewardShapingWrapper(gym.Wrapper):
                 **{key: float(value) for key, value in self._episode_term_sums.items()},
             }
             info["reward_history_episode"] = list(self._episode_reward_history)
+            info["behavior_trace_episode"] = list(self._episode_behavior_trace)
             info["episode_outcome"] = episode_outcome
             info["episode_outcome_reason"] = outcome_reason
             info["episode_terminal_timestep"] = len(self._episode_reward_history)

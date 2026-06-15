@@ -19,6 +19,9 @@ function RewardSidebar({
   taskProposalLoading,
   taskProposalStatus,
   taskProposalLiveStatus,
+  availableBehaviorTags,
+  availableLlms,
+  selectedLlmId,
   latestTrainingBreakdown,
   latestTrainingMeanBreakdown,
   latestRolloutBreakdown,
@@ -28,6 +31,7 @@ function RewardSidebar({
   onRemoveTerm,
   onSaveConfig,
   onTaskGoalChange,
+  onLlmSelect,
   onProposeTaskConfig,
   onApplyTaskProposal,
   onRewardConfigFileSelect,
@@ -42,6 +46,8 @@ function RewardSidebar({
   const safeFormulaExamples = Array.isArray(rewardFormulaExamples) ? rewardFormulaExamples : [];
   const safeRewardSourceLinks = Array.isArray(rewardSourceLinks) ? rewardSourceLinks : [];
   const safeSavedRewardConfigFiles = Array.isArray(savedRewardConfigFiles) ? savedRewardConfigFiles : [];
+  const safeAvailableBehaviorTags = Array.isArray(availableBehaviorTags) ? availableBehaviorTags : [];
+  const safeAvailableLlms = Array.isArray(availableLlms) ? availableLlms : [];
   const rolloutEntries = Object.entries(latestRolloutBreakdown || {}).filter(([key, value]) => key !== 'total' && Number.isFinite(value));
   const trainingEntries = Object.entries(latestTrainingBreakdown || {}).filter(([key, value]) => key !== 'total' && Number.isFinite(value));
   const fallbackEntries = rolloutEntries.length > 0 ? rolloutEntries : trainingEntries;
@@ -291,6 +297,57 @@ function RewardSidebar({
                 resize: 'vertical',
               }}
             />
+            <div style={{ marginTop: '0.75rem' }}>
+              <div style={{ fontSize: '0.76rem', fontWeight: 700, color: '#e2e8f0', marginBottom: '0.4rem' }}>
+                Planner LLM
+              </div>
+              {safeAvailableLlms.length === 0 ? (
+                <div style={{ color: '#94a3b8', fontSize: '0.72rem', lineHeight: 1.4 }}>
+                  Loading LLM providers...
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+                    {safeAvailableLlms.map((llm) => {
+                      const isSelected = selectedLlmId === llm.id;
+                      const isAvailable = Boolean(llm.available);
+                      const hoverLabel = isAvailable
+                        ? `${llm.label} (${llm.model})`
+                        : llm.missing_reason || `${llm.label} API key not provided.`;
+                      return (
+                        <span key={llm.id} title={hoverLabel} style={{ display: 'inline-flex' }}>
+                        <button
+                          type="button"
+                          disabled={!isAvailable}
+                          onClick={() => isAvailable && onLlmSelect(llm.id)}
+                          style={{
+                            padding: '0.45rem 0.7rem',
+                            borderRadius: '999px',
+                            border: `1px solid ${isSelected ? 'rgba(125, 211, 252, 0.5)' : 'rgba(148, 163, 184, 0.2)'}`,
+                            backgroundColor: !isAvailable
+                              ? 'rgba(71, 85, 105, 0.38)'
+                              : isSelected
+                                ? 'rgba(14, 165, 233, 0.2)'
+                                : 'rgba(255, 255, 255, 0.06)',
+                            color: !isAvailable ? '#94a3b8' : isSelected ? '#bae6fd' : '#e2e8f0',
+                            fontSize: '0.74rem',
+                            fontWeight: 700,
+                            cursor: !isAvailable ? 'not-allowed' : 'pointer',
+                            opacity: !isAvailable ? 0.7 : 1,
+                          }}
+                        >
+                          {llm.label}
+                        </button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                  <div style={{ marginTop: '0.35rem', color: '#94a3b8', fontSize: '0.72rem', lineHeight: 1.4 }}>
+                    Unavailable models are dimmed. Hover to see which API key is missing.
+                  </div>
+                </>
+              )}
+            </div>
             <div style={{ display: 'flex', gap: '0.55rem', marginTop: '0.7rem' }}>
               <button
                 type="button"
@@ -374,6 +431,67 @@ function RewardSidebar({
                     Success Metric: {taskProposal.success_metric}
                   </div>
                 )}
+                {taskProposal.behavior_plan && (
+                  <div style={{ marginTop: '0.75rem' }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0' }}>Behavior Plan</div>
+                    {taskProposal.behavior_plan.rationale && (
+                      <div style={{ marginTop: '0.3rem', color: '#cbd5e1', fontSize: '0.74rem', lineHeight: 1.45 }}>
+                        {taskProposal.behavior_plan.rationale}
+                      </div>
+                    )}
+                    <div style={{ marginTop: '0.5rem' }}>
+                      <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#86efac' }}>Desired Tags</div>
+                      {Array.isArray(taskProposal.behavior_plan.desired_tags) && taskProposal.behavior_plan.desired_tags.length > 0 ? (
+                        taskProposal.behavior_plan.desired_tags.map((item, index) => (
+                          <div key={`${item.key || 'desired'}-${index}`} style={{ marginTop: '0.3rem', fontSize: '0.72rem', color: '#cbd5e1' }}>
+                            <span style={{ color: '#7dd3fc', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{item.key}</span>
+                            <span style={{ marginLeft: '0.35rem', color: '#86efac' }}>w={Number(item.weight || 0).toFixed(2)}</span>
+                            {item.reason && <div style={{ color: '#94a3b8', marginTop: '0.08rem' }}>{item.reason}</div>}
+                          </div>
+                        ))
+                      ) : (
+                        <div style={{ marginTop: '0.25rem', color: '#94a3b8', fontSize: '0.72rem' }}>No desired tags selected.</div>
+                      )}
+                    </div>
+                    <div style={{ marginTop: '0.55rem' }}>
+                      <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#fdba74' }}>Avoid Tags</div>
+                      {Array.isArray(taskProposal.behavior_plan.avoid_tags) && taskProposal.behavior_plan.avoid_tags.length > 0 ? (
+                        taskProposal.behavior_plan.avoid_tags.map((item, index) => (
+                          <div key={`${item.key || 'avoid'}-${index}`} style={{ marginTop: '0.3rem', fontSize: '0.72rem', color: '#cbd5e1' }}>
+                            <span style={{ color: '#7dd3fc', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{item.key}</span>
+                            <span style={{ marginLeft: '0.35rem', color: '#fdba74' }}>w={Number(item.weight || 0).toFixed(2)}</span>
+                            {item.reason && <div style={{ color: '#94a3b8', marginTop: '0.08rem' }}>{item.reason}</div>}
+                          </div>
+                        ))
+                      ) : (
+                        <div style={{ marginTop: '0.25rem', color: '#94a3b8', fontSize: '0.72rem' }}>No avoid tags selected.</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {(Array.isArray(taskProposal.available_behavior_tags) ? taskProposal.available_behavior_tags : safeAvailableBehaviorTags).length > 0 && (
+                  <div style={{ marginTop: '0.75rem' }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0' }}>Available Behavior Tags</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginTop: '0.45rem' }}>
+                      {(Array.isArray(taskProposal.available_behavior_tags) ? taskProposal.available_behavior_tags : safeAvailableBehaviorTags).map((tag, index) => (
+                        <span
+                          key={`${tag.key || 'available-tag'}-${index}`}
+                          style={{
+                            padding: '0.18rem 0.45rem',
+                            borderRadius: '999px',
+                            backgroundColor: tag.polarity === 'avoid' ? 'rgba(251, 191, 36, 0.12)' : 'rgba(14, 165, 233, 0.12)',
+                            border: '1px solid rgba(148, 163, 184, 0.18)',
+                            color: '#e2e8f0',
+                            fontSize: '0.68rem',
+                            fontWeight: 700,
+                          }}
+                        >
+                          {tag.key}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {Array.isArray(taskProposal.task_params) && taskProposal.task_params.length > 0 && (
                   <div style={{ marginTop: '0.7rem' }}>
                     <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0' }}>Task Parameters</div>
@@ -416,9 +534,14 @@ function RewardSidebar({
                             w={Number(term.weight || 0).toFixed(2)}
                           </span>
                         </div>
-                        <div style={{ fontSize: '0.72rem', color: '#cbd5e1', fontFamily: 'ui-monospace, SFMono-Regular, monospace', marginTop: '0.08rem' }}>
+                        <div style={{ fontSize: '0.72rem', color: '#cbd5e1', fontFamily: 'ui-monospace, SFMono-Regular, monospace', marginTop: '0.08rem', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
                           {term.expression}
                         </div>
+                        {term.description && (
+                          <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '0.08rem', lineHeight: 1.45 }}>
+                            {term.description}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>

@@ -110,11 +110,16 @@ function RolloutWindow({
   const [taskProposalLoading, setTaskProposalLoading] = useState(false);
   const [taskProposalStatus, setTaskProposalStatus] = useState('Describe a task goal, then generate a proposal.');
   const [taskProposalLiveStatus, setTaskProposalLiveStatus] = useState(null);
+  const [availableBehaviorTags, setAvailableBehaviorTags] = useState([]);
+  const [availableLlms, setAvailableLlms] = useState([]);
+  const [selectedLlmId, setSelectedLlmId] = useState('');
   const [trainingRewardBreakdown, setTrainingRewardBreakdown] = useState({});
   const [trainingRewardBreakdownMean, setTrainingRewardBreakdownMean] = useState({});
   const [trainingAblationReport, setTrainingAblationReport] = useState(null);
   const [trainingAblationStatus, setTrainingAblationStatus] = useState('idle');
   const [trainingInsights, setTrainingInsights] = useState(null);
+  const [trainingBehaviorReport, setTrainingBehaviorReport] = useState(null);
+  const [trainingBehaviorTags, setTrainingBehaviorTags] = useState(null);
   const [showTrainingInsights, setShowTrainingInsights] = useState(false);
   const [trainingGraphIndex, setTrainingGraphIndex] = useState(0);
   const [trainingWorkspaceViewIndex, setTrainingWorkspaceViewIndex] = useState(0);
@@ -132,6 +137,8 @@ function RolloutWindow({
   const [showRolloutInsights, setShowRolloutInsights] = useState(false);
   const [rolloutRewardBreakdown, setRolloutRewardBreakdown] = useState({});
   const [rolloutInsights, setRolloutInsights] = useState(null);
+  const [rolloutBehaviorReport, setRolloutBehaviorReport] = useState(null);
+  const [rolloutBehaviorTags, setRolloutBehaviorTags] = useState(null);
   const [latestRolloutRawTerms, setLatestRolloutRawTerms] = useState({});
   const [rewardLogs, setRewardLogs] = useState([]);
 
@@ -146,6 +153,7 @@ function RolloutWindow({
   const [serverModels, setServerModels] = useState([]);
   const [serverModelRecords, setServerModelRecords] = useState([]);
   const [selectedServerModel, setSelectedServerModel] = useState(""); // "" = None
+  const [activeModelName, setActiveModelName] = useState("");
   const [modelSortOrder, setModelSortOrder] = useState('newest');
   const [rolloutFiles, setRolloutFiles] = useState([]);
   const [selectedRolloutFile, setSelectedRolloutFile] = useState("");
@@ -173,6 +181,10 @@ function RolloutWindow({
   const selectedServerModelRecord = useMemo(
     () => sortedServerModelRecords.find((record) => record.name === selectedServerModel) || null,
     [selectedServerModel, sortedServerModelRecords]
+  );
+  const activeModelRecord = useMemo(
+    () => sortedServerModelRecords.find((record) => record.name === activeModelName) || null,
+    [activeModelName, sortedServerModelRecords]
   );
   //set whether model parent directory file path is copied
   const [filePathCopied, setFilePathCopied] = useState(false);
@@ -307,6 +319,8 @@ function RolloutWindow({
     setSelectedTimelineStep(null);
     setRewardLogs([]);
     setRolloutInsights(null);
+    setRolloutBehaviorReport(null);
+    setRolloutBehaviorTags(null);
   }, []);
 
   const updateRewardTerm = useCallback((termKey, field, value, fallbackTerm = null) => {
@@ -415,6 +429,8 @@ function RolloutWindow({
           ...term,
           key: String(term?.key || ''),
           label: String(term?.label || term?.key || ''),
+          weight: Number.isFinite(Number(term?.weight)) ? Number(term.weight) : 0,
+          enabled: typeof term?.enabled === 'boolean' ? term.enabled : true,
           description:
             typeof term?.description === 'string'
               ? term.description
@@ -429,6 +445,36 @@ function RolloutWindow({
               : typeof term?.expression?.expression === 'string'
                 ? term.expression.expression
                 : '',
+        }))
+      : [];
+    const normalizeBehaviorPlanItems = (items) =>
+      Array.isArray(items)
+        ? items.map((item) => ({
+            key: String(item?.key || ''),
+            weight: Number(item?.weight ?? 0),
+            reason: typeof item?.reason === 'string' ? item.reason : '',
+          }))
+        : [];
+    const normalizedBehaviorPlan =
+      proposal.behavior_plan && typeof proposal.behavior_plan === 'object'
+        ? {
+            ...proposal.behavior_plan,
+            goal: typeof proposal.behavior_plan.goal === 'string' ? proposal.behavior_plan.goal : '',
+            desired_tags: normalizeBehaviorPlanItems(proposal.behavior_plan.desired_tags),
+            avoid_tags: normalizeBehaviorPlanItems(proposal.behavior_plan.avoid_tags),
+            constraints: Array.isArray(proposal.behavior_plan.constraints)
+              ? proposal.behavior_plan.constraints.map((item) => String(item))
+              : [],
+            rationale: typeof proposal.behavior_plan.rationale === 'string' ? proposal.behavior_plan.rationale : '',
+          }
+        : null;
+    const normalizedAvailableBehaviorTags = Array.isArray(proposal.available_behavior_tags)
+      ? proposal.available_behavior_tags.map((tag) => ({
+          key: String(tag?.key || ''),
+          title: String(tag?.title || tag?.key || ''),
+          description: typeof tag?.description === 'string' ? tag.description : '',
+          polarity: String(tag?.polarity || ''),
+          tags: Array.isArray(tag?.tags) ? tag.tags.map((item) => String(item)) : [],
         }))
       : [];
     return {
@@ -453,10 +499,31 @@ function RolloutWindow({
       warnings: Array.isArray(proposal.warnings)
         ? proposal.warnings.map((warning) => String(warning))
         : [],
+      behavior_plan: normalizedBehaviorPlan,
+      available_behavior_tags: normalizedAvailableBehaviorTags,
       task_params: normalizedTaskParams,
       derived_signals: normalizedDerivedSignals,
       reward_terms: normalizedRewardTerms,
     };
+  }, []);
+
+  const buildProposalRewardPreviewTerms = useCallback((proposal) => {
+    const terms = Array.isArray(proposal?.reward_terms) ? proposal.reward_terms : [];
+    return terms.map((term, index) => ({
+      key: String(term?.key || `proposal_term_${index}`),
+      label: String(term?.label || term?.key || `Proposal Term ${index + 1}`),
+      description:
+        typeof term?.description === 'string'
+          ? term.description
+          : 'Proposed by the task-config planner. Review and apply to persist it on the backend.',
+      weight: Number.isFinite(Number(term?.weight)) ? Number(term.weight) : 0,
+      enabled: typeof term?.enabled === 'boolean' ? term.enabled : true,
+      expression:
+        typeof term?.expression === 'string'
+          ? term.expression
+          : '',
+      is_custom: typeof term?.is_custom === 'boolean' ? term.is_custom : String(term?.key || '') !== 'native',
+    }));
   }, []);
 
   const formatRewardTermLabel = useCallback((label) => {
@@ -1145,6 +1212,7 @@ function RolloutWindow({
 
     setRewardConfigLoading(true);
     try {
+      // Reward config is being generated from the current reward config terms, so we send the current terms to ensure the backend has the latest version of the config (in case there are unsaved changes) and can validate it before applying.
       const response = await apiClient.post("/reward_config", {
         run_id: runId,
         env_name: envName,
@@ -1156,6 +1224,15 @@ function RolloutWindow({
           enabled: Boolean(term.enabled),
           expression: term.expression || '',
         })),
+        goal: taskProposal?.goal || taskGoal || undefined,
+        task_params: taskProposal?.task_params || [],
+        derived_signals: taskProposal?.derived_signals || [],
+        success_metric: taskProposal?.success_metric || '',
+        rationale: taskProposal?.rationale || '',
+        warnings: taskProposal?.warnings || [],
+        provider: taskProposal?.provider || undefined,
+        model: taskProposal?.model || undefined,
+        behavior_plan: taskProposal?.behavior_plan || {},
       });
       const nextTerms = response.data.terms || [];
       setRewardConfig(nextTerms);
@@ -1190,7 +1267,7 @@ function RolloutWindow({
     } finally {
       setRewardConfigLoading(false);
     }
-  }, [applyRewardConfigToRollouts, applyRewardConfigToTrainingEpisodes, computeBreakdownFromRawTerms, envName, isSavedViewer, latestRolloutRawTerms, rewardConfig, rollouts, runId]);
+  }, [applyRewardConfigToRollouts, applyRewardConfigToTrainingEpisodes, computeBreakdownFromRawTerms, envName, isSavedViewer, latestRolloutRawTerms, rewardConfig, rollouts, runId, taskGoal, taskProposal]);
 
   const saveRewardConfigSnapshot = useCallback(async () => {
     if (isSavedViewer) {
@@ -1255,6 +1332,7 @@ function RolloutWindow({
       setAvailableRewardVariables(response.data.available_variables || []);
       setRewardFormulaExamples(response.data.formula_examples || []);
       setRewardSourceLinks(response.data.reward_source_links || []);
+      setAvailableBehaviorTags(response.data.available_behavior_tags || []);
       setSavedRewardConfigFiles(response.data.saved_reward_configs || []);
       setSelectedRewardConfigFile(response.data.filename || selectedRewardConfigFile);
       setRewardConfigSaveSourceType(response.data.source_type || 'manual');
@@ -1312,8 +1390,28 @@ function RolloutWindow({
         run_id: runId,
         env_name: envName,
         goal: trimmedGoal,
+        llm_id: selectedLlmId || undefined,
       });
-      setTaskProposal(normalizeTaskProposal(response.data));
+      const normalizedProposal = normalizeTaskProposal(response.data);
+      setTaskProposal(normalizedProposal);
+      const previewTerms = buildProposalRewardPreviewTerms(normalizedProposal);
+      if (previewTerms.length > 0) {
+        setRewardConfig(previewTerms);
+        setSupportsCustomReward(true);
+        setRewardConfigDirty(true);
+        setRewardConfigStatus('Proposal copied into Reward Terms locally. Click Apply Proposal to persist the task config and reward terms on the backend.');
+      }
+      setAvailableBehaviorTags(response.data.available_behavior_tags || []);
+      {
+        const nextLlms = response.data.available_llms || [];
+        setAvailableLlms(nextLlms);
+        setSelectedLlmId((prev) => {
+          if (prev && nextLlms.some((item) => item.id === prev && item.available)) {
+            return prev;
+          }
+          return response.data.default_llm_id || nextLlms.find((item) => item.available)?.id || '';
+        });
+      }
       setTaskProposalLiveStatus(null);
       const provider = response.data?.provider || 'proposal';
       setTaskProposalStatus(`Generated ${provider} task config proposal. Review it, then apply if it looks right.`);
@@ -1328,7 +1426,7 @@ function RolloutWindow({
     } finally {
       setTaskProposalLoading(false);
     }
-  }, [envName, isSavedViewer, normalizeTaskProposal, runId, showSavedViewerTaskMessage, taskGoal]);
+  }, [buildProposalRewardPreviewTerms, envName, isSavedViewer, normalizeTaskProposal, runId, selectedLlmId, showSavedViewerTaskMessage, taskGoal]);
 
   useEffect(() => {
     if (isSavedViewer || !runId || !taskProposalLoading) return undefined;
@@ -1391,12 +1489,14 @@ function RolloutWindow({
         warnings: taskProposal.warnings || [],
         provider: taskProposal.provider || 'manual',
         model: taskProposal.model || '',
+        behavior_plan: taskProposal.behavior_plan || {},
       });
       const nextTerms = response.data.terms || [];
       setRewardConfig(nextTerms);
       setAvailableRewardVariables(response.data.available_variables || []);
       setRewardFormulaExamples(response.data.formula_examples || []);
       setRewardSourceLinks(response.data.reward_source_links || []);
+      setAvailableBehaviorTags(response.data.available_behavior_tags || []);
       setSavedRewardConfigFiles(response.data.saved_reward_configs || []);
       setSelectedRewardConfigFile((prev) => (prev && (response.data.saved_reward_configs || []).includes(prev) ? prev : ((response.data.saved_reward_configs || [])[0] || '')));
       setRewardConfigSaveSourceType(response.data.source_type || 'manual');
@@ -1513,7 +1613,7 @@ function RolloutWindow({
       console.error("Failed to set rollout speed:", e);
     }
   };
-  const saveTrainingPath = async (path, device, nextTrainingHyperparams) => {
+  const saveTrainingPath = async (path, device, nextTrainSteps, nextTrainingHyperparams) => {
     if (!runId) {
       console.warn("Run ID not set yet, cannot pause/resume");
       return;
@@ -1530,11 +1630,14 @@ function RolloutWindow({
         "training_hyperparams": nextTrainingHyperparams,
       });
       setTrainingPath(path);
+      setTrainSteps(Number(nextTrainSteps) || trainSteps);
       setReloadAllTempModelsSwitcher((prev) => !prev);
       setTrainingHyperparams(nextTrainingHyperparams);
       setTrainingAblationReport(null);
       setTrainingAblationStatus('idle');
       setTrainingInsights(null);
+      setTrainingBehaviorReport(null);
+      setTrainingBehaviorTags(null);
       setShowTrainingInsights(false);
       closePathPopup();
 
@@ -1596,6 +1699,10 @@ function RolloutWindow({
       setTrainingAblationStatus('idle');
       setTrainingInsights(null);
       setRolloutInsights(null);
+      setTrainingBehaviorReport(null);
+      setTrainingBehaviorTags(null);
+      setRolloutBehaviorReport(null);
+      setRolloutBehaviorTags(null);
       setShowTrainingInsights(false);
       setShowRolloutInsights(false);
       hydrateLoadedRollouts(initialRollouts);
@@ -1785,10 +1892,24 @@ function RolloutWindow({
         setAvailableRewardVariables(response.data.available_variables || []);
         setRewardFormulaExamples(response.data.formula_examples || []);
         setRewardSourceLinks(response.data.reward_source_links || []);
+        setAvailableBehaviorTags(response.data.available_behavior_tags || []);
+        const nextLlms = response.data.available_llms || [];
+        setAvailableLlms(nextLlms);
+        setSelectedLlmId((prev) => {
+          if (prev && nextLlms.some((item) => item.id === prev && item.available)) {
+            return prev;
+          }
+          return response.data.default_llm_id || nextLlms.find((item) => item.available)?.id || '';
+        });
         setSavedRewardConfigFiles(response.data.saved_reward_configs || []);
         setSelectedRewardConfigFile((prev) => (prev && (response.data.saved_reward_configs || []).includes(prev) ? prev : ((response.data.saved_reward_configs || [])[0] || '')));
         setRewardConfigSaveSourceType(response.data.source_type || 'manual');
         setTaskGoal(response.data.task_config?.goal || '');
+        setTaskProposal((prev) => normalizeTaskProposal({
+          ...(prev || {}),
+          ...(response.data.task_config || {}),
+          available_behavior_tags: response.data.available_behavior_tags || [],
+        }));
         setRewardConfigDirty(false);
         setRewardConfigStatus(
           response.data.supports_custom_reward
@@ -1806,6 +1927,7 @@ function RolloutWindow({
         setAvailableRewardVariables([]);
         setRewardFormulaExamples([]);
         setRewardSourceLinks([]);
+        setAvailableBehaviorTags([]);
         setTaskGoal('');
         setTaskProposal(null);
         setRewardConfigStatus("Failed to load reward settings.");
@@ -1824,6 +1946,36 @@ function RolloutWindow({
   }, [envName, isSavedViewer, runId]);
 
   useEffect(() => {
+    if (isSavedViewer) return undefined;
+    let cancelled = false;
+
+    async function fetchTaskConfigLlms() {
+      try {
+        const response = await apiClient.get('/task_config_llms');
+        if (cancelled) return;
+        const nextLlms = response.data?.llms || [];
+        setAvailableLlms(nextLlms);
+        setSelectedLlmId((prev) => {
+          if (prev && nextLlms.some((item) => item.id === prev && item.available)) {
+            return prev;
+          }
+          return response.data?.default_llm_id || nextLlms.find((item) => item.available)?.id || '';
+        });
+      } catch (error) {
+        if (cancelled) return;
+        console.error('Failed to fetch task-config LLMs:', error);
+        setAvailableLlms([]);
+        setSelectedLlmId('');
+      }
+    }
+
+    fetchTaskConfigLlms();
+    return () => {
+      cancelled = true;
+    };
+  }, [isSavedViewer]);
+
+  useEffect(() => {
     if (isSavedViewer || !runId) return undefined;
 
     let cancelled = false;
@@ -1831,10 +1983,15 @@ function RolloutWindow({
       try {
         const response = await apiClient.get(`/training_runs/${runId}`);
         if (cancelled) return;
+        // safe ? access, so no need to check for undefined here
         setTrainingAblationReport(response.data?.reward_ablation || null);
         setTrainingAblationStatus(response.data?.reward_ablation_status || 'idle');
         setTrainingInsights(response.data?.training_insights || null);
         setRolloutInsights(response.data?.rollout_insights || null);
+        setTrainingBehaviorReport(response.data?.training_behavior_report || null);
+        setTrainingBehaviorTags(response.data?.training_behavior_tags || null);
+        setRolloutBehaviorReport(response.data?.rollout_behavior_report || null);
+        setRolloutBehaviorTags(response.data?.rollout_behavior_tags || null);
       } catch (error) {
         if (cancelled) return;
         console.error('Failed to fetch training run status:', error);
@@ -1849,6 +2006,7 @@ function RolloutWindow({
     };
   }, [isSavedViewer, runId, trainMode]);
 
+  // Basically making sure that sidebar state is alwawys up to date with the latest state in the main component, so that when users open the sidebar, they see the latest info and controls. We are adding a lot of dependencies to this useEffect, so it will run whenever any of these pieces of state change, ensuring that the sidebar always has the most current data and functions.
   useEffect(() => {
     if (!isActive) return;
 
@@ -1871,6 +2029,9 @@ function RolloutWindow({
       taskProposalLoading,
       taskProposalStatus,
       taskProposalLiveStatus,
+      availableBehaviorTags,
+      availableLlms,
+      selectedLlmId,
       latestTrainingBreakdown: trainingRewardBreakdown,
       latestTrainingMeanBreakdown: trainingRewardBreakdownMean,
       latestRolloutBreakdown: rolloutRewardBreakdown,
@@ -1880,6 +2041,7 @@ function RolloutWindow({
       onRemoveTerm: isSavedViewer ? showSavedViewerRewardMessage : removeRewardTerm,
       onSaveConfig: saveRewardConfig,
       onTaskGoalChange: isSavedViewer ? showSavedViewerTaskMessage : setTaskGoal,
+      onLlmSelect: isSavedViewer ? showSavedViewerTaskMessage : setSelectedLlmId,
       onProposeTaskConfig: proposeTaskConfig,
       onApplyTaskProposal: applyTaskProposal,
       onRewardConfigFileSelect: isSavedViewer ? showSavedViewerRewardMessage : setSelectedRewardConfigFile,
@@ -1909,6 +2071,9 @@ function RolloutWindow({
     taskProposalLoading,
     taskProposalStatus,
     taskProposalLiveStatus,
+    availableBehaviorTags,
+    availableLlms,
+    selectedLlmId,
     trainingRewardBreakdown,
     trainingRewardBreakdownMean,
     rolloutRewardBreakdown,
@@ -1920,6 +2085,7 @@ function RolloutWindow({
     showSavedViewerTaskMessage,
     isSavedViewer,
     saveRewardConfig,
+    setSelectedLlmId,
     proposeTaskConfig,
     applyTaskProposal,
     saveRewardConfigSnapshot,
@@ -2159,8 +2325,23 @@ function RolloutWindow({
     }
     setLoading(true);
     try {
-      await apiClient.post("/load_model", { run_id: runId, model_name: modelName });
-      setIsUsingNone(!modelName);
+      const response = await apiClient.post("/load_model", { run_id: runId, model_name: modelName, env_name: envName });
+      if (!response?.data?.ok) {
+        const errorMessage =
+          response?.data?.error === 'model_env_mismatch'
+            ? `Model is for ${response?.data?.model_env_name || 'another environment'}, but the current environment is ${response?.data?.expected_env_name || envName}.`
+            : response?.data?.error || "Failed to load model.";
+        setRewardConfigStatus(`Model load failed: ${errorMessage}`);
+        return;
+      }
+      const loadedModelName = response?.data?.model || "";
+      setIsUsingNone(!loadedModelName);
+      setActiveModelName(loadedModelName);
+      setRewardConfigStatus(
+        loadedModelName
+          ? `Using model ${loadedModelName} for rollout.`
+          : 'Using no model. Rollout is running with the random policy.'
+      );
       clearLiveRolloutState();
     } finally {
       setLoading(false);
@@ -2190,13 +2371,20 @@ function RolloutWindow({
 
   const useNone = async () => {
     setLoading(true);
-    setIsUsingNone(true);
     try {
       // “Clear” the session’s model by loading none; implement either:
       // 1) a dedicated endpoint:
       // await apiClient.post("/unload_model", { session_id: sessionId });
       // OR 2) overload load_model with a sentinel:
-      await apiClient.post("/load_model", { run_id: runId, model_name: "" });
+      const response = await apiClient.post("/load_model", { run_id: runId, model_name: "", env_name: envName });
+      if (!response?.data?.ok) {
+        const errorMessage = response?.data?.error || "Failed to clear model.";
+        setRewardConfigStatus(`Model clear failed: ${errorMessage}`);
+        return;
+      }
+      setIsUsingNone(true);
+      setActiveModelName("");
+      setRewardConfigStatus('Using no model. Rollout is running with the random policy.');
     } finally {
       setLoading(false);
     }
@@ -2280,7 +2468,8 @@ function RolloutWindow({
       const up = await apiClient.post("/upload_model", form);
       const modelName = up.data?.model_name; // backend should return stored filename
       if (modelName) {
-        await apiClient.post("/load_model", { run_id: runId, model_name: modelName });
+        setSelectedServerModel(modelName);
+        await applyModelSelection(modelName);
       }
     } finally {
       setLoading(false);
@@ -2391,6 +2580,200 @@ function RolloutWindow({
       </div>
     );
   };
+  const renderBehaviorPlanCards = (proposal) => {
+    const plan = proposal?.behavior_plan;
+    const availableTags = Array.isArray(proposal?.available_behavior_tags) ? proposal.available_behavior_tags : availableBehaviorTags;
+    if (!plan && (!availableTags || availableTags.length === 0)) {
+      return null;
+    }
+
+    const renderPlanList = (items, emptyLabel, accentColor) => (
+      Array.isArray(items) && items.length > 0 ? (
+        <div style={{ display: 'grid', gap: '0.45rem', marginTop: '0.45rem' }}>
+          {items.map((item) => (
+            <div
+              key={`${accentColor}-${item.key}`}
+              style={{
+                border: '1px solid rgba(148, 163, 184, 0.18)',
+                borderRadius: '10px',
+                padding: '0.65rem 0.75rem',
+                backgroundColor: 'rgba(255,255,255,0.52)',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+                <div style={{ fontWeight: 700, color: '#334155' }}>{item.key}</div>
+                <div style={{ color: accentColor, fontFamily: 'ui-monospace, SFMono-Regular, monospace', fontSize: '0.8rem' }}>
+                  weight {Number(item.weight || 0).toFixed(2)}
+                </div>
+              </div>
+              {item.reason && (
+                <div style={{ color: '#64748b', fontSize: '0.8rem', marginTop: '0.25rem', lineHeight: 1.45 }}>
+                  {item.reason}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ color: '#64748b', fontSize: '0.82rem', marginTop: '0.45rem' }}>{emptyLabel}</div>
+      )
+    );
+
+    return (
+      <div style={{ display: 'grid', gap: '0.85rem', marginTop: '0.95rem' }}>
+        <div
+          style={{
+            border: '1px solid rgba(148, 163, 184, 0.22)',
+            borderRadius: '14px',
+            padding: '0.9rem',
+            backgroundColor: 'rgba(255,255,255,0.58)',
+            textAlign: 'left',
+          }}
+        >
+          <div style={{ fontWeight: 800, color: '#334155' }}>Behavior Plan</div>
+          {plan?.rationale && (
+            <div style={{ color: '#64748b', fontSize: '0.82rem', marginTop: '0.3rem', lineHeight: 1.5 }}>
+              {plan.rationale}
+            </div>
+          )}
+          <div style={{ marginTop: '0.7rem' }}>
+            <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#0f766e' }}>Desired Behaviors</div>
+            {renderPlanList(plan?.desired_tags, 'No desired behavior tags selected.', '#0f766e')}
+          </div>
+          <div style={{ marginTop: '0.8rem' }}>
+            <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#b45309' }}>Avoid Behaviors</div>
+            {renderPlanList(plan?.avoid_tags, 'No avoid behavior tags selected.', '#b45309')}
+          </div>
+        </div>
+        {Array.isArray(availableTags) && availableTags.length > 0 && (
+          <div
+            style={{
+              border: '1px solid rgba(148, 163, 184, 0.18)',
+              borderRadius: '14px',
+              padding: '0.9rem',
+              backgroundColor: 'rgba(255,255,255,0.48)',
+              textAlign: 'left',
+            }}
+          >
+            <div style={{ fontWeight: 800, color: '#334155' }}>Available Behavior Tags</div>
+            <div style={{ color: '#64748b', fontSize: '0.8rem', marginTop: '0.25rem' }}>
+              {availableTags.length} tags available for the current environment.
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', marginTop: '0.65rem' }}>
+              {availableTags.map((tag) => (
+                <span
+                  key={`available-behavior-tag-${tag.key}`}
+                  style={{
+                    padding: '0.32rem 0.6rem',
+                    borderRadius: '999px',
+                    backgroundColor: tag.polarity === 'avoid' ? 'rgba(251, 191, 36, 0.16)' : 'rgba(14, 165, 233, 0.12)',
+                    border: `1px solid ${tag.polarity === 'avoid' ? 'rgba(217, 119, 6, 0.22)' : 'rgba(14, 165, 233, 0.2)'}`,
+                    color: '#334155',
+                    fontSize: '0.76rem',
+                    fontWeight: 700,
+                  }}
+                >
+                  {tag.key}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+  const renderBehaviorReportCards = (report, tagReport, emptyLabel) => {
+    const metrics = report?.metrics || {};
+    const notableMetrics = Array.isArray(report?.notable_metrics) ? report.notable_metrics : [];
+    const summary = report?.summary || {};
+    const supportedTags = Array.isArray(tagReport?.supported_tags) ? tagReport.supported_tags : [];
+    const tentativeTags = Array.isArray(tagReport?.tentative_tags) ? tagReport.tentative_tags : [];
+
+    if (Object.keys(metrics).length === 0 && supportedTags.length === 0 && tentativeTags.length === 0) {
+      return <div style={{ color: '#64748b', fontSize: '0.9rem' }}>{emptyLabel}</div>;
+    }
+
+    const renderTagPills = (items, accentColor, title) => (
+      <div style={{ marginTop: '0.7rem' }}>
+        <div style={{ fontSize: '0.82rem', fontWeight: 700, color: accentColor }}>{title}</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', marginTop: '0.45rem' }}>
+          {items.length === 0 ? (
+            <span style={{ color: '#64748b', fontSize: '0.8rem' }}>None yet.</span>
+          ) : (
+            items.map((tag) => (
+              <span
+                key={`${title}-${tag.key}`}
+                style={{
+                  padding: '0.32rem 0.6rem',
+                  borderRadius: '999px',
+                  backgroundColor: 'rgba(255,255,255,0.7)',
+                  border: '1px solid rgba(148, 163, 184, 0.22)',
+                  color: '#334155',
+                  fontSize: '0.76rem',
+                  fontWeight: 700,
+                }}
+              >
+                {tag.key} ({Math.round((Number(tag.score || 0)) * 100)}%)
+              </span>
+            ))
+          )}
+        </div>
+      </div>
+    );
+
+    return (
+      <div style={{ display: 'grid', gap: '0.8rem', marginTop: '0.95rem' }}>
+        <div
+          style={{
+            border: '1px solid rgba(148, 163, 184, 0.22)',
+            borderRadius: '14px',
+            padding: '0.9rem',
+            backgroundColor: 'rgba(255,255,255,0.58)',
+            textAlign: 'left',
+          }}
+        >
+          <div style={{ fontWeight: 800, color: '#334155' }}>Behavior Summary</div>
+          <div style={{ color: '#64748b', fontSize: '0.82rem', marginTop: '0.3rem', lineHeight: 1.5 }}>
+            Episodes analyzed: {summary.episodes_analyzed || 0}
+            {summary.primary_label ? ` · dominant label: ${summary.primary_label}` : ''}
+          </div>
+          {renderTagPills(supportedTags, '#0f766e', 'Supported Behavior Tags')}
+          {renderTagPills(tentativeTags, '#475569', 'Tentative Behavior Tags')}
+        </div>
+        <div
+          style={{
+            border: '1px solid rgba(148, 163, 184, 0.18)',
+            borderRadius: '14px',
+            padding: '0.9rem',
+            backgroundColor: 'rgba(255,255,255,0.48)',
+            textAlign: 'left',
+          }}
+        >
+          <div style={{ fontWeight: 800, color: '#334155' }}>Notable Deterministic Metrics</div>
+          <div style={{ display: 'grid', gap: '0.45rem', marginTop: '0.6rem' }}>
+            {(notableMetrics.length > 0 ? notableMetrics : Object.entries(metrics).slice(0, 10).map(([name, value]) => ({ name, value }))).map((metric, index) => (
+              <div
+                key={`${metric.name || 'metric'}-${index}`}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: '1rem',
+                  padding: '0.45rem 0',
+                  borderBottom: '1px solid rgba(148, 163, 184, 0.12)',
+                  fontSize: '0.8rem',
+                }}
+              >
+                <span style={{ color: '#475569' }}>{metric.name}</span>
+                <span style={{ color: '#0f172a', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
+                  {Number(metric.value || 0).toFixed(3)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
   return (
   <div
     style={{
@@ -2441,38 +2824,6 @@ function RolloutWindow({
       </div>
     </div>
       
-    <div style={{ ...sectionPanelStyle, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-      <label htmlFor="trainSteps" style={{ fontWeight: 600 }}>
-        🧠 Train Steps:
-      </label>
-
-      <input
-        id='trainSteps'
-        type="range"
-        min="1000"
-        max="100000"
-        step="1000"
-        value={trainSteps}
-        onChange={(e) => setTrainSteps(Number(e.target.value))}
-        style={{ width: '200px', margin: '0.5rem' }}
-      /> 
-      <input
-        type="number"
-        min="1000"
-        max="100000"
-        step="1000"
-        value={trainSteps}
-        onChange={(e) =>  setTrainSteps(Number(e.target.value))}
-        style={{
-          width: '70px',
-          padding: '4px',
-          border: '1px solid #d1d5db',
-          borderRadius: '4px',
-        }}
-      /> 
-    </div>
-    
-    
     {/* Top Control Row */}
     <div
       style={{
@@ -2509,6 +2860,7 @@ function RolloutWindow({
       <SetPathPopup
         isOpen={showPathPopup}
         defaultPath={frozenPath !== null ? frozenPath : `ppo_model_${envName}_${timestamp}.zip`}
+        defaultTrainSteps={trainSteps}
         defaultHyperparams={trainingHyperparams}
         onConfirm={saveTrainingPath}
         onClose={closePathPopup}
@@ -2545,6 +2897,7 @@ function RolloutWindow({
         {/* Classic Control Environments */}
         <option value="CartPole-v0">CartPole-v0</option>
         <option value="CartPole-v1">CartPole-v1</option>
+        <option value="CartPoleLoose-v0">CartPoleLoose-v0</option>
         <option value="MountainCar-v0">MountainCar-v0</option>
         <option value="MountainCarContinuous-v0">MountainCarContinuous-v0</option>
         <option value="Acrobot-v1">Acrobot-v1</option>
@@ -3015,6 +3368,11 @@ function RolloutWindow({
       description="Outcome-focused summaries derived from recent training episodes, using reward-term contrasts and terminal-window comparisons."
     >
       {renderInsightCards(trainingInsights, 'Training insights will appear after enough completed episodes are available.')}
+      {renderBehaviorReportCards(
+        trainingBehaviorReport,
+        trainingBehaviorTags,
+        'Training behavior metrics and tags will appear after enough completed episodes are available.'
+      )}
     </InsightsModal>
     {!isSavedViewer && (trainingAblationReport || trainingAblationStatus === 'running' || trainingAblationStatus === 'error') && (
       <div style={{ ...sectionPanelStyle, marginTop: '1rem' }}>
@@ -3255,7 +3613,15 @@ function RolloutWindow({
           >
               <option value="">(None — random policy)</option>
               {sortedServerModelRecords.map((model) => (
-                <option key={model.name} value={model.name}>{`${model.env_name || 'Model'} | ${formatModelTimestamp(model.created_at)} | ${model.name}`}</option>
+                <option
+                  key={model.name}
+                  value={model.name}
+                  disabled={Boolean(model.env_name) && model.env_name !== envName}
+                >
+                  {`${model.env_name || 'Model'} | ${formatModelTimestamp(model.created_at)} | ${model.name}${
+                    model.env_name && model.env_name !== envName ? ' | incompatible' : ''
+                  }`}
+                </option>
               ))}
             </select>
           <button
@@ -3427,6 +3793,11 @@ function RolloutWindow({
         description="Recent rollout episodes are analyzed for terms that separate success from failure and for late-episode failure signatures."
       >
         {renderInsightCards(rolloutInsights, 'Rollout insights will appear after enough recent rollout episodes have been observed.')}
+        {renderBehaviorReportCards(
+          rolloutBehaviorReport,
+          rolloutBehaviorTags,
+          'Rollout behavior metrics and tags will appear after enough recent rollout episodes have been observed.'
+        )}
       </InsightsModal>
       
       <div style={{ marginTop: "2rem", textAlign: "center" }}>
@@ -3476,6 +3847,35 @@ function RolloutWindow({
           <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#334155' }}>Rollout Visualization</div>
           <div style={{ color: '#64748b', fontSize: '0.82rem', marginTop: '0.15rem' }}>
             Control capture cadence, playback speed, and rollout insight visibility from this header.
+          </div>
+          <div
+            style={{
+              marginTop: '0.5rem',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              padding: '0.45rem 0.7rem',
+              borderRadius: '999px',
+              background: activeModelName
+                ? 'linear-gradient(180deg, rgba(14,165,233,0.16), rgba(37,99,235,0.12))'
+                : 'linear-gradient(180deg, rgba(148,163,184,0.18), rgba(100,116,139,0.12))',
+              border: activeModelName
+                ? '1px solid rgba(37,99,235,0.25)'
+                : '1px solid rgba(148,163,184,0.25)',
+              color: '#334155',
+              fontSize: '0.82rem',
+              lineHeight: 1.35,
+            }}
+          >
+            <span style={{ fontWeight: 800, color: activeModelName ? '#1d4ed8' : '#475569' }}>Active Model</span>
+            <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace', color: '#0f172a' }}>
+              {activeModelRecord?.name || activeModelName || 'None (random policy)'}
+            </span>
+            {activeModelRecord?.created_at && (
+              <span style={{ color: '#64748b' }}>
+                {formatModelTimestamp(activeModelRecord.created_at)}
+              </span>
+            )}
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 
 const SaveRolloutPopup = ({
   runId,
@@ -21,6 +22,17 @@ const SaveRolloutPopup = ({
     }
   }, [isOpen]);
 
+  useEffect(() => {
+    if (!isOpen) {
+      return undefined;
+    }
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   const handleConfirm = () => {
@@ -32,99 +44,58 @@ const SaveRolloutPopup = ({
     onConfirm(cleanName); // 👈 pass back the filename
   };
 
-  return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        backgroundColor: "rgba(0,0,0,0.4)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 1000,
-      }}
-    >
+  return createPortal(
+    <div className="popup-backdrop" onClick={onClose}>
       <div
-        style={{
-          backgroundColor: "white",
-          padding: "1.5rem",
-          borderRadius: "8px",
-          minWidth: "320px",
-          textAlign: "center",
-          boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-        }}
+        className="popup-card"
+        style={{ width: "min(560px, 92vw)" }}
+        onClick={(event) => event.stopPropagation()}
       >
-        <h3 style={{ marginBottom: "1rem" }}>{title}</h3>
-        {message ? (
-          <div style={{ marginBottom: "0.9rem", color: "#475569", fontSize: "0.92rem", lineHeight: 1.45 }}>
-            {message}
-          </div>
-        ) : null}
+        <div className="popup-header">
+          <div>{title}</div>
+          <button className="popup-close" onClick={onClose} aria-label="Close">x</button>
+        </div>
+        <div className="popup-body">
+          {message ? (
+            <div style={{ marginBottom: "0.9rem", color: "#475569", fontSize: "0.92rem", lineHeight: 1.45 }}>
+              {message}
+            </div>
+          ) : null}
 
-        <label htmlFor="filename" style={{ fontWeight: 600 }}>
-          Filename:
-        </label>
-        <br />
-        <input
-          id="filename"
-          type="text"
-          value={filename}
-          onChange={(e) => setFilename(e.target.value)}
-          style={{
-            width: "90%",
-            padding: "6px",
-            margin: "0.75rem 0",
-            border: "1px solid #d1d5db",
-            borderRadius: "4px",
-          }}
-        />
-
-        <div style={{ display: "flex", justifyContent: "center", gap: "0.75rem", flexWrap: "wrap" }}>
-          <button
-            onClick={onClose}
-            style={{
-              padding: "6px 12px",
-              borderRadius: "4px",
-              border: "1px solid #ccc",
-              backgroundColor: "#f3f4f6",
-              cursor: "pointer",
-            }}
-          >
-            Cancel
-          </button>
+          <label htmlFor="filename" className="popup-label">
+            Filename
+          </label>
+          <input
+            id="filename"
+            className="popup-input"
+            type="text"
+            value={filename}
+            onChange={(e) => setFilename(e.target.value)}
+          />
+        </div>
+        <div className="popup-actions" style={{ justifyContent: "center", flexWrap: "wrap" }}>
+          <button className="btn secondary" onClick={onClose}>Cancel</button>
           {showSkip && onSkip ? (
             <button
               onClick={onSkip}
               style={{
-                padding: "6px 12px",
-                borderRadius: "4px",
+                padding: "9px 13px",
+                borderRadius: "12px",
                 border: "1px solid #cbd5e1",
                 backgroundColor: "white",
                 color: "#334155",
-                fontWeight: 600,
+                fontWeight: 700,
                 cursor: "pointer",
               }}
             >
               {skipLabel}
             </button>
           ) : null}
-          <button
-            onClick={handleConfirm}
-            style={{
-              padding: "6px 12px",
-              borderRadius: "4px",
-              border: "none",
-              backgroundColor: "#2563eb",
-              color: "white",
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            {confirmLabel}
-          </button>
+          <button className="btn primary" onClick={handleConfirm}>{confirmLabel}</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 

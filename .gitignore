@@ -5,3 +5,5 @@ models/
 progress_bar.log
 caches_gitignore/
 rollouts/
+# OwnYourCode - personal career tracking
+ownyourcode/career/

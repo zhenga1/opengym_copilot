@@ -4,6 +4,8 @@ from stable_baselines3.common.callbacks import BaseCallback, CallbackList
 import time
 import numpy as np
 from deterministic_insights import build_episode_insights
+from behavior_metrics import build_behavior_metric_report
+from behavior_tags import build_behavior_tag_report
 
 class TrainingProgressCallback(BaseCallback):
     """
@@ -86,6 +88,7 @@ class TrainingProgressCallback(BaseCallback):
         reward_breakdown_last = {}
         reward_breakdown_mean = {}
         new_training_episodes = []
+        public_training_episodes = []
         if getattr(self.model, "ep_info_buffer", None):
             buffer_entries = list(self.model.ep_info_buffer)
             ep_rewards = [ep_info["r"] for ep_info in buffer_entries]
@@ -99,8 +102,11 @@ class TrainingProgressCallback(BaseCallback):
                 for key in breakdown_keys
             }
 
+        # Both the info and the done variable are set by the SB3 trainer on each step
+        # and we can use them to track training episodes and whether or not the episode is completed. 
         infos = self.locals.get("infos", [])
         dones = self.locals.get("dones", [])
+        # If training step is not invalid AND episode just finished, then we can pull episode-level info from the info dict and update our training episode counter and episode-level insights.
         if infos is not None and dones is not None:
             for done, info in zip(dones, infos):
                 if not done or not info:
@@ -112,20 +118,24 @@ class TrainingProgressCallback(BaseCallback):
                 episode_info = info.get("episode", {}) if isinstance(info.get("episode"), dict) else {}
                 reward_total = info.get("reward_total", episode_info.get("r", 0.0))
                 reward_breakdown_episode = info.get("reward_breakdown_episode", {})
-                new_training_episodes.append({
+                backend_episode = {
                     "episode": self._training_episode_counter,
                     "reward": float(reward_total),
                     "reward_breakdown": reward_breakdown_episode,
                     "reward_history": reward_history_episode,
+                    "behavior_trace": info.get("behavior_trace_episode", []),
                     "episode_outcome": info.get("episode_outcome", "unknown"),
                     "episode_outcome_reason": info.get("episode_outcome_reason", "outcome unavailable"),
                     "episode_terminal_timestep": int(info.get("episode_terminal_timestep", len(reward_history_episode))),
                     "terminated": bool(info.get("episode_terminated", False)),
                     "truncated": bool(info.get("episode_truncated", False)),
                     "at_step": steps_done,
-                })
+                }
+                new_training_episodes.append(backend_episode)
+                public_training_episodes.append({key: value for key, value in backend_episode.items() if key != "behavior_trace"})
         
         # Update shared status (frontend can poll this)
+        # Mutates the status dict to add the recent training episodes and insights, which the frontend can also use to display insights on training process
         status.update({
             "steps_done": steps_done,
             "reward_last": reward_last,
@@ -140,6 +150,15 @@ class TrainingProgressCallback(BaseCallback):
             status["training_insights"] = build_episode_insights(
                 status.get("recent_training_episodes", []),
                 source="training",
+            )
+            status["training_behavior_report"] = build_behavior_metric_report(
+                status.get("recent_training_episodes", []),
+                source="training",
+                env_name=status.get("env_name"),
+            )
+            status["training_behavior_tags"] = build_behavior_tag_report(
+                status.get("training_behavior_report", {}),
+                status.get("env_name"),
             )
         
         # print(f"Preparing to send training progress callback with reward {reward_last} and mean reward {reward_mean}")
@@ -158,7 +177,7 @@ class TrainingProgressCallback(BaseCallback):
                         "eval_reward": status.get("eval_reward"),
                         "reward_breakdown": reward_breakdown_last,
                         "reward_breakdown_mean": reward_breakdown_mean,
-                        "new_training_episodes": new_training_episodes,
+                        "new_training_episodes": public_training_episodes,
                         "fps": fps,
                         "ts": time.time(),
                     }, self.run_id)
@@ -179,6 +198,7 @@ class TrainingProgressCallback(BaseCallback):
                     pass
         
         if status.get("stop", False):
+            # returning False will allow model.learn(..) to stop training
             return False # allow stop flag that is triggered from other parts of the class
 
         return True
