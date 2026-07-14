@@ -556,6 +556,54 @@ function RewardSidebar({
                     ))}
                   </div>
                 )}
+                {(taskProposal.model_proposal_preview || taskProposal.raw_model_response) && (
+                  <div style={{ marginTop: '0.85rem' }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#fcd34d' }}>Model Output Preview</div>
+                    {taskProposal.llm_error_stage && (
+                      <div style={{ marginTop: '0.22rem', fontSize: '0.7rem', color: '#fde68a' }}>
+                        Failed stage: {taskProposal.llm_error_stage}
+                      </div>
+                    )}
+                    {taskProposal.model_proposal_preview && (
+                      <pre
+                        style={{
+                          marginTop: '0.35rem',
+                          fontSize: '0.68rem',
+                          color: '#e2e8f0',
+                          backgroundColor: 'rgba(15, 23, 42, 0.5)',
+                          border: '1px solid rgba(148, 163, 184, 0.14)',
+                          borderRadius: '0.6rem',
+                          padding: '0.55rem',
+                          whiteSpace: 'pre-wrap',
+                          overflowWrap: 'anywhere',
+                          maxHeight: '11rem',
+                          overflowY: 'auto',
+                        }}
+                      >
+                        {JSON.stringify(taskProposal.model_proposal_preview, null, 2)}
+                      </pre>
+                    )}
+                    {taskProposal.raw_model_response && (
+                      <pre
+                        style={{
+                          marginTop: '0.35rem',
+                          fontSize: '0.68rem',
+                          color: '#cbd5e1',
+                          backgroundColor: 'rgba(15, 23, 42, 0.5)',
+                          border: '1px solid rgba(148, 163, 184, 0.14)',
+                          borderRadius: '0.6rem',
+                          padding: '0.55rem',
+                          whiteSpace: 'pre-wrap',
+                          overflowWrap: 'anywhere',
+                          maxHeight: '11rem',
+                          overflowY: 'auto',
+                        }}
+                      >
+                        {taskProposal.raw_model_response}
+                      </pre>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </>

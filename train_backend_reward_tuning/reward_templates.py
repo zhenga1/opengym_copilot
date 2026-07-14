@@ -142,6 +142,7 @@ _CAR_RACING_TEMPLATE = [
 
 
 ENV_TEMPLATE_BY_PREFIX: list[tuple[str, list[dict[str, Any]]]] = [
+    ("CartPoleLoose-", _CARTPOLE_TEMPLATE),
     ("CartPole-", _CARTPOLE_TEMPLATE),
     ("MountainCarContinuous-", _MOUNTAIN_CAR_CONTINUOUS_TEMPLATE),
     ("MountainCar-", _MOUNTAIN_CAR_TEMPLATE),
@@ -226,7 +227,7 @@ def raw_reward_terms_for_env(
 
     terms = {"native": float(native_reward)}
 
-    if env_name.startswith("CartPole-"):
+    if env_name.startswith(("CartPole-", "CartPoleLoose-")):
         if flat_obs.size >= 4:
             x, x_dot, theta, theta_dot = flat_obs[:4]
             prev_action_value = None if previous_action is None else float(np.asarray(previous_action).reshape(-1)[0])
