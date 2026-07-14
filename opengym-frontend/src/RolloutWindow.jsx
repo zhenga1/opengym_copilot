@@ -209,6 +209,7 @@ function RolloutWindow({
   // whether or not the current rollout (all the rewards) is being saved
   const [saving_rollouts, setSavingRollouts] = useState(false);
   const [runId, setRunId] = useState(null);
+  const [rolloutSessionVersion, setRolloutSessionVersion] = useState(0);
   const intervalRef = useRef(null);
   const rolloutEpisodeOffsetRef = useRef(null);
 
@@ -322,6 +323,12 @@ function RolloutWindow({
     setRolloutBehaviorReport(null);
     setRolloutBehaviorTags(null);
   }, []);
+
+  const restartLiveRolloutSession = useCallback(() => {
+    clearLiveRolloutState();
+    setSessionId(null);
+    setRolloutSessionVersion((prev) => prev + 1);
+  }, [clearLiveRolloutState]);
 
   const updateRewardTerm = useCallback((termKey, field, value, fallbackTerm = null) => {
     setRewardConfig((prev) => {
@@ -480,6 +487,17 @@ function RolloutWindow({
     return {
       ...proposal,
       goal: typeof proposal.goal === 'string' ? proposal.goal : '',
+      raw_model_response: typeof proposal.raw_model_response === 'string'
+        ? proposal.raw_model_response
+        : typeof proposal._raw_model_response === 'string'
+          ? proposal._raw_model_response
+          : '',
+      llm_error_stage: typeof proposal.llm_error_stage === 'string' ? proposal.llm_error_stage : '',
+      parse_recovered: Boolean(proposal._parse_recovered),
+      model_proposal_preview:
+        proposal.model_proposal_preview && typeof proposal.model_proposal_preview === 'object'
+          ? proposal.model_proposal_preview
+          : null,
       success_metric:
         typeof proposal.success_metric === 'string'
           ? proposal.success_metric
@@ -864,13 +882,18 @@ function RolloutWindow({
     [matchesEpisodeOutcome, trainingEpisodes, trainingTimelineOutcomeFilter]
   );
 
+  const orderedFilteredTrainingEpisodes = useMemo(
+    () => [...filteredTrainingEpisodes].sort((left, right) => Number(left?.episode ?? 0) - Number(right?.episode ?? 0)),
+    [filteredTrainingEpisodes]
+  );
+
   const selectedTrainingTimelineRollout = useMemo(() => {
-    if (filteredTrainingEpisodes.length === 0) return null;
+    if (orderedFilteredTrainingEpisodes.length === 0) return null;
     if (selectedTrainingTimelineEpisode === null || selectedTrainingTimelineEpisode === undefined) {
-      return filteredTrainingEpisodes[0];
+      return orderedFilteredTrainingEpisodes[0];
     }
-    return filteredTrainingEpisodes.find((entry) => entry.episode === selectedTrainingTimelineEpisode) || filteredTrainingEpisodes[0];
-  }, [filteredTrainingEpisodes, selectedTrainingTimelineEpisode]);
+    return orderedFilteredTrainingEpisodes.find((entry) => entry.episode === selectedTrainingTimelineEpisode) || orderedFilteredTrainingEpisodes[0];
+  }, [orderedFilteredTrainingEpisodes, selectedTrainingTimelineEpisode]);
 
   const selectedTrainingTimelineTarget = useMemo(() => {
     if (trainingTimelineMode === 'average') {
@@ -1024,6 +1047,11 @@ function RolloutWindow({
     [matchesEpisodeOutcome, rolloutTimelineOutcomeFilter, rollouts]
   );
 
+  const orderedFilteredRollouts = useMemo(
+    () => [...filteredRollouts].sort((left, right) => Number(left?.episode ?? 0) - Number(right?.episode ?? 0)),
+    [filteredRollouts]
+  );
+
   const earliestFilteredRollout = useMemo(() => {
     if (filteredRollouts.length === 0) return null;
     return filteredRollouts.reduce((earliest, entry) => {
@@ -1037,12 +1065,12 @@ function RolloutWindow({
   }, [filteredRollouts]);
 
   const selectedTimelineRollout = useMemo(() => {
-    if (filteredRollouts.length === 0) return null;
+    if (orderedFilteredRollouts.length === 0) return null;
     if (selectedTimelineEpisode === null || selectedTimelineEpisode === undefined) {
-      return earliestFilteredRollout || filteredRollouts[0];
+      return earliestFilteredRollout || orderedFilteredRollouts[0];
     }
-    return filteredRollouts.find((entry) => entry.episode === selectedTimelineEpisode) || earliestFilteredRollout || filteredRollouts[0];
-  }, [earliestFilteredRollout, filteredRollouts, selectedTimelineEpisode]);
+    return orderedFilteredRollouts.find((entry) => entry.episode === selectedTimelineEpisode) || earliestFilteredRollout || orderedFilteredRollouts[0];
+  }, [earliestFilteredRollout, orderedFilteredRollouts, selectedTimelineEpisode]);
 
   const selectedTimelineTarget = useMemo(() => {
     if (rolloutTimelineMode === 'average') {
@@ -2252,7 +2280,7 @@ function RolloutWindow({
         if (retryRef.current) clearTimeout(retryRef.current);
       };
     }
-  }, [envName, isSavedViewer, trainMode, runId]);
+  }, [envName, isSavedViewer, rolloutSessionVersion, trainMode, runId]);
 
   // This is the useEffect for the frame Data from the video
   useEffect(() => {
@@ -2342,11 +2370,11 @@ function RolloutWindow({
           ? `Using model ${loadedModelName} for rollout.`
           : 'Using no model. Rollout is running with the random policy.'
       );
-      clearLiveRolloutState();
+      restartLiveRolloutSession();
     } finally {
       setLoading(false);
     }
-  }, [clearLiveRolloutState, runId]);
+  }, [envName, restartLiveRolloutSession, runId]);
 
   const openModelSwitchSavePrompt = useCallback((modelName) => {
     setPendingModelSwitch({ modelName });
@@ -2385,6 +2413,7 @@ function RolloutWindow({
       setIsUsingNone(true);
       setActiveModelName("");
       setRewardConfigStatus('Using no model. Rollout is running with the random policy.');
+      restartLiveRolloutSession();
     } finally {
       setLoading(false);
     }
@@ -3204,12 +3233,12 @@ function RolloutWindow({
             value={selectedTrainingTimelineEpisode ?? ''}
             onChange={(event) => setSelectedTrainingTimelineEpisode(Number(event.target.value))}
             style={{ padding: '0.4rem 0.55rem', minWidth: 160 }}
-            disabled={trainingTimelineMode === 'average' || filteredTrainingEpisodes.length === 0}
+            disabled={trainingTimelineMode === 'average' || orderedFilteredTrainingEpisodes.length === 0}
           >
-            {filteredTrainingEpisodes.length === 0 ? (
+            {orderedFilteredTrainingEpisodes.length === 0 ? (
               <option value="">No training episodes yet</option>
             ) : (
-              filteredTrainingEpisodes.map((entry) => (
+              orderedFilteredTrainingEpisodes.map((entry) => (
                 <option key={`training-episode-${entry.episode}`} value={entry.episode}>
                   Episode {entry.episode}
                 </option>
@@ -4199,10 +4228,10 @@ function RolloutWindow({
           style={{ padding: '0.4rem 0.55rem', minWidth: 160 }}
           disabled={rolloutTimelineMode === 'average' || filteredRollouts.length === 0}
         >
-          {filteredRollouts.length === 0 ? (
+          {orderedFilteredRollouts.length === 0 ? (
             <option value="">No episodes yet</option>
           ) : (
-            filteredRollouts.map((entry) => (
+            orderedFilteredRollouts.map((entry) => (
               <option key={`episode-${entry.episode}`} value={entry.episode}>
                 Episode {entry.episode}
               </option>

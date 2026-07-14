@@ -123,6 +123,21 @@ train_run_progresses = {}
 HAS_MULTIPART = importlib.util.find_spec("multipart") is not None
 
 
+class LlmProposalError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage_label: str,
+        raw_response_text: str | None = None,
+        partial_proposal: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.stage_label = stage_label
+        self.raw_response_text = raw_response_text or ""
+        self.partial_proposal = partial_proposal or {}
+
+
 def ensure_sb3_available():
     if SB3_IMPORT_ERROR is not None:
         raise RuntimeError(
@@ -589,6 +604,7 @@ def set_task_config_for_run(run_id: str, env_name: str, config: dict[str, Any]) 
 def validate_task_config_for_run(config: dict[str, Any], env_name: str, run_id: str | None = None) -> dict[str, Any]:
     base_names = reward_variable_names_for_env(env_name)
     param_names: list[str] = []
+    param_values: dict[str, float] = {}
     seen_param_names: set[str] = set()
     for param in config.get("task_params", []) or []:
         key = str(param.get("key") or "").strip()
@@ -598,10 +614,16 @@ def validate_task_config_for_run(config: dict[str, Any], env_name: str, run_id: 
             raise ValueError(f"Duplicate task parameter '{key}'.")
         seen_param_names.add(key)
         param_names.append(key)
+        try:
+            param_values[key] = float(param.get("value", 0.0))
+        except (TypeError, ValueError):
+            param_values[key] = 0.0
 
     derived_names: list[str] = []
     seen_signal_names: set[str] = set()
-    zero_context = {name: 0.0 for name in [*base_names, *param_names]}
+    zero_context = {name: 0.0 for name in base_names}
+    # update the context with the updated task parameters
+    zero_context.update(param_values)
     for signal in config.get("derived_signals", []) or []:
         key = str(signal.get("key") or "").strip()
         expression = str(signal.get("expression") or "").strip()
@@ -757,6 +779,42 @@ def task_variable_names_for_run(run_id: str | None, env_name: str) -> list[str]:
     return variable_names
 
 
+def _compact_behavior_tag_catalog(env_name: str) -> list[dict[str, Any]]:
+    compact_catalog: list[dict[str, Any]] = []
+    for tag in available_behavior_tags_for_env(env_name):
+        compact_catalog.append({
+            "key": str(tag.get("key") or "").strip(),
+            "polarity": str(tag.get("polarity") or "").strip(),
+            "title": str(tag.get("title") or "").strip(),
+            "tags": [str(item).strip() for item in (tag.get("tags") or []) if str(item).strip()][:4],
+        })
+    return compact_catalog
+
+
+def _compact_variable_specs_for_prompt(env_name: str) -> list[dict[str, Any]]:
+    compact_specs: list[dict[str, Any]] = []
+    for spec in task_variable_specs_for_run(None, env_name):
+        aliases = [str(alias).strip() for alias in (spec.get("aliases") or []) if str(alias).strip()]
+        compact_specs.append({
+            "name": str(spec.get("name") or "").strip(),
+            "source": str(spec.get("source") or "").strip(),
+            "aliases": aliases[:4],
+        })
+    return compact_specs
+
+
+def _compact_reward_terms_for_prompt(env_name: str) -> list[dict[str, Any]]:
+    compact_terms: list[dict[str, Any]] = []
+    for term in reward_template_for_env(env_name):
+        compact_terms.append({
+            "key": str(term.get("key") or "").strip(),
+            "weight": float(term.get("weight", 0.0)),
+            "enabled": bool(term.get("enabled", True)),
+            "expression": str(term.get("expression") or "").strip(),
+        })
+    return compact_terms
+
+
 def _extract_first_number(text: str, default: float) -> float:
     match = re.search(r"(-?\d+(?:\.\d+)?)", text)
     if not match:
@@ -765,6 +823,44 @@ def _extract_first_number(text: str, default: float) -> float:
         return float(match.group(1))
     except ValueError:
         return float(default)
+
+"""
+Takes string and returns JSON object extracted
+
+
+"""
+def _extract_balanced_json_object(text: str) -> str | None:
+    source = str(text or "").strip()
+    if not source:
+        return None
+    if source.startswith("```"):
+        source = re.sub(r"^```(?:json)?\s*", "", source)
+        source = re.sub(r"\s*```$", "", source)
+    start = source.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for index in range(start, len(source)):
+        char = source[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start:index + 1]
+    return None
 
 
 def build_heuristic_task_config_proposal(goal: str, env_name: str) -> dict[str, Any]:
@@ -782,6 +878,11 @@ def build_heuristic_task_config_proposal(goal: str, env_name: str) -> dict[str, 
     rationale = "Heuristic fallback proposal based on the current environment schema and goal keywords."
     success_metric = "Long episodes with stable shaped reward and fewer late-episode failure spikes."
 
+    """
+    Currently the heuristic proposal only applies to CartPole environments.
+
+    TODO: expand to other environments and goals as needed, and make this more robust to different keyword variations.
+    """
     if env_name.startswith("CartPole-") and any(keyword in lower_goal for keyword in ["sway", "swing", "oscillat", "left and right", "frequency", "periodic"]):
         frequency = 0.8
         amplitude = 0.18
@@ -945,6 +1046,8 @@ def _task_config_llm_settings(llm_id: str | None = None) -> dict[str, Any]:
         "model": str(selected["model"]),
         "timeout_sec": timeout_sec,
         "max_retries": max_retries,
+        "behavior_plan_max_tokens": max(128, int(os.getenv("TASK_CONFIG_BEHAVIOR_PLAN_MAX_TOKENS", "320"))),
+        "reward_config_max_tokens": max(384, int(os.getenv("TASK_CONFIG_REWARD_CONFIG_MAX_TOKENS", "1200"))),
     }
 
 
@@ -963,8 +1066,9 @@ def _call_llm_json_response(
     env_name: str | None,
     goal: str | None,
     stage_label: str,
+    max_output_tokens: int,
 ) -> dict[str, Any]:
-    user_payload_text = json.dumps(user_payload, ensure_ascii=False, indent=2)
+    user_payload_text = json.dumps(user_payload, ensure_ascii=False, separators=(",", ":"))
     prompt = {
         "model": model,
         "messages": [
@@ -972,6 +1076,8 @@ def _call_llm_json_response(
             {"role": "user", "content": user_payload_text},
         ],
         "response_format": {"type": "json_object"},
+        "temperature": 0,
+        "max_completion_tokens": max_output_tokens,
     }
     log_llm_trace(
         run_id=run_id,
@@ -984,7 +1090,12 @@ def _call_llm_json_response(
         base_url=base_url,
         goal=goal,
         request_payload=prompt,
-        details={"timeout_sec": timeout_sec, "max_retries": max_retries},
+        details={
+            "timeout_sec": timeout_sec,
+            "max_retries": max_retries,
+            "max_output_tokens": max_output_tokens,
+            "request_bytes": len(user_payload_text.encode("utf-8")),
+        },
     )
     request = urllib_request.Request(
         f"{base_url}/chat/completions",
@@ -1104,6 +1215,45 @@ def _call_llm_json_response(
     try:
         parsed = json.loads(output_text)
     except json.JSONDecodeError as exc:
+        """
+        Attempt to recover valid JSON from the output text in case the model included 
+        extra commentary or formatting around the JSON. This can help mitigate some common 
+        failure modes where the model tries to be helpful by adding explanations or formatting 
+        that unfortunately breaks strict JSON parsing.
+        """
+        recovered_candidate = _extract_balanced_json_object(output_text)
+        if recovered_candidate and recovered_candidate != output_text:
+            try:
+                parsed = json.loads(recovered_candidate)
+            except json.JSONDecodeError:
+                parsed = None
+            else:
+                if isinstance(parsed, dict):
+                    parsed["_raw_model_response"] = output_text
+                    parsed["_parse_recovered"] = True
+                    log_llm_trace(
+                        run_id=run_id,
+                        env_name=env_name,
+                        stage=stage_label,
+                        trace_type="parse_recovered",
+                        llm_id=llm_id,
+                        provider=provider,
+                        model=model,
+                        base_url=base_url,
+                        goal=goal,
+                        request_payload=prompt,
+                        raw_response_text=output_text,
+                        parsed_response=parsed,
+                        details={"recovered_candidate": recovered_candidate},
+                    )
+                    update_task_config_request_status(
+                        run_id,
+                        status=f"{stage_label}_completed",
+                        message=f"{stage_label} completed with recovered JSON using model={model}.",
+                        attempt=max_retries,
+                        elapsed_sec=round(time.time() - started_at, 2),
+                    )
+                    return parsed
         log_llm_trace(
             run_id=run_id,
             env_name=env_name,
@@ -1119,7 +1269,11 @@ def _call_llm_json_response(
             parsed_response=body if isinstance(body, dict) else {},
             error=str(exc),
         )
-        raise
+        raise LlmProposalError(
+            f"{stage_label} returned malformed JSON: {exc}",
+            stage_label=stage_label,
+            raw_response_text=output_text,
+        ) from exc
     log_llm_trace(
         run_id=run_id,
         env_name=env_name,
@@ -1172,16 +1326,23 @@ def call_llm_behavior_tag_plan(goal: str, env_name: str, *, run_id: str | None =
         "Return valid JSON only. "
         "Map the user's goal to a small set of desired behavior tags and anti-goal tags using only the provided tag catalog. "
         "Assign each selected tag a weight between 0 and 1 representing importance. "
-        "Prefer a concise set of high-signal tags over a long noisy list."
+        "Prefer a concise set of high-signal tags over a long noisy list. "
+        "Do not mention or invent observation or action variable names at this stage."
     )
     user_payload = {
         "env_name": env_name,
         "goal": goal,
-        "available_behavior_tags": available_behavior_tags_for_env(env_name),
+        "available_behavior_tags": _compact_behavior_tag_catalog(env_name),
         "output_requirements": {
             "must_return_json_object": True,
             "required_keys": ["goal", "desired_tags", "avoid_tags", "constraints", "rationale"],
             "tag_item_fields": ["key", "weight", "reason"],
+            "limits": {
+                "max_desired_tags": 4,
+                "max_avoid_tags": 3,
+                "max_constraints": 3,
+                "rationale_sentences_max": 2,
+            },
         },
     }
     raw_plan = _call_llm_json_response(
@@ -1198,6 +1359,7 @@ def call_llm_behavior_tag_plan(goal: str, env_name: str, *, run_id: str | None =
         env_name=env_name,
         goal=goal,
         stage_label="behavior_plan",
+        max_output_tokens=settings["behavior_plan_max_tokens"],
     )
     plan = normalize_behavior_tag_plan(raw_plan, env_name, goal=goal)
     if not plan.get("desired_tags") and not plan.get("avoid_tags"):
@@ -1223,40 +1385,36 @@ def call_llm_reward_config_from_behavior_plan(
     settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     settings = settings or _task_config_llm_settings()
-    variable_specs = task_variable_specs_for_run(None, env_name)
-    current_terms = reward_template_for_env(env_name)
+    variable_specs = _compact_variable_specs_for_prompt(env_name)
+    current_terms = _compact_reward_terms_for_prompt(env_name)
     system_prompt = (
         "You are the second stage of a two-stage RL reward-design pipeline. Return valid JSON only. "
         "Use the provided behavior plan to generate a structured RL task config with runnable reward expressions. "
         "Use only the provided formula variables and helper math functions already supported by the backend: "
         "abs, min, max, clip, sqrt, square, exp, log, sin, cos, tanh, sign. "
         "Do not invent variable names that are not in the provided variable list or in derived_signals that you also return. "
-        "Do not invent previous-state variables such as prev_cart_position unless they already appear in the provided variable list. "
+        "Do not invent previous-state variables such as prev_cart_position or prev_velocity unless they already appear exactly in the provided variable list. "
+        "Use exact variable spellings only; if a variable is not listed, you must not reference it. "
         "Only these expression constructs are supported: names, numeric constants, +, -, *, /, %, **, unary +/- and helper function calls. "
         "Comparisons and control flow are not supported, including >, <, >=, <=, ==, !=, and ternary syntax like a ? b : c. "
         "If you need an indicator-like reward, approximate it using the supported math helpers instead of boolean logic. "
         "Derived signals are allowed, but each derived signal expression must itself be runnable using only the provided variables, task_params, "
         "and any earlier derived_signals in the returned list. Reward terms may reference returned derived_signals. "
-        "The behavior plan is authoritative: reward the desired tags, penalize the avoid tags, and explain the mapping clearly."
+        "The behavior plan is authoritative: reward the desired tags, penalize the avoid tags, and explain the mapping clearly. "
+        "Keep the response compact: at most 2 task_params, 3 derived_signals, 5 reward_terms, 1 warning, and a rationale of at most 1 sentence. "
+        "Keep every string field single-line plain text with no markdown, no code fences, and no embedded quotes unless required by valid JSON escaping. "
+        "Keep descriptions very short. If a desired concept requires an unavailable variable, omit that term instead of inventing a new variable name."
     )
-    schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["goal", "task_params", "derived_signals", "reward_terms", "success_metric", "rationale", "warnings"],
-        "properties": {
-            "goal": {"type": "string"},
-            "task_params": {"type": "array"},
-            "derived_signals": {"type": "array"},
-            "reward_terms": {"type": "array"},
-            "success_metric": {"type": "string"},
-            "rationale": {"type": "string"},
-            "warnings": {"type": "array", "items": {"type": "string"}},
-        },
+    compact_behavior_plan = {
+        "goal": str(behavior_plan.get("goal") or goal or "").strip(),
+        "desired_tags": list(behavior_plan.get("desired_tags") or [])[:4],
+        "avoid_tags": list(behavior_plan.get("avoid_tags") or [])[:3],
+        "constraints": list(behavior_plan.get("constraints") or [])[:3],
     }
     user_payload = {
         "env_name": env_name,
         "goal": goal,
-        "behavior_plan": behavior_plan,
+        "behavior_plan": compact_behavior_plan,
         "available_variables": variable_specs,
         "default_reward_terms": current_terms,
         "formula_examples": reward_formula_examples_for_env(env_name),
@@ -1268,8 +1426,22 @@ def call_llm_reward_config_from_behavior_plan(
             "expression_rules": [
                 "Use only provided variables, returned task_params, and earlier returned derived_signals.",
                 "Do not use comparisons or ternary syntax.",
+                "Do not use any variable name unless it appears exactly in available_variables or is introduced earlier as a derived signal.",
                 "Do not invent prev_* state variables unless explicitly provided in available_variables.",
             ],
+            "format_rules": [
+                "All text values must be single-line strings.",
+                "Keep descriptions under 8 words.",
+                "Keep labels under 5 words.",
+                "Do not include markdown, comments, or code fences.",
+            ],
+            "limits": {
+                "max_task_params": 2,
+                "max_derived_signals": 3,
+                "max_reward_terms": 5,
+                "max_warnings": 1,
+                "rationale_sentences_max": 1,
+            },
         },
     }
     proposal = _call_llm_json_response(
@@ -1286,6 +1458,7 @@ def call_llm_reward_config_from_behavior_plan(
         env_name=env_name,
         goal=goal,
         stage_label="reward_config",
+        max_output_tokens=settings["reward_config_max_tokens"],
     )
     provider_label = "glm" if "z.ai" in settings["base_url"] or "bigmodel" in settings["base_url"] else "openai-compatible"
     proposal["provider"] = provider_label
@@ -1382,6 +1555,10 @@ def propose_task_config(goal: str, env_name: str, *, run_id: str | None = None, 
         proposal = build_heuristic_task_config_proposal(goal, env_name)
         proposal.setdefault("warnings", [])
         proposal["warnings"] = [f"Model proposal unavailable; used heuristic fallback instead. {exc}", *proposal["warnings"]]
+        if isinstance(exc, LlmProposalError):
+            proposal["raw_model_response"] = exc.raw_response_text
+            proposal["model_proposal_preview"] = exc.partial_proposal
+            proposal["llm_error_stage"] = exc.stage_label
         update_task_config_request_status(
             run_id,
             status="fallback",
@@ -1399,6 +1576,13 @@ def propose_task_config(goal: str, env_name: str, *, run_id: str | None = None, 
         fallback = build_heuristic_task_config_proposal(goal, env_name)
         fallback.setdefault("warnings", [])
         fallback["warnings"] = [f"Non-runnable proposal discarded; used heuristic fallback instead. {exc}", *fallback["warnings"]]
+        fallback["model_proposal_preview"] = {
+            key: value
+            for key, value in proposal.items()
+            if key not in {"warnings"}
+        }
+        if isinstance(proposal.get("_raw_model_response"), str):
+            fallback["raw_model_response"] = proposal.get("_raw_model_response")
         proposal = fallback
         update_task_config_request_status(
             run_id,

@@ -82,6 +82,7 @@ def _flat_values(value, *, default_length: int = 1) -> np.ndarray:
 def reward_expression_context(
     obs,
     action,
+    previous_obs,
     previous_action,
     native_reward: float,
     raw_terms: dict[str, float] | None = None,
@@ -102,10 +103,13 @@ def reward_expression_context(
     # flatten 
     flat_obs = _flat_values(obs) 
     flat_action = _flat_values(action)
+    flat_prev_obs = _flat_values(previous_obs, default_length=flat_obs.size)
     flat_prev_action = _flat_values(previous_action, default_length=flat_action.size or 1)
 
     for index, value in enumerate(flat_obs):
         context[f"obs_{index}"] = float(value)
+    for index, value in enumerate(flat_prev_obs):
+        context[f"prev_obs_{index}"] = float(value)
     for index, value in enumerate(flat_action):
         context[f"action_{index}"] = float(value)
     for index, value in enumerate(flat_prev_action):
@@ -193,6 +197,7 @@ def reward_expression_variable_names(
     action_size: int,
     *,
     env_name: str | None = None,
+    include_previous_obs: bool = True,
     include_previous_action: bool = True,
     raw_term_keys: list[str] | None = None,
 ) -> list[str]:
@@ -201,6 +206,7 @@ def reward_expression_variable_names(
         env_name=env_name,
         obs_size=obs_size, # flattened obs
         action_size=action_size, # flattened action
+        include_previous_obs=include_previous_obs,
         include_previous_action=include_previous_action,
         raw_term_keys=raw_term_keys,
     ):
@@ -220,6 +226,7 @@ def reward_expression_variable_specs(
     obs_size: int,
     action_size: int,
     *,
+    include_previous_obs: bool = True,
     include_previous_action: bool = True,
     raw_term_keys: list[str] | None = None,
 ) -> list[dict[str, Any]]:
@@ -293,6 +300,34 @@ def reward_expression_variable_specs(
                 "aliases": [f"observation_{index}"],
             }
         )
+
+    if include_previous_obs:
+        for index in range(max(0, obs_size)):
+            obs_spec = obs_specs.get(index)
+            aliases: list[str] = []
+            if obs_spec is not None:
+                display_name = str(obs_spec.get("display_name") or "").strip()
+                raw_aliases = [display_name, *obs_spec.get("aliases", [])]
+                for alias_name in raw_aliases:
+                    alias_value = str(alias_name or "").strip()
+                    if alias_value:
+                        prefixed = f"prev_{alias_value}"
+                        if prefixed not in aliases:
+                            aliases.append(prefixed)
+            else:
+                aliases.append(f"previous_observation_{index}")
+            """
+            Adding a specification component for the previous observation environment.
+            """
+            specs.append(
+                {
+                    "name": f"prev_obs_{index}",
+                    "source": "observation",
+                    "display_name": aliases[0] if aliases else f"previous_observation_{index}",
+                    "description": f"Previous flattened observation component {index}.",
+                    "aliases": aliases,
+                }
+            )
 
     # Add action variables as observations. 
     for index in range(max(1, action_size)):
@@ -378,7 +413,7 @@ def _reward_observation_specs(env_name: str, obs_size: int) -> dict[int, dict[st
         )
 
     entries: list[tuple[int, dict[str, Any]]] = []
-    if prefix == "cartpole":
+    if prefix in {"cartpole", "cartpoleloose"}:
         entries = [
             make_spec(0, "cart_position", "Cart position along the track.", "x", "cart_x"),
             make_spec(1, "cart_velocity", "Cart velocity along the track.", "x_dot", "cart_x_velocity"),
@@ -733,6 +768,7 @@ class RewardShapingWrapper(gym.Wrapper):
         self.env_name = env_name
         self.config_provider = config_provider
         self.task_config_provider = task_config_provider or (lambda: None)
+        self._previous_obs = None
         self._previous_action = None
         self._episode_step = 0
         env_unwrapped = getattr(self.env, "unwrapped", self.env)
@@ -751,6 +787,7 @@ class RewardShapingWrapper(gym.Wrapper):
         self._episode_behavior_trace: list[dict[str, Any]] = []
 
     def reset(self, **kwargs):
+        self._previous_obs = None
         self._previous_action = None
         self._episode_step = 0
         self._reset_episode_sums()
@@ -771,6 +808,7 @@ class RewardShapingWrapper(gym.Wrapper):
         expression_context = reward_expression_context(
             obs=obs,
             action=action,
+            previous_obs=self._previous_obs,
             previous_action=self._previous_action,
             native_reward=native_reward,
             raw_terms=raw_terms,
@@ -827,10 +865,17 @@ class RewardShapingWrapper(gym.Wrapper):
                 "step": len(self._episode_behavior_trace) + 1,
                 "time_sec": float(self._episode_step * self._step_duration),
                 "observation": np.asarray(obs, dtype=np.float32).tolist(),
+                "previous_observation": np.asarray(
+                    self._previous_obs if self._previous_obs is not None else np.zeros_like(np.asarray(obs, dtype=np.float32)),
+                    dtype=np.float32,
+                ).tolist(),
                 "action": np.asarray(action, dtype=np.float32).tolist(),
                 "previous_action": np.asarray(self._previous_action if self._previous_action is not None else np.zeros_like(np.asarray(action, dtype=np.float32)), dtype=np.float32).tolist(),
             }
         )
+
+        self._previous_obs = np.asarray(obs, dtype=np.float32).copy()
+        self._previous_action = np.asarray(action, dtype=np.float32).copy()
 
         if terminated or truncated:
             episode_total = float(sum(self._episode_term_sums.values()))
