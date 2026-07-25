@@ -1,0 +1,16 @@
+{
+  "name": "code_fenced_json_recovery",
+  "description": "Synthetic: valid proposal wrapped in markdown code fences; must be rescued by balanced-object recovery, not rejected.",
+  "env_name": "CartPole-v1",
+  "goal": "sway left and right stably",
+  "stage": "reward_config",
+  "source_trace": null,
+  "source_model": "synthetic",
+  "source_error": null,
+  "raw_response_text": "```json\n{\n  \"goal\": \"sway left and right stably\",\n  \"task_params\": [\n    {\n      \"key\": \"sway_frequency_hz\",\n      \"value\": 0.8,\n      \"description\": \"Target sway frequency\"\n    }\n  ],\n  \"derived_signals\": [],\n  \"reward_terms\": [\n    {\n      \"key\": \"native\",\n      \"label\": \"Native Reward\",\n      \"description\": \"Native env reward\",\n      \"weight\": 1.0,\n      \"enabled\": true,\n      \"expression\": \"native_reward\"\n    },\n    {\n      \"key\": \"sway_tracking\",\n      \"label\": \"Sway Tracking\",\n      \"description\": \"Track periodic sway\",\n      \"weight\": 1.0,\n      \"enabled\": true,\n      \"expression\": \"-square(pole_angle - 0.1 * sin(6.283185 * sway_frequency_hz * time_sec))\"\n    },\n    {\n      \"key\": \"center_penalty\",\n      \"label\": \"Center Penalty\",\n      \"description\": \"Stay near center\",\n      \"weight\": 0.5,\n      \"enabled\": true,\n      \"expression\": \"-square(cart_position)\"\n    }\n  ],\n  \"success_metric\": \"mean absolute sway tracking error below 0.05\",\n  \"rationale\": \"Track a periodic sway reference while staying centered.\",\n  \"warnings\": []\n}\n```",
+  "expect": {
+    "parse": "recovered",
+    "pipeline": "valid",
+    "min_reward_terms": 3
+  }
+}

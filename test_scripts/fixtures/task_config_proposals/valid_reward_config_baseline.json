@@ -1,0 +1,16 @@
+{
+  "name": "valid_reward_config_baseline",
+  "description": "Real trace: well-formed gpt-4.1-mini sway proposal. Must parse cleanly and survive validation end-to-end with custom terms merged onto the template.",
+  "env_name": "CartPoleLoose-v0",
+  "goal": "make cartpole sway left and right at fixed frequency of 60Hz",
+  "stage": "reward_config",
+  "source_trace": "logs/llm_traces/8ef1ef6c-eb34-4773-855b-ae87bf29081f/2026-06-06T03-12-51.673704_00-00__reward_config__response_received__openai.json",
+  "source_model": "gpt-4.1-mini",
+  "source_error": null,
+  "raw_response_text": "{\n  \"goal\": \"make cartpole sway left and right at fixed frequency of 60Hz\",\n  \"task_params\": [\n    {\n      \"key\": \"target_frequency\",\n      \"value\": 60,\n      \"description\": \"Desired sway frequency in Hz\"\n    },\n    {\n      \"key\": \"dt\",\n      \"value\": 0.02,\n      \"description\": \"Time step duration in seconds\"\n    }\n  ],\n  \"derived_signals\": [\n    {\n      \"key\": \"cart_position_change\",\n      \"expression\": \"cart_position - prev_cart_position\",\n      \"description\": \"Change in cart position\"\n    },\n    {\n      \"key\": \"cart_velocity_estimate\",\n      \"expression\": \"cart_position_change / dt\",\n      \"description\": \"Estimated cart velocity\"\n    },\n    {\n      \"key\": \"frequency_error\",\n      \"expression\": \"abs(cart_velocity_estimate - (2 * 3.141592653589793 * target_frequency * cart_position))\",\n      \"description\": \"Error from target sway frequency\"\n    }\n  ],\n  \"reward_terms\": [\n    {\n      \"key\": \"high_motion_reward\",\n      \"label\": \"High Motion\",\n      \"description\": \"Reward for large cart velocity\",\n      \"weight\": 0.9,\n      \"enabled\": true,\n      \"expression\": \"abs(cart_velocity)\"\n    },\n    {\n      \"key\": \"smooth_control_reward\",\n      \"label\": \"Smooth Control\",\n      \"description\": \"Reward for smooth action changes\",\n      \"weight\": 0.8,\n      \"enabled\": true,\n      \"expression\": \"-abs(action_0 - prev_action_0)\"\n    },\n    {\n      \"key\": \"jerky_control_penalty\",\n      \"label\": \"Jerky Control\",\n      \"description\": \"Penalty for jerky control\",\n      \"weight\": -0.9,\n      \"enabled\": true,\n      \"expression\": \"abs(action_0 - prev_action_0)\"\n    },\n    {\n      \"key\": \"low_motion_penalty\",\n      \"label\": \"Low Motion\",\n      \"description\": \"Penalty for low cart velocity\",\n      \"weight\": -0.8,\n      \"enabled\": true,\n      \"expression\": \"-abs(cart_velocity)\"\n    },\n    {\n      \"key\": \"frequency_accuracy_reward\",\n      \"label\": \"Frequency Accuracy\",\n      \"description\": \"Reward for matching sway frequency\",\n      \"weight\": 1.0,\n      \"enabled\": true,\n      \"expression\": \"1 / (1 + frequency_error)\"\n    }\n  ],\n  \"success_metric\": \"frequency_accuracy_reward\",\n  \"rationale\": \"Rewards encourage smooth, high-motion swaying at target frequency while penalizing jerky or low motion.\",\n  \"warnings\": [\n    \"Frequency approximation may be noisy due to discrete steps.\"\n  ]\n}",
+  "expect": {
+    "parse": "ok",
+    "pipeline": "valid",
+    "min_reward_terms": 8
+  }
+}

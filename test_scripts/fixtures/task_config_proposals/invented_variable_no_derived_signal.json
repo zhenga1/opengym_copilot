@@ -1,0 +1,16 @@
+{
+  "name": "invented_variable_no_derived_signal",
+  "description": "Synthetic (Bug 1): reward term references cart_side_change but no derived signal defines it; validation must reject the proposal.",
+  "env_name": "CartPole-v1",
+  "goal": "make cartpole alternate sides",
+  "stage": "reward_config",
+  "source_trace": null,
+  "source_model": "synthetic",
+  "source_error": null,
+  "raw_response_text": "{\n  \"goal\": \"make cartpole alternate sides\",\n  \"task_params\": [],\n  \"derived_signals\": [],\n  \"reward_terms\": [\n    {\n      \"key\": \"native\",\n      \"label\": \"Native Reward\",\n      \"description\": \"Native env reward\",\n      \"weight\": 1.0,\n      \"enabled\": true,\n      \"expression\": \"native_reward\"\n    },\n    {\n      \"key\": \"alternation_bonus\",\n      \"label\": \"Alternation Bonus\",\n      \"description\": \"Reward side changes\",\n      \"weight\": 1.0,\n      \"enabled\": true,\n      \"expression\": \"cart_side_change\"\n    }\n  ],\n  \"success_metric\": \"frequent side changes\",\n  \"rationale\": \"Reward alternation directly.\",\n  \"warnings\": []\n}",
+  "expect": {
+    "parse": "ok",
+    "pipeline": "invalid",
+    "pipeline_error_contains": "cart_side_change"
+  }
+}
