@@ -1,0 +1,15 @@
+{
+  "name": "left_then_right_stable",
+  "env_name": "CartPole-v1",
+  "goal": "Make the cart move to the left side of the track and hold there stably for about 2 seconds, then move to the right side and hold stably, repeating this alternation while keeping the pole balanced.",
+  "strategy": "retry",
+  "expect": {
+    "source_type": "llm",
+    "min_custom_reward_terms": 1,
+    "must_reference_groups": [
+      ["cart_position", "cart_velocity", "obs_0", "obs_1"],
+      ["time_sec", "step", "sin", "cos", "prev_obs_0", "prev_cart_position", "sign"]
+    ]
+  },
+  "notes": "The second group demands some alternation mechanism: either explicit time dependence (sin/cos/time_sec) or side-change detection (prev position / sign)."
+}

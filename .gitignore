@@ -10,3 +10,6 @@ ownyourcode/career/
 
 # User-added LLM providers (contains API keys)
 llm_providers.json
+
+# Tier-2 live proposal artifacts
+test_scripts/live_results/
