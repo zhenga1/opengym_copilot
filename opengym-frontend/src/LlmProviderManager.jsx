@@ -62,9 +62,12 @@ function LlmProviderManager({ providers, onProvidersChanged }) {
         preset: selectedPreset,
       });
       const savedId = response.data?.provider?.id;
-      setStatus(`Saved ${savedId}. Testing...`);
-      if (onProvidersChanged) onProvidersChanged();
-      if (savedId && apiKey.trim()) {
+      onProvidersChanged?.();
+      // available comes from the backend catalog: true only when a key is stored
+      // (typed now, or kept from a previous save on a keyless update)
+      const savedEntry = (response.data?.llms || []).find((item) => item.id === savedId);
+      if (savedId && savedEntry?.available) {
+        setStatus(`Saved ${savedId}. Testing connection...`);
         const test = await apiClient.post(`/llm_providers/${savedId}/test`);
         if (test.data.ok) {
           setStatus(`${savedId}: connection ok in ${test.data.latency_sec}s (${test.data.model}).`);
@@ -88,7 +91,7 @@ function LlmProviderManager({ providers, onProvidersChanged }) {
     try {
       await apiClient.delete(`/llm_providers/${providerId}`);
       setStatus(`Removed ${providerId}.`);
-      if (onProvidersChanged) onProvidersChanged();
+      onProvidersChanged?.();
     } catch (error) {
       const detail = error?.response?.data?.detail || error?.message || 'Failed to remove provider.';
       setStatus(String(detail));
