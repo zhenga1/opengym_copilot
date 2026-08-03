@@ -393,6 +393,10 @@ class TaskConfigProposalRequest(BaseModel):
     env_name: str
     goal: str
     llm_id: str | None = None
+    # "fallback" = heuristic on first failure (default); "retry" = re-query the LLM until a proposal validates
+    proposal_strategy: str | None = None
+    # retry-mode attempt cap; clamped server-side to 1..5
+    max_proposal_attempts: int | None = None
 
 
 class TaskConfigApplyRequest(BaseModel):
@@ -1656,57 +1660,149 @@ def call_llm_task_config_proposal(goal: str, env_name: str, *, run_id: str | Non
     return proposal
 
 
-def propose_task_config(goal: str, env_name: str, *, run_id: str | None = None, llm_id: str | None = None) -> dict[str, Any]:
+PROPOSAL_STRATEGY_FALLBACK = "fallback"
+PROPOSAL_STRATEGY_RETRY = "retry"
+
+
+def normalize_proposal_strategy(value: str | None) -> str:
+    candidate = str(value or "").strip().lower()
+    if candidate in {"retry", "retry_until_valid", "retry-until-valid"}:
+        return PROPOSAL_STRATEGY_RETRY
+    return PROPOSAL_STRATEGY_FALLBACK
+
+
+def resolve_proposal_attempt_cap(strategy: str, max_attempts: int | None) -> int:
+    if strategy != PROPOSAL_STRATEGY_RETRY:
+        return 1
+    default_cap = int(os.getenv("TASK_CONFIG_PROPOSAL_MAX_ATTEMPTS", "3"))
+    cap = default_cap if max_attempts is None else int(max_attempts)
+    return max(1, min(cap, 5))
+
+
+def propose_task_config(
+    goal: str,
+    env_name: str,
+    *,
+    run_id: str | None = None,
+    llm_id: str | None = None,
+    strategy: str | None = None,
+    max_attempts: int | None = None,
+) -> dict[str, Any]:
     """
     Propose a task configuration based on the goal and environment name.
-    Takes in a goal, environment name and two optional parameters: run_id and llm_id.
-    Calls the LLM to get a reward configuration proposal based on the two-step reward design pipeline.
-    If the LLM call fails, it falls back to a heuristic proposal based on the environment schema and goal keywords.
-    It then normalizes and validates the proposed reward terms. If validation fails, it falls back to a heuristic proposal again.
-    Returns the normalized reward configuration proposal.
+    Each attempt calls the two-stage LLM pipeline, then normalizes and validates the result.
+    strategy="fallback" (default) keeps the original behavior: one attempt, heuristic fallback
+    on the first failure. strategy="retry" re-queries the LLM after a failed call or a
+    non-runnable proposal, up to the attempt cap, before falling back to the heuristic.
+    The returned proposal carries source_type ("llm" | "heuristic"), proposal_strategy,
+    and proposal_attempts so callers can tell what actually happened.
     """
+    strategy = normalize_proposal_strategy(strategy)
+    attempt_cap = resolve_proposal_attempt_cap(strategy, max_attempts)
+    attempt_failures: list[dict[str, Any]] = []
+    last_call_error: Exception | None = None
+    last_validation_error: Exception | None = None
+    last_invalid_proposal: dict[str, Any] | None = None
+
+    for attempt in range(1, attempt_cap + 1):
+        if attempt > 1:
+            update_task_config_request_status(
+                run_id,
+                status="proposal_retrying",
+                message=(
+                    f"Attempt {attempt - 1} failed during {attempt_failures[-1]['stage']}; "
+                    f"re-querying LLM (attempt {attempt}/{attempt_cap})."
+                ),
+                attempt=attempt,
+                elapsed_sec=task_config_request_status_by_run.get(run_id, {}).get("elapsed_sec", 0.0),
+            )
+        try:
+            candidate = call_llm_task_config_proposal(goal, env_name, run_id=run_id, llm_id=llm_id)
+        except Exception as exc:
+            last_call_error = exc
+            last_validation_error = None
+            attempt_failures.append({"attempt": attempt, "stage": "llm_call", "reason": str(exc)})
+            log_run_event(
+                "task_config_proposal_attempt_failed",
+                run_id=run_id,
+                env_name=env_name,
+                details={"attempt": attempt, "stage": "llm_call", "strategy": strategy, "error": str(exc)},
+            )
+            continue
+        candidate = normalize_task_config_proposal_shape(candidate)
+        try:
+            validate_task_config_for_run(candidate, env_name, run_id=None)
+            candidate["reward_terms"] = normalize_reward_terms(
+                env_name,
+                candidate.get("reward_terms") or [],
+            )
+        except Exception as exc:
+            last_call_error = None
+            last_validation_error = exc
+            last_invalid_proposal = candidate
+            attempt_failures.append({"attempt": attempt, "stage": "validation", "reason": str(exc)})
+            log_run_event(
+                "task_config_proposal_attempt_failed",
+                run_id=run_id,
+                env_name=env_name,
+                details={"attempt": attempt, "stage": "validation", "strategy": strategy, "error": str(exc)},
+            )
+            continue
+        candidate["source_type"] = "llm"
+        candidate["proposal_strategy"] = strategy
+        candidate["proposal_attempts"] = attempt
+        if attempt_failures:
+            candidate.setdefault("warnings", [])
+            candidate["warnings"] = [
+                f"Attempt {item['attempt']} failed during {item['stage']}: {item['reason']}"
+                for item in attempt_failures
+            ] + list(candidate["warnings"])
+        return candidate
+
+    fallback = build_heuristic_task_config_proposal(goal, env_name)
+    fallback.setdefault("warnings", [])
+    if last_validation_error is not None:
+        headline = f"Non-runnable proposal discarded; used heuristic fallback instead. {last_validation_error}"
+        final_status = "fallback_validation"
+        if last_invalid_proposal is not None:
+            fallback["model_proposal_preview"] = {
+                key: value
+                for key, value in last_invalid_proposal.items()
+                if key not in {"warnings"}
+            }
+            if isinstance(last_invalid_proposal.get("_raw_model_response"), str):
+                fallback["raw_model_response"] = last_invalid_proposal.get("_raw_model_response")
+    else:
+        headline = f"Model proposal unavailable; used heuristic fallback instead. {last_call_error}"
+        final_status = "fallback"
+        if isinstance(last_call_error, LlmProposalError):
+            fallback["raw_model_response"] = last_call_error.raw_response_text
+            fallback["model_proposal_preview"] = last_call_error.partial_proposal
+            fallback["llm_error_stage"] = last_call_error.stage_label
+    attempt_warnings = [
+        f"Attempt {item['attempt']} failed during {item['stage']}: {item['reason']}"
+        for item in attempt_failures
+    ] if attempt_cap > 1 else []
+    fallback["warnings"] = [headline, *attempt_warnings, *fallback["warnings"]]
+    fallback = normalize_task_config_proposal_shape(fallback)
     try:
-        proposal = call_llm_task_config_proposal(goal, env_name, run_id=run_id, llm_id=llm_id)
-    except Exception as exc:
-        proposal = build_heuristic_task_config_proposal(goal, env_name)
-        proposal.setdefault("warnings", [])
-        proposal["warnings"] = [f"Model proposal unavailable; used heuristic fallback instead. {exc}", *proposal["warnings"]]
-        if isinstance(exc, LlmProposalError):
-            proposal["raw_model_response"] = exc.raw_response_text
-            proposal["model_proposal_preview"] = exc.partial_proposal
-            proposal["llm_error_stage"] = exc.stage_label
-        update_task_config_request_status(
-            run_id,
-            status="fallback",
-            message=str(proposal["warnings"][0]),
-            elapsed_sec=task_config_request_status_by_run.get(run_id, {}).get("elapsed_sec", 0.0),
-        )
-    proposal = normalize_task_config_proposal_shape(proposal)
-    try:
-        validate_task_config_for_run(proposal, env_name, run_id=None)
-        proposal["reward_terms"] = normalize_reward_terms(
+        validate_task_config_for_run(fallback, env_name, run_id=None)
+        fallback["reward_terms"] = normalize_reward_terms(
             env_name,
-            proposal.get("reward_terms") or [],
+            fallback.get("reward_terms") or [],
         )
-    except Exception as exc:
-        fallback = build_heuristic_task_config_proposal(goal, env_name)
-        fallback.setdefault("warnings", [])
-        fallback["warnings"] = [f"Non-runnable proposal discarded; used heuristic fallback instead. {exc}", *fallback["warnings"]]
-        fallback["model_proposal_preview"] = {
-            key: value
-            for key, value in proposal.items()
-            if key not in {"warnings"}
-        }
-        if isinstance(proposal.get("_raw_model_response"), str):
-            fallback["raw_model_response"] = proposal.get("_raw_model_response")
-        proposal = fallback
-        update_task_config_request_status(
-            run_id,
-            status="fallback_validation",
-            message=str(fallback["warnings"][0]),
-            elapsed_sec=task_config_request_status_by_run.get(run_id, {}).get("elapsed_sec", 0.0),
-        )
-    return proposal
+    except Exception:
+        pass
+    fallback["source_type"] = "heuristic"
+    fallback["proposal_strategy"] = strategy
+    fallback["proposal_attempts"] = attempt_cap
+    update_task_config_request_status(
+        run_id,
+        status=final_status,
+        message=str(fallback["warnings"][0]),
+        elapsed_sec=task_config_request_status_by_run.get(run_id, {}).get("elapsed_sec", 0.0),
+    )
+    return fallback
 
 
 def normalize_training_hyperparams(params: dict | None) -> dict:
@@ -2511,7 +2607,14 @@ def propose_task_config_endpoint(req: TaskConfigProposalRequest):
         goal=req.goal,
         llm_id=req.llm_id,
     )
-    proposal = propose_task_config(req.goal, req.env_name, run_id=req.run_id, llm_id=req.llm_id)
+    proposal = propose_task_config(
+        req.goal,
+        req.env_name,
+        run_id=req.run_id,
+        llm_id=req.llm_id,
+        strategy=req.proposal_strategy,
+        max_attempts=req.max_proposal_attempts,
+    )
     return {
         "run_id": req.run_id,
         "env_name": req.env_name,

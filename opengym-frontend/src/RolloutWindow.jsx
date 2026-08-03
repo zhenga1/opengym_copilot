@@ -113,6 +113,8 @@ function RolloutWindow({
   const [availableBehaviorTags, setAvailableBehaviorTags] = useState([]);
   const [availableLlms, setAvailableLlms] = useState([]);
   const [selectedLlmId, setSelectedLlmId] = useState('');
+  // "fallback" = heuristic on first failure; "retry" = re-query LLM until a proposal validates
+  const [proposalStrategy, setProposalStrategy] = useState('fallback');
   const [trainingRewardBreakdown, setTrainingRewardBreakdown] = useState({});
   const [trainingRewardBreakdownMean, setTrainingRewardBreakdownMean] = useState({});
   const [trainingAblationReport, setTrainingAblationReport] = useState(null);
@@ -1435,6 +1437,7 @@ function RolloutWindow({
         env_name: envName,
         goal: trimmedGoal,
         llm_id: selectedLlmId || undefined,
+        proposal_strategy: proposalStrategy,
       });
       const normalizedProposal = normalizeTaskProposal(response.data);
       setTaskProposal(normalizedProposal);
@@ -1470,7 +1473,7 @@ function RolloutWindow({
     } finally {
       setTaskProposalLoading(false);
     }
-  }, [buildProposalRewardPreviewTerms, envName, isSavedViewer, normalizeTaskProposal, runId, selectedLlmId, showSavedViewerTaskMessage, taskGoal]);
+  }, [buildProposalRewardPreviewTerms, envName, isSavedViewer, normalizeTaskProposal, proposalStrategy, runId, selectedLlmId, showSavedViewerTaskMessage, taskGoal]);
 
   useEffect(() => {
     if (isSavedViewer || !runId || !taskProposalLoading) return undefined;
@@ -2076,6 +2079,7 @@ function RolloutWindow({
       availableBehaviorTags,
       availableLlms,
       selectedLlmId,
+      proposalStrategy,
       latestTrainingBreakdown: trainingRewardBreakdown,
       latestTrainingMeanBreakdown: trainingRewardBreakdownMean,
       latestRolloutBreakdown: rolloutRewardBreakdown,
@@ -2087,6 +2091,7 @@ function RolloutWindow({
       onTaskGoalChange: isSavedViewer ? showSavedViewerTaskMessage : setTaskGoal,
       onLlmSelect: isSavedViewer ? showSavedViewerTaskMessage : setSelectedLlmId,
       onRefreshLlms: refreshLlms,
+      onProposalStrategyChange: isSavedViewer ? showSavedViewerTaskMessage : setProposalStrategy,
       onProposeTaskConfig: proposeTaskConfig,
       onApplyTaskProposal: applyTaskProposal,
       onRewardConfigFileSelect: isSavedViewer ? showSavedViewerRewardMessage : setSelectedRewardConfigFile,
@@ -2119,6 +2124,7 @@ function RolloutWindow({
     availableBehaviorTags,
     availableLlms,
     selectedLlmId,
+    proposalStrategy,
     trainingRewardBreakdown,
     trainingRewardBreakdownMean,
     rolloutRewardBreakdown,
@@ -2132,6 +2138,7 @@ function RolloutWindow({
     saveRewardConfig,
     setSelectedLlmId,
     refreshLlms,
+    setProposalStrategy,
     proposeTaskConfig,
     applyTaskProposal,
     saveRewardConfigSnapshot,

@@ -23,6 +23,8 @@ function RewardSidebar({
   availableBehaviorTags,
   availableLlms,
   selectedLlmId,
+  proposalStrategy,
+  onProposalStrategyChange,
   latestTrainingBreakdown,
   latestTrainingMeanBreakdown,
   latestRolloutBreakdown,
@@ -350,6 +352,50 @@ function RewardSidebar({
                 </>
               )}
               <LlmProviderManager providers={safeAvailableLlms} onProvidersChanged={onRefreshLlms} />
+            </div>
+            <div style={{ marginTop: '0.75rem' }}>
+              <div style={{ fontSize: '0.76rem', fontWeight: 700, color: '#e2e8f0', marginBottom: '0.4rem' }}>
+                If the proposal fails
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+                {[
+                  {
+                    id: 'fallback',
+                    label: 'Fallback fast',
+                    hint: 'Stop at the first failed LLM attempt and use the heuristic proposal immediately.',
+                  },
+                  {
+                    id: 'retry',
+                    label: 'Retry LLM',
+                    hint: 'Re-query the LLM after a failed or invalid proposal (up to 3 attempts) before falling back.',
+                  },
+                ].map((option) => {
+                  const isSelected = (proposalStrategy || 'fallback') === option.id;
+                  return (
+                    <span key={option.id} title={option.hint} style={{ display: 'inline-flex' }}>
+                      <button
+                        type="button"
+                        onClick={() => onProposalStrategyChange && onProposalStrategyChange(option.id)}
+                        style={{
+                          padding: '0.45rem 0.7rem',
+                          borderRadius: '999px',
+                          border: `1px solid ${isSelected ? 'rgba(125, 211, 252, 0.5)' : 'rgba(148, 163, 184, 0.2)'}`,
+                          backgroundColor: isSelected ? 'rgba(14, 165, 233, 0.2)' : 'rgba(255, 255, 255, 0.06)',
+                          color: isSelected ? '#bae6fd' : '#e2e8f0',
+                          fontSize: '0.74rem',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {option.label}
+                      </button>
+                    </span>
+                  );
+                })}
+              </div>
+              <div style={{ marginTop: '0.35rem', color: '#94a3b8', fontSize: '0.72rem', lineHeight: 1.4 }}>
+                Retry costs more LLM calls but avoids heuristic fallbacks on flaky responses.
+              </div>
             </div>
             <div style={{ display: 'flex', gap: '0.55rem', marginTop: '0.7rem' }}>
               <button
