@@ -7,3 +7,6 @@ caches_gitignore/
 rollouts/
 # OwnYourCode - personal career tracking
 ownyourcode/career/
+
+# User-added LLM providers (contains API keys)
+llm_providers.json

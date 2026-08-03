@@ -1398,6 +1398,22 @@ function RolloutWindow({
     }
   }, [applyRewardConfigToRollouts, applyRewardConfigToTrainingEpisodes, computeBreakdownFromRawTerms, envName, isSavedViewer, latestRolloutRawTerms, normalizeTaskProposal, rollouts, runId, selectedRewardConfigFile]);
 
+  const refreshLlms = useCallback(async () => {
+    try {
+      const response = await apiClient.get('/task_config_llms');
+      const nextLlms = response.data.llms || [];
+      setAvailableLlms(nextLlms);
+      setSelectedLlmId((prev) => {
+        if (prev && nextLlms.some((item) => item.id === prev && item.available)) {
+          return prev;
+        }
+        return response.data.default_llm_id || nextLlms.find((item) => item.available)?.id || '';
+      });
+    } catch (error) {
+      console.error('Failed to refresh LLM providers:', error);
+    }
+  }, []);
+
   const proposeTaskConfig = useCallback(async () => {
     if (isSavedViewer) {
       showSavedViewerTaskMessage();
@@ -2074,6 +2090,7 @@ function RolloutWindow({
       onSaveConfig: saveRewardConfig,
       onTaskGoalChange: isSavedViewer ? showSavedViewerTaskMessage : setTaskGoal,
       onLlmSelect: isSavedViewer ? showSavedViewerTaskMessage : setSelectedLlmId,
+      onRefreshLlms: refreshLlms,
       onProposalStrategyChange: isSavedViewer ? showSavedViewerTaskMessage : setProposalStrategy,
       onProposeTaskConfig: proposeTaskConfig,
       onApplyTaskProposal: applyTaskProposal,
@@ -2120,6 +2137,7 @@ function RolloutWindow({
     isSavedViewer,
     saveRewardConfig,
     setSelectedLlmId,
+    refreshLlms,
     setProposalStrategy,
     proposeTaskConfig,
     applyTaskProposal,
