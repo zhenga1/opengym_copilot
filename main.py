@@ -98,6 +98,8 @@ DATA_DIR = Path(os.getenv("OPEN_GYM_DATA_DIR", str(BASE_DIR))).resolve()
 MODELS_DIR = (DATA_DIR / "models").resolve()
 ROLLOUTS_DIR = (DATA_DIR / "rollouts").resolve()
 REWARD_CONFIGS_DIR = (DATA_DIR / "reward_configs").resolve()
+# Per-run status snapshots so runs survive backend restarts (see persist_run_status_snapshot)
+RUNS_DIR = (DATA_DIR / "runs").resolve()
 PROGRESS_LOG_PATH = (DATA_DIR / "progress_bar.log").resolve()
 FRONTEND_DIST_DIR = (BASE_DIR / "opengym-frontend" / "dist").resolve()
 
@@ -1636,6 +1638,64 @@ def get_training_hyperparams_for_run(run_id: str | None) -> dict:
     return training_hyperparams_by_run[run_id]
 
 
+def allowed_env_names() -> list[str] | None:
+    """OPEN_GYM_ENV_ALLOWLIST: comma-separated env ids; empty/unset = all envs allowed."""
+    raw = os.getenv("OPEN_GYM_ENV_ALLOWLIST", "").strip()
+    if not raw:
+        return None
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def ensure_env_allowed(env_name: str) -> None:
+    allowlist = allowed_env_names()
+    if allowlist is None or env_name in allowlist:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"Environment '{env_name}' is disabled on this deployment "
+            f"(OPEN_GYM_ENV_ALLOWLIST). Enabled environments: {', '.join(allowlist)}. "
+            "Heavy MuJoCo environments need more memory/CPU than this server provides."
+        ),
+    )
+
+
+# Only small scalar fields are persisted; episode buffers stay in memory.
+PERSISTED_RUN_STATUS_KEYS = (
+    "status", "env_name", "model_path", "error",
+    "steps_done", "total_steps", "reward_last", "reward_mean", "eval_reward",
+)
+
+
+def persist_run_status_snapshot(run_id: str | None) -> None:
+    if not run_id:
+        return
+    status = RUNS_TRAINING_STATUS.get(run_id)
+    if not isinstance(status, dict):
+        return
+    snapshot = {key: status.get(key) for key in PERSISTED_RUN_STATUS_KEYS}
+    snapshot["saved_at"] = datetime.now().isoformat()
+    try:
+        RUNS_DIR.mkdir(parents=True, exist_ok=True)
+        (RUNS_DIR / f"{run_id}.json").write_text(
+            json.dumps(snapshot, default=str), encoding="utf-8"
+        )
+    except Exception as exc:
+        logger.warning("Failed to persist run status for %s: %s", run_id, exc)
+
+
+def load_persisted_run_status(run_id: str) -> dict | None:
+    try:
+        path = RUNS_DIR / f"{run_id}.json"
+        if path.exists():
+            stored = json.loads(path.read_text(encoding="utf-8-sig"))
+            if isinstance(stored, dict):
+                return stored
+    except Exception as exc:
+        logger.warning("Failed to load persisted run status for %s: %s", run_id, exc)
+    return None
+
+
 def ensure_run_status(run_id: str | None, env_name: str | None = None) -> dict:
     if not run_id:
         return {}
@@ -1966,6 +2026,7 @@ def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_step
     RUNS_TRAINING_STATUS[run_id]["status"] = "running"
     RUNS_TRAINING_STATUS[run_id]["reward_ablation"] = None
     RUNS_TRAINING_STATUS[run_id]["reward_ablation_status"] = "idle"
+    persist_run_status_snapshot(run_id)
     preview_model = None
     eval_env = None
     training_hyperparams = get_training_hyperparams_for_run(run_id)
@@ -2183,6 +2244,7 @@ def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_step
             )
             RUNS_TRAINING_STATUS[run_id]["model_path"] = train_model_actual_path
             RUNS_TRAINING_STATUS[run_id]["status"] = "stopped" if stop_requested else "done"
+            persist_run_status_snapshot(run_id)
             log_run_event(
                 "training_finished",
                 run_id=run_id,
@@ -2201,6 +2263,7 @@ def start_training(run_id: str = None, env_name: str = "CartPole-v1", train_step
         except Exception as e:
             RUNS_TRAINING_STATUS[run_id]["status"] = "error"
             RUNS_TRAINING_STATUS[run_id]["error"] = str(e)
+            persist_run_status_snapshot(run_id)
             logger.exception("Training failed for run_id=%s env_name=%s", run_id, env_name)
             log_run_event(
                 "training_failed",
@@ -2251,6 +2314,16 @@ def change_rollout_speed(rollReq:RolloutSpeedRequest):
 def get_run(run_id: str):
     status = RUNS_TRAINING_STATUS.get(run_id)
     if status is None:
+        stored = load_persisted_run_status(run_id)
+        if stored is not None:
+            if stored.get("status") in {"running", "queued", "idle"}:
+                stored["status"] = "lost"
+                stored["error"] = (
+                    "Backend restarted while this run was active; live training state was lost. "
+                    "Saved model files (if any) are still available under models/."
+                )
+            stored["restored_from_disk"] = True
+            return stored
         return {"status": "unknown"}
     # Getting recent_training_episodes and training_insights. If no training insights, build it. 
     if status.get("recent_training_episodes") and not status.get("training_insights"):
@@ -2292,6 +2365,7 @@ def get_run(run_id: str):
 
 @app.get("/reward_config")
 def get_reward_config(run_id: str, env_name: str):
+    ensure_env_allowed(env_name)
     terms = get_reward_terms_for_run(run_id, env_name)
     task_config = get_task_config_for_run(run_id, env_name)
     llm_catalog = _task_config_llm_catalog()
@@ -2867,6 +2941,12 @@ async def rollout_stream(websocket: WebSocket):#, env_name:str = "CartPole-v1"):
     train_mode = train_mode_str.lower() == "true"   # ✅ real boolean
     train_steps = query.get("train_steps", [1000])[0]
     train_steps = int(train_steps)
+    try:
+        ensure_env_allowed(env_name)
+    except HTTPException as exc:
+        await websocket.send_json({"type": "error", "message": str(exc.detail)})
+        await websocket.close()
+        return
     ensure_run_status(run_id, env_name=env_name)
 
     

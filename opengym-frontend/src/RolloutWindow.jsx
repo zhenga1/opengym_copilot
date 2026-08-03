@@ -2007,10 +2007,25 @@ function RolloutWindow({
     if (isSavedViewer || !runId) return undefined;
 
     let cancelled = false;
+    let timeoutId = null;
+    let consecutiveFailures = 0;
+    const baseDelayMs = trainMode ? 2500 : 5000;
+
+    const scheduleNext = () => {
+      if (cancelled) return;
+      // exponential backoff up to 30s while the backend is unreachable (e.g. Render restart),
+      // instead of hammering a dead instance at full rate
+      const delay = consecutiveFailures > 0
+        ? Math.min(baseDelayMs * 2 ** Math.min(consecutiveFailures, 4), 30000)
+        : baseDelayMs;
+      timeoutId = setTimeout(fetchTrainingRunStatus, delay);
+    };
+
     const fetchTrainingRunStatus = async () => {
       try {
         const response = await apiClient.get(`/training_runs/${runId}`);
         if (cancelled) return;
+        consecutiveFailures = 0;
         // safe ? access, so no need to check for undefined here
         setTrainingAblationReport(response.data?.reward_ablation || null);
         setTrainingAblationStatus(response.data?.reward_ablation_status || 'idle');
@@ -2022,15 +2037,18 @@ function RolloutWindow({
         setRolloutBehaviorTags(response.data?.rollout_behavior_tags || null);
       } catch (error) {
         if (cancelled) return;
-        console.error('Failed to fetch training run status:', error);
+        consecutiveFailures += 1;
+        if (consecutiveFailures <= 2 || consecutiveFailures % 5 === 0) {
+          console.error(`Failed to fetch training run status (attempt ${consecutiveFailures}, backing off):`, error);
+        }
       }
+      scheduleNext();
     };
 
     fetchTrainingRunStatus();
-    const interval = setInterval(fetchTrainingRunStatus, trainMode ? 2500 : 5000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      if (timeoutId) clearTimeout(timeoutId);
     };
   }, [isSavedViewer, runId, trainMode]);
 

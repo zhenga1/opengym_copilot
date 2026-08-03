@@ -10,7 +10,9 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    OPEN_GYM_DATA_DIR=/var/lib/opengym
+    OPEN_GYM_DATA_DIR=/var/lib/opengym \
+    MUJOCO_GL=osmesa \
+    PYOPENGL_PLATFORM=osmesa
 
 WORKDIR /app
 
