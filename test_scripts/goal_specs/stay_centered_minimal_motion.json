@@ -1,0 +1,14 @@
+{
+  "name": "stay_centered_minimal_motion",
+  "env_name": "CartPole-v1",
+  "goal": "Keep the cart parked at the center of the track with as little movement as possible while keeping the pole balanced upright.",
+  "strategy": "retry",
+  "expect": {
+    "source_type": "llm",
+    "min_custom_reward_terms": 1,
+    "must_reference_groups": [
+      ["cart_position", "cart_velocity", "obs_0", "obs_1"]
+    ]
+  },
+  "notes": "Control case: a static goal, so no time-dependence requirement. Guards against the pipeline only working for oscillation-style prompts."
+}

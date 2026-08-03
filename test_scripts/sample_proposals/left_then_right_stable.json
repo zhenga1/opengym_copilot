@@ -1,0 +1,31 @@
+{
+  "goal": "Make the cart move to the left side and hold stably, then the right side, alternating while balancing the pole.",
+  "task_params": [
+    {"key": "alternation_period_sec", "value": 4.0, "description": "Full left-right cycle duration"}
+  ],
+  "derived_signals": [
+    {
+      "key": "side_reference",
+      "expression": "0.8 * tanh(4 * sin(6.283185 * time_sec / alternation_period_sec))",
+      "description": "Target cart position holding near +/-0.8 with smooth switches"
+    }
+  ],
+  "reward_terms": [
+    {
+      "key": "side_tracking",
+      "label": "Side Tracking",
+      "description": "Track the alternating side reference",
+      "weight": 1.0,
+      "enabled": true,
+      "expression": "-square(cart_position - side_reference)"
+    },
+    {
+      "key": "pole_upright",
+      "label": "Pole Upright",
+      "description": "Keep the pole balanced",
+      "weight": 0.5,
+      "enabled": true,
+      "expression": "-square(pole_angle)"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "sway_periodic_0p8hz",
+  "env_name": "CartPole-v1",
+  "goal": "Design a task config that makes the cartpole sway left and right stably at roughly 0.8 Hz while keeping the motion periodic, smooth, and recoverable after brief perturbations.",
+  "strategy": "retry",
+  "expect": {
+    "source_type": "llm",
+    "min_custom_reward_terms": 1,
+    "must_reference_groups": [
+      ["pole_angle", "cart_position", "cart_velocity", "obs_0", "obs_1", "obs_2"],
+      ["time_sec", "sin", "cos"]
+    ]
+  },
+  "notes": "Periodic sway at a target frequency requires an explicit time-dependent reference signal."
+}
