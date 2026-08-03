@@ -863,6 +863,35 @@ def _extract_balanced_json_object(text: str) -> str | None:
     return None
 
 
+def parse_llm_response_text(output_text: str, *, stage_label: str) -> Any:
+    """
+    Parse raw LLM output text into JSON, attempting balanced-object recovery when
+    strict parsing fails. Recovery helps mitigate common failure modes where the
+    model adds commentary, code fences, or formatting around the JSON object.
+    Pure function (no HTTP, no logging) so recorded responses can be replayed in
+    tests. Recovered dicts carry _parse_recovered=True and _raw_model_response.
+    Raises LlmProposalError when the text cannot be parsed or recovered.
+    """
+    try:
+        return json.loads(output_text)
+    except json.JSONDecodeError as exc:
+        recovered_candidate = _extract_balanced_json_object(output_text)
+        if recovered_candidate and recovered_candidate != output_text:
+            try:
+                recovered = json.loads(recovered_candidate)
+            except json.JSONDecodeError:
+                recovered = None
+            if isinstance(recovered, dict):
+                recovered["_raw_model_response"] = output_text
+                recovered["_parse_recovered"] = True
+                return recovered
+        raise LlmProposalError(
+            f"{stage_label} returned malformed JSON: {exc}",
+            stage_label=stage_label,
+            raw_response_text=output_text,
+        ) from exc
+
+
 def build_heuristic_task_config_proposal(goal: str, env_name: str) -> dict[str, Any]:
     normalized_goal = str(goal or "").strip()
     lower_goal = normalized_goal.lower()
@@ -1213,47 +1242,8 @@ def _call_llm_json_response(
         )
         raise RuntimeError(f"{stage_label} response did not include structured output text.")
     try:
-        parsed = json.loads(output_text)
-    except json.JSONDecodeError as exc:
-        """
-        Attempt to recover valid JSON from the output text in case the model included 
-        extra commentary or formatting around the JSON. This can help mitigate some common 
-        failure modes where the model tries to be helpful by adding explanations or formatting 
-        that unfortunately breaks strict JSON parsing.
-        """
-        recovered_candidate = _extract_balanced_json_object(output_text)
-        if recovered_candidate and recovered_candidate != output_text:
-            try:
-                parsed = json.loads(recovered_candidate)
-            except json.JSONDecodeError:
-                parsed = None
-            else:
-                if isinstance(parsed, dict):
-                    parsed["_raw_model_response"] = output_text
-                    parsed["_parse_recovered"] = True
-                    log_llm_trace(
-                        run_id=run_id,
-                        env_name=env_name,
-                        stage=stage_label,
-                        trace_type="parse_recovered",
-                        llm_id=llm_id,
-                        provider=provider,
-                        model=model,
-                        base_url=base_url,
-                        goal=goal,
-                        request_payload=prompt,
-                        raw_response_text=output_text,
-                        parsed_response=parsed,
-                        details={"recovered_candidate": recovered_candidate},
-                    )
-                    update_task_config_request_status(
-                        run_id,
-                        status=f"{stage_label}_completed",
-                        message=f"{stage_label} completed with recovered JSON using model={model}.",
-                        attempt=max_retries,
-                        elapsed_sec=round(time.time() - started_at, 2),
-                    )
-                    return parsed
+        parsed = parse_llm_response_text(output_text, stage_label=stage_label)
+    except LlmProposalError as exc:
         log_llm_trace(
             run_id=run_id,
             env_name=env_name,
@@ -1267,13 +1257,33 @@ def _call_llm_json_response(
             request_payload=prompt,
             raw_response_text=output_text,
             parsed_response=body if isinstance(body, dict) else {},
-            error=str(exc),
+            error=str(exc.__cause__ or exc),
         )
-        raise LlmProposalError(
-            f"{stage_label} returned malformed JSON: {exc}",
-            stage_label=stage_label,
+        raise
+    if isinstance(parsed, dict) and parsed.get("_parse_recovered"):
+        log_llm_trace(
+            run_id=run_id,
+            env_name=env_name,
+            stage=stage_label,
+            trace_type="parse_recovered",
+            llm_id=llm_id,
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            goal=goal,
+            request_payload=prompt,
             raw_response_text=output_text,
-        ) from exc
+            parsed_response=parsed,
+            details={"recovered_candidate": _extract_balanced_json_object(output_text)},
+        )
+        update_task_config_request_status(
+            run_id,
+            status=f"{stage_label}_completed",
+            message=f"{stage_label} completed with recovered JSON using model={model}.",
+            attempt=max_retries,
+            elapsed_sec=round(time.time() - started_at, 2),
+        )
+        return parsed
     log_llm_trace(
         run_id=run_id,
         env_name=env_name,

@@ -1,0 +1,14 @@
+{
+  "name": "truncated_behavior_plan",
+  "description": "Real trace: behavior_plan stage response truncated mid-JSON. Must fail parse so the heuristic behavior plan takes over.",
+  "env_name": "CartPole-v1",
+  "goal": "make cartpole sway left and right quicklky",
+  "stage": "behavior_plan",
+  "source_trace": "logs/llm_traces/9e56c645-f614-4be7-ae05-382e9e0c95f6/2026-06-05T19-35-17.454925_00-00__behavior_plan__parse_error__openai.json",
+  "source_model": "gpt-4.1-mini",
+  "source_error": "Expecting ',' delimiter: line 40 column 4 (char 1247)",
+  "raw_response_text": "{\n  \"goal\": \"make cartpole sway left and right quickly\",\n  \"desired_tags\": [\n    {\n      \"key\": \"alternating_motion\",\n      \"weight\": 0.9,\n      \"reason\": \"The goal requires the cartpole to sway left and right, which is captured by alternating motion.\"\n    },\n    {\n      \"key\": \"high_reversal_frequency\",\n      \"weight\": 0.8,\n      \"reason\": \"Quick swaying implies frequent reversals in direction, so high reversal frequency is important.\"\n    },\n    {\n      \"key\": \"bounded_cart_motion\",\n      \"weight\": 0.7,\n      \"reason\": \"To maintain control and prevent runaway, the cart motion should be bounded.\"\n    },\n    {\n      \"key\": \"upright_posture\",\n      \"weight\": 0.6,\n      \"reason\": \"Maintaining upright posture ensures the pole does not fall while swaying.\"\n    }\n  ],\n  \"avoid_tags\": [\n    {\n      \"key\": \"single_direction_motion\",\n      \"weight\": 0.9,\n      \"reason\": \"Avoid drifting in a single direction as the goal is to sway left and right.\"\n    },\n    {\n      \"key\": \"runaway_cart\",\n      \"weight\": 0.8,\n      \"reason\": \"Runaway cart motion would prevent controlled swaying.\"\n    },\n    {\n      \"key\": \"missing_return_phase\",\n      \"weight\": 0.7,\n      \"reason\": \"Missing the return phase would break the alternating sway pattern.\"\n   ",
+  "expect": {
+    "parse": "error"
+  }
+}
