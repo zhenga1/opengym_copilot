@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import LlmProviderManager from './LlmProviderManager';
 
 function RewardSidebar({
   envName,
@@ -32,6 +33,7 @@ function RewardSidebar({
   onSaveConfig,
   onTaskGoalChange,
   onLlmSelect,
+  onRefreshLlms,
   onProposeTaskConfig,
   onApplyTaskProposal,
   onRewardConfigFileSelect,
@@ -347,6 +349,7 @@ function RewardSidebar({
                   </div>
                 </>
               )}
+              <LlmProviderManager providers={safeAvailableLlms} onProvidersChanged={onRefreshLlms} />
             </div>
             <div style={{ display: 'flex', gap: '0.55rem', marginTop: '0.7rem' }}>
               <button

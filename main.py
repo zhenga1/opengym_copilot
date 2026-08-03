@@ -98,6 +98,8 @@ DATA_DIR = Path(os.getenv("OPEN_GYM_DATA_DIR", str(BASE_DIR))).resolve()
 MODELS_DIR = (DATA_DIR / "models").resolve()
 ROLLOUTS_DIR = (DATA_DIR / "rollouts").resolve()
 REWARD_CONFIGS_DIR = (DATA_DIR / "reward_configs").resolve()
+# User-added LLM providers (contains API keys — never served to the frontend, never committed)
+LLM_PROVIDERS_FILE = (DATA_DIR / "llm_providers.json").resolve()
 PROGRESS_LOG_PATH = (DATA_DIR / "progress_bar.log").resolve()
 FRONTEND_DIST_DIR = (BASE_DIR / "opengym-frontend" / "dist").resolve()
 
@@ -407,6 +409,16 @@ class TaskConfigApplyRequest(BaseModel):
     provider: str | None = None
     model: str | None = None
     behavior_plan: dict[str, Any] | None = None
+
+
+class LlmProviderUpsertRequest(BaseModel):
+    # Payload for adding or updating a user-defined LLM provider
+    id: str | None = None
+    label: str
+    base_url: str
+    model: str
+    api_key: str | None = None  # omit on update to keep the stored key
+    preset: str | None = None
 
 
 class SaveRewardConfigRequest(BaseModel):
@@ -1010,11 +1022,89 @@ def build_heuristic_task_config_proposal(goal: str, env_name: str) -> dict[str, 
     }
 
 
+LLM_PROVIDER_PRESETS = [
+    {"preset": "openai", "label": "OpenAI", "base_url": "https://api.openai.com/v1", "model": "gpt-4.1-mini", "hint": "platform.openai.com API key"},
+    {"preset": "anthropic", "label": "Anthropic", "base_url": "https://api.anthropic.com/v1", "model": "claude-sonnet-5", "hint": "console.anthropic.com key (OpenAI-compatible endpoint)"},
+    {"preset": "gemini", "label": "Gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "model": "gemini-2.5-flash", "hint": "aistudio.google.com API key"},
+    {"preset": "openrouter", "label": "OpenRouter", "base_url": "https://openrouter.ai/api/v1", "model": "openrouter/auto", "hint": "openrouter.ai key; one key proxies many models"},
+    {"preset": "groq", "label": "Groq", "base_url": "https://api.groq.com/openai/v1", "model": "llama-3.3-70b-versatile", "hint": "console.groq.com API key"},
+    {"preset": "glm", "label": "GLM / Z.ai", "base_url": "https://api.z.ai/api/paas/v4", "model": "glm-5", "hint": "z.ai or bigmodel.cn API key"},
+    {"preset": "ollama", "label": "Ollama (local)", "base_url": "http://localhost:11434/v1", "model": "llama3.1", "hint": "local server; use any placeholder as the key"},
+    {"preset": "custom", "label": "Custom", "base_url": "", "model": "", "hint": "any OpenAI-compatible /chat/completions endpoint"},
+]
+
+# ids reserved by the env-var-configured entries below
+BUILTIN_LLM_IDS = {"glm", "openai", "custom"}
+_llm_providers_lock = Lock()
+
+
+def _load_user_llm_providers() -> list[dict[str, Any]]:
+    try:
+        if LLM_PROVIDERS_FILE.exists():
+            payload = json.loads(LLM_PROVIDERS_FILE.read_text(encoding="utf-8-sig"))
+            providers = payload.get("providers") if isinstance(payload, dict) else None
+            if isinstance(providers, list):
+                return [dict(item) for item in providers if isinstance(item, dict) and item.get("id")]
+    except Exception as exc:
+        logger.warning(f"Failed to read LLM providers file {LLM_PROVIDERS_FILE}: {exc}")
+    return []
+
+
+def _save_user_llm_providers(providers: list[dict[str, Any]]) -> None:
+    LLM_PROVIDERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LLM_PROVIDERS_FILE.write_text(
+        json.dumps({"providers": providers}, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _slugify_provider_id(label: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(label or "").lower()).strip("-")
+    return slug or "provider"
+
+
+def upsert_user_llm_provider(entry: dict[str, Any]) -> dict[str, Any]:
+    provider_id = str(entry.get("id") or _slugify_provider_id(entry.get("label", ""))).strip().lower()
+    if provider_id in BUILTIN_LLM_IDS:
+        raise ValueError(
+            f"Provider id '{provider_id}' is reserved for the built-in env-var providers; pick another label."
+        )
+    with _llm_providers_lock:
+        providers = _load_user_llm_providers()
+        existing = next((item for item in providers if item.get("id") == provider_id), None)
+        api_key = entry.get("api_key")
+        if api_key is None and existing is not None:
+            api_key = existing.get("api_key", "")
+        stored = {
+            "id": provider_id,
+            "label": str(entry.get("label") or provider_id).strip(),
+            "preset": str(entry.get("preset") or "custom").strip().lower(),
+            "base_url": str(entry.get("base_url") or "").strip().rstrip("/"),
+            "model": str(entry.get("model") or "").strip(),
+            "api_key": str(api_key or "").strip(),
+        }
+        providers = [item for item in providers if item.get("id") != provider_id]
+        providers.append(stored)
+        _save_user_llm_providers(providers)
+    return stored
+
+
+def delete_user_llm_provider(provider_id: str) -> bool:
+    provider_id = str(provider_id or "").strip().lower()
+    with _llm_providers_lock:
+        providers = _load_user_llm_providers()
+        remaining = [item for item in providers if item.get("id") != provider_id]
+        if len(remaining) == len(providers):
+            return False
+        _save_user_llm_providers(remaining)
+    return True
+
+
 def _task_config_llm_catalog() -> list[dict[str, Any]]:
     custom_key = os.getenv("TASK_CONFIG_LLM_API_KEY", "").strip()
     glm_key = os.getenv("ZAI_API_KEY", "").strip() or os.getenv("BIGMODEL_API_KEY", "").strip()
     openai_key = os.getenv("OPENAI_API_KEY", "").strip()
-    return [
+    catalog = [
         {
             "id": "glm",
             "label": "GLM",
@@ -1049,6 +1139,22 @@ def _task_config_llm_catalog() -> list[dict[str, Any]]:
             "model": os.getenv("TASK_CONFIG_LLM_MODEL", "glm-5").strip() or "glm-5",
         },
     ]
+    for item in _load_user_llm_providers():
+        api_key = str(item.get("api_key") or "").strip()
+        catalog.append({
+            "id": str(item.get("id")),
+            "label": str(item.get("label") or item.get("id")),
+            "provider": "openai-compatible",
+            "preset": str(item.get("preset") or "custom"),
+            "description": f"User-added provider ({item.get('preset') or 'custom'} preset).",
+            "available": bool(api_key and item.get("base_url") and item.get("model")),
+            "missing_reason": "" if api_key else "No API key saved for this provider.",
+            "api_key": api_key,
+            "base_url": str(item.get("base_url") or "").strip().rstrip("/"),
+            "model": str(item.get("model") or "").strip(),
+            "user_defined": True,
+        })
+    return catalog
 
 
 def _task_config_llm_settings(llm_id: str | None = None) -> dict[str, Any]:
@@ -2431,6 +2537,86 @@ def get_task_config_llms():
         "llms": [{key: value for key, value in item.items() if key not in {"api_key"}} for item in catalog],
         "default_llm_id": default_settings.get("id") if default_settings else None,
     }
+
+
+@app.get("/llm_provider_presets")
+def get_llm_provider_presets():
+    return {"presets": LLM_PROVIDER_PRESETS}
+
+
+@app.post("/llm_providers")
+def upsert_llm_provider_endpoint(req: LlmProviderUpsertRequest):
+    base_url = str(req.base_url or "").strip()
+    if not base_url.lower().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="base_url must start with http:// or https://")
+    if not str(req.label or "").strip():
+        raise HTTPException(status_code=400, detail="label is required")
+    if not str(req.model or "").strip():
+        raise HTTPException(status_code=400, detail="model is required")
+    try:
+        stored = upsert_user_llm_provider(req.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    log_run_event(
+        "llm_provider_saved",
+        run_id=None,
+        env_name=None,
+        details={"id": stored["id"], "preset": stored["preset"], "base_url": stored["base_url"], "model": stored["model"]},
+    )
+    return {
+        "provider": {key: value for key, value in stored.items() if key != "api_key"},
+        **get_task_config_llms(),
+    }
+
+
+@app.delete("/llm_providers/{provider_id}")
+def delete_llm_provider_endpoint(provider_id: str):
+    if provider_id.strip().lower() in BUILTIN_LLM_IDS:
+        raise HTTPException(status_code=400, detail="Built-in providers are configured via environment variables and cannot be deleted.")
+    if not delete_user_llm_provider(provider_id):
+        raise HTTPException(status_code=404, detail=f"No user-defined provider with id '{provider_id}'.")
+    log_run_event("llm_provider_deleted", run_id=None, env_name=None, details={"id": provider_id})
+    return get_task_config_llms()
+
+
+@app.post("/llm_providers/{provider_id}/test")
+def test_llm_provider_endpoint(provider_id: str):
+    catalog = _task_config_llm_catalog()
+    entry = next((item for item in catalog if item["id"] == provider_id.strip().lower()), None)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Unknown provider id '{provider_id}'.")
+    if not entry.get("api_key") or not entry.get("base_url") or not entry.get("model"):
+        raise HTTPException(status_code=400, detail=str(entry.get("missing_reason") or "Provider is missing an API key, base URL, or model."))
+    # max_tokens (not max_completion_tokens): the most widely accepted cap across
+    # OpenAI-compatible providers (Gemini/Groq/Ollama compat layers included)
+    prompt = {
+        "model": entry["model"],
+        "messages": [{"role": "user", "content": "Reply with the single word: ok"}],
+        "max_tokens": 16,
+        "temperature": 0,
+    }
+    request = urllib_request.Request(
+        f"{entry['base_url']}/chat/completions",
+        data=json.dumps(prompt).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {entry['api_key']}"},
+        method="POST",
+    )
+    started = time.time()
+    try:
+        with urllib_request.urlopen(request, timeout=25) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        latency = round(time.time() - started, 3)
+        content = ""
+        choices = body.get("choices") or []
+        if choices:
+            content = str(choices[0].get("message", {}).get("content") or "")
+        return {"ok": True, "latency_sec": latency, "model": body.get("model") or entry["model"], "response_preview": content[:80]}
+    except urllib_error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:300]
+        return {"ok": False, "latency_sec": round(time.time() - started, 3), "status_code": exc.code, "error": detail}
+    except Exception as exc:
+        reason = getattr(exc, "reason", None) or str(exc)
+        return {"ok": False, "latency_sec": round(time.time() - started, 3), "error": str(reason)[:300]}
 
 
 @app.get("/task_config_status/{run_id}")
